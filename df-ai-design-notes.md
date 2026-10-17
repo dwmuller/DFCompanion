@@ -23,7 +23,7 @@ A useful conceptual pipeline is:
 Raw DFHack representations should be normalized before presentation to an AI. The normalized form should contain facts rather than strategic interpretation.
 
 ## Structured representation
-Because the main application may be Common Lisp, S-expressions are a natural candidate for normalized observations and/or LLM context. They are easy to inspect, log, persist, and process in Lisp.
+The main application is written in Rust, so S-expressions are not the assumed default for normalized observations or LLM context. The planned DFHack remote API integration will use the `dfhack-remote` crate, which supplies its own protobuf message code generation, once its transitive dependencies can be resolved cleanly. A project-owned `protoc` is deferred unless custom schemas or a native DFHack plugin make it necessary. Keep the normalized representation easy to inspect, log, persist, and process.
 
 Illustrative shape only:
 

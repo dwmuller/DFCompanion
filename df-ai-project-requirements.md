@@ -49,10 +49,20 @@ The project should expose, rather than hide, important AI-agent concepts: tool u
 Initially, prefer simple mechanisms and let the AI infer higher-level meaning from factual observations. Add local semantic inference only where experience demonstrates its value.
 
 ## Implementation preferences
-- Common Lisp is preferred for the main application but is not mandatory.
-- Other languages are acceptable at integration boundaries where they materially reduce friction.
+- Rust is the implementation language for the main application.
+- Use CMake as the top-level build orchestrator, with Cargo managing Rust dependencies and compiling the Rust code.
+- Plan to use the `dfhack-remote` Rust crate for the initial DFHack remote API integration and its protobuf code generation, once its transitive dependencies can be resolved cleanly; defer a project-owned `protoc` until custom schemas or the likely C++ DFHack plugin require it.
+- Defer setting up a C++ toolchain and DFHack plugin component until research shows that a native plugin is needed; use the least-coupled DFHack integration available initially.
 - A locally running service with a thin browser UI is the current architectural hypothesis, not yet an immutable requirement.
 - The observation/query interface should ideally become useful independently of the particular AI provider or chat UI.
+
+## Initial development setup
+- Install Rust through `rustup` (including Cargo) and install CMake.
+- Install the platform's linker/build tools required by the selected Rust target.
+- Add `dfhack-remote` for DFHack remote API access when its transitive dependencies can be resolved cleanly; no separate `protoc` installation is needed for the crate's generated API.
+- Keep Cargo/CMake build outputs out of source control while committing `Cargo.lock` for reproducible application builds.
+- Revisit project-owned protobuf code generation and `protoc` when custom schemas or a native plugin are introduced.
+- Do not install C++/DFHack SDK tooling for the initial companion unless the chosen DFHack integration requires it.
 
 ## Explicitly outside the initial scope
 - Playing Dwarf Fortress autonomously.
