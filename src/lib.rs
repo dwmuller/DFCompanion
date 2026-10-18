@@ -282,7 +282,8 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains(&format!("dfcompanion-lua-test-event {token}")));
+        assert!(html.contains(&format!("dfcompanion {token}")));
+        assert!(html.contains("disable dfcompanion"));
         assert!(html.contains("Copy DFHack command"));
     }
 

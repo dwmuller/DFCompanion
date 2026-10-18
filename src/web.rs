@@ -196,7 +196,7 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
     let command = state
         .plugin_token
         .as_deref()
-        .map(|token| format!("dfcompanion-lua-test-event {token}"))
+        .map(|token| format!("dfcompanion {token}"))
         .unwrap_or_else(|| "DFHack command unavailable.".to_owned());
     let page = include_str!("../static/index.html").replace("{{DFHACK_COMMAND}}", &command);
     ([(header::CACHE_CONTROL, "no-store")], Html(page))

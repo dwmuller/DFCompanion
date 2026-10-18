@@ -1,17 +1,18 @@
-local args = {...}
-if #args ~= 1 or #args[1] ~= 64 or not args[1]:match('^%x+$') then
-    qerror('Usage: dfcompanion-lua-test-event <token>. Copy the command from the DFCompanion web page.')
-end
-local PLUGIN_TOKEN = args[1]
+--@ enable = true
+--@ module = true
 
 local json = require('json')
 local luasocket = require('plugins.luasocket')
+local eventful = require('plugins.eventful')
 
 local COMPANION_HOST = '127.0.0.1'
 local COMPANION_PORT = 3000
 local RESPONSE_TIMEOUT_SECONDS = 3
+local STATE_KEY = 'dfcompanion'
 
-local function http_post(body)
+enabled = enabled or false
+
+local function http_post(token, body)
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
     local ok, status_code, decoded = pcall(function()
         client:setTimeout(RESPONSE_TIMEOUT_SECONDS, 0)
@@ -20,7 +21,7 @@ local function http_post(body)
         local request = table.concat({
             'POST /api/plugin/events HTTP/1.1',
             'Host: 127.0.0.1:3000',
-            'Authorization: Bearer ' .. PLUGIN_TOKEN,
+            'Authorization: Bearer ' .. token,
             'Content-Type: application/json',
             'Content-Length: ' .. #body,
             'Connection: close',
@@ -80,13 +81,13 @@ local function http_post(body)
     return status_code, decoded
 end
 
-local function submit_test_event()
+local function submit_event(token, category, description)
     if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
-        qerror('DFCompanion test events require a loaded fortress site.')
+        qerror('DFCompanion requires a loaded fortress site.')
     end
 
     local event = {
-        category = 'manual_test',
+        category = category,
         real_world_time_utc = {
             seconds = os.time(),
             nanos = 0,
@@ -97,10 +98,10 @@ local function submit_test_event()
             day = dfhack.world.ReadCurrentDay(),
             tick = dfhack.world.ReadCurrentTick(),
         },
-        description = 'Manual DFHack Lua HTTP connectivity test.',
+        description = description,
     }
 
-    local ok, status_code, result = pcall(http_post, json.encode(event, {pretty = false}))
+    local ok, status_code, result = pcall(http_post, token, json.encode(event, {pretty = false}))
     if not ok then
         qerror('Could not submit event to DFCompanion: ' .. tostring(status_code))
     end
@@ -108,7 +109,7 @@ local function submit_test_event()
         qerror('DFCompanion returned an invalid response (HTTP ' .. tostring(status_code) .. ').')
     end
     if result.status == 'accepted' then
-        print('DFCompanion accepted the test event.')
+        return
     elseif result.status == 'queue_full' then
         dfhack.world.SetPauseState(true)
         qerror(result.message)
@@ -118,4 +119,82 @@ local function submit_test_event()
     end
 end
 
-submit_test_event()
+local function disable()
+    enabled = false
+    dfhack.onStateChange[STATE_KEY] = nil
+    eventful.onReport[STATE_KEY] = nil
+    print('DFCompanion Lua script disabled.')
+end
+
+local function on_report(report_id)
+    local report = df.report.find(report_id)
+    if not report or not report.text or report.text == '' then
+        return
+    end
+
+    local category = report.flags.announcement and 'dfhack_announcement' or 'dfhack_report'
+    local description = dfhack.df2utf(report.text)
+    if description == '' then
+        return
+    end
+
+    local ok, err = pcall(submit_event, plugin_token, category, description)
+    if not ok then
+        disable()
+        dfhack.printerr('DFCompanion stopped forwarding reports: ' .. tostring(err))
+    end
+end
+
+local function enable(token)
+    if token then
+        if #token ~= 64 or not token:match('^%x+$') then
+            qerror('The DFCompanion token must be 64 hexadecimal characters. Copy the current command from the DFCompanion web page.')
+        end
+        plugin_token = token
+    elseif not plugin_token then
+        qerror('No DFCompanion token is available. Copy and run the current command from the DFCompanion web page.')
+    end
+
+    if not enabled then
+        submit_event(plugin_token, 'manual_test',
+            'DFHack Lua connection test; DFCompanion is enabled and forwarding reports.')
+        eventful.enableEvent(eventful.eventType.REPORT, 1)
+        eventful.onReport[STATE_KEY] = on_report
+        enabled = true
+        dfhack.onStateChange[STATE_KEY] = function(state)
+            if state == SC_MAP_UNLOADED then
+                disable()
+            end
+        end
+        print('DFCompanion Lua script enabled.')
+    else
+        print('DFCompanion Lua script is already enabled.')
+    end
+end
+
+function isEnabled()
+    return enabled
+end
+
+if dfhack_flags.module then
+    return
+end
+
+local args = {...}
+if dfhack_flags and dfhack_flags.enable then
+    if dfhack_flags.enable_state then
+        enable()
+    else
+        disable()
+    end
+elseif args[1] == 'status' then
+    print(('DFCompanion Lua script is %s.'):format(enabled and 'enabled' or 'disabled'))
+elseif args[1] == 'disable' then
+    disable()
+elseif args[1] == 'enable' then
+    enable(args[2])
+elseif #args == 1 then
+    enable(args[1])
+else
+    qerror('Usage: dfcompanion <token> | dfcompanion status | enable dfcompanion | disable dfcompanion')
+end
