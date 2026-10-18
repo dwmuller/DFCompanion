@@ -15,9 +15,13 @@ The service uses gRPC over HTTP/2 at `127.0.0.1:50051` and HTTP at `127.0.0.1:30
 Configure and build from the repository root:
 
 ```powershell
-cmake -S . -B build
+cmake -S . -B build -DDFHACK_INSTALL_DIR="E:/SteamLibrary/steamapps/common/DFHack"
 cmake --build build --config Debug
 ```
+
+Set `DFHACK_INSTALL_DIR` to the root of your DFHack installation (the directory containing `hack\scripts`). CMake stores this as a local cache setting in `build`, so it does not need to be committed or repeated on later configure/build runs. To change the path, rerun the configure command with the new value.
+
+The `install-dfhack-script` build target builds DFCompanion and copies `scripts/dfcompanion.lua` into `${DFHACK_INSTALL_DIR}/hack/scripts` only when the file differs. It errors with a configuration hint if the path is unset or does not point to a DFHack installation. The VS Code Debug DFCompanion launch runs this target before starting the service, so the installed Lua script stays current.
 
 For a release build, use:
 

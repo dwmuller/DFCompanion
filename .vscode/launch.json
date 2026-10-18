@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/build/cargo/debug/dfcompanion.exe",
       "cwd": "${workspaceFolder}",
       "args": [],
-      "preLaunchTask": "Build DFCompanion (Debug)",
+      "preLaunchTask": "Build and Install DFCompanion (Debug)",
       "terminal": "integrated",
       "serverReadyAction": {
         "pattern": "DFCompanion web UI listening on (http://\\S+)",

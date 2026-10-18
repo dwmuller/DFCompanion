@@ -2,14 +2,16 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build DFCompanion (Debug)",
+      "label": "Build and Install DFCompanion (Debug)",
       "type": "shell",
       "command": "cmake",
       "args": [
         "--build",
         "${workspaceFolder}/build",
         "--config",
-        "Debug"
+        "Debug",
+        "--target",
+        "install-dfhack-script"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
