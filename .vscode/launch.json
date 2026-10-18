@@ -9,7 +9,12 @@
       "cwd": "${workspaceFolder}",
       "args": [],
       "preLaunchTask": "Build DFCompanion (Debug)",
-      "terminal": "integrated"
+      "terminal": "integrated",
+      "serverReadyAction": {
+        "pattern": "DFCompanion web UI listening on (http://\\S+)",
+        "uriFormat": "%s/",
+        "action": "openExternally"
+      }
     }
   ]
 }
