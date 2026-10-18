@@ -19,3 +19,14 @@ document.body.addEventListener("htmx:afterRequest", (event) => {
     document.getElementById("message").value = "";
   }
 });
+
+document.getElementById("copy-dfhack-command").addEventListener("click", async () => {
+  const command = document.getElementById("dfhack-command").textContent;
+  const status = document.getElementById("copy-status");
+  try {
+    await navigator.clipboard.writeText(command);
+    status.textContent = "Copied.";
+  } catch (error) {
+    status.textContent = `Could not copy command: ${error.message}`;
+  }
+});

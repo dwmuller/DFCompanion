@@ -1,4 +1,8 @@
-local PLUGIN_TOKEN = 'replace-this-with-the-same-32-byte-token-as-the-service'
+local args = {...}
+if #args ~= 1 or #args[1] ~= 64 or not args[1]:match('^%x+$') then
+    qerror('Usage: dfcompanion-lua-test-event <token>. Copy the command from the DFCompanion web page.')
+end
+local PLUGIN_TOKEN = args[1]
 
 local json = require('json')
 local luasocket = require('plugins.luasocket')

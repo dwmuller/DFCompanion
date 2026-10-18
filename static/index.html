@@ -11,6 +11,17 @@
   <body>
     <h1>DFCompanion</h1>
     <p>Development mode: AI responses are mocked. Plugin events and chat share one Companion queue.</p>
+    <h2>Connect DFHack</h2>
+    <p>Copy this command into the DFHack console to send a test event:</p>
+    <p class="copy-command">
+      <code id="dfhack-command">{{DFHACK_COMMAND}}</code>
+      <button id="copy-dfhack-command" type="button" aria-label="Copy DFHack command" title="Copy command">
+        <svg aria-hidden="true" viewBox="0 0 24 24">
+          <path d="M8 4V2h12v14h-2M4 6h12v16H4z"></path>
+        </svg>
+      </button>
+      <span id="copy-status" role="status" aria-live="polite"></span>
+    </p>
     <h2>Conversation and notifications</h2>
     <ol id="notifications" aria-live="polite"></ol>
     <h2>Chat</h2>

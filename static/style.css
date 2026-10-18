@@ -26,3 +26,29 @@ textarea {
 button {
   margin-top: 0.5rem;
 }
+
+.copy-command {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.copy-command code {
+  overflow-wrap: anywhere;
+}
+
+#copy-dfhack-command {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+}
+
+#copy-dfhack-command svg {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 1rem;
+}

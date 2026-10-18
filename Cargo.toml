@@ -8,6 +8,7 @@ axum = { version = "0.7", features = ["form"] }
 dfhack-remote = "0.12.0"
 prost = "0.13"
 prost-types = "0.13"
+rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync", "net"] }

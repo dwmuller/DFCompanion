@@ -8,6 +8,7 @@
       "program": "${workspaceFolder}/build/cargo/debug/dfcompanion.exe",
       "cwd": "${workspaceFolder}",
       "args": [],
+      "preLaunchTask": "Build DFCompanion (Debug)",
       "terminal": "integrated"
     }
   ]

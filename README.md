@@ -39,20 +39,9 @@ The `dfhack-remote` crate is used separately for queries to DFHack's remote API;
 
 The DFHack Lua environment in the tested 53.16-r2 installation includes JSON support (`json`) and DFHack's TCP socket wrapper (`plugins.luasocket`), but not a ready-made HTTP client. `scripts/dfcompanion-lua-test-event.lua` uses those modules to send one small HTTP/1.1 JSON request and read the queue response. It explicitly switches the socket to blocking mode after connecting because DFHack creates new TCP clients as nonblocking; socket timeouts keep the exchange bounded. It is a manual transport test, not an event subscription.
 
-The endpoint requires a shared bearer token of at least 32 bytes and rejects any request containing an `Origin` header. Generate a token in PowerShell before starting DFCompanion, then copy the printed token into `PLUGIN_TOKEN` near the top of the Lua script that you install into DFHack:
+On each startup, DFCompanion generates a fresh cryptographically random 256-bit bearer token. Open the local web page, then copy the displayed `dfcompanion-lua-test-event <token>` command and paste it into the DFHack console. The script receives the token as its argument; it is not saved in the installed script. The page is marked `no-store` so browsers do not cache the token-bearing HTML.
 
-```powershell
-$bytes = New-Object byte[] 32
-$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($bytes)
-$token = [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
-$rng.Dispose()
-$token
-$env:DFCOMPANION_PLUGIN_TOKEN = $token
-.\build\cargo\debug\dfcompanion.exe
-```
-
-Copy `scripts\dfcompanion-lua-test-event.lua` to the installed DFHack `hack\scripts` folder, replace its placeholder token with the same generated value, and run `dfcompanion-lua-test-event` in DFHack with a fortress site loaded. A successful response confirms the event was accepted into the Companion queue. If the queue is full, the endpoint returns an explicit queue-full response and the Lua script pauses the game. If `DFCOMPANION_PLUGIN_TOKEN` is unset, the service keeps running but rejects Lua event submissions.
+Copy `scripts\dfcompanion-lua-test-event.lua` to the installed DFHack `hack\scripts` folder, start DFCompanion, and run the copied command in DFHack with a fortress site loaded. A successful response confirms the event was accepted into the Companion queue. If the queue is full, the endpoint returns an explicit queue-full response and the Lua script pauses the game. A new token is generated after each service restart, so copy the current command again.
 
 ## Running the development service
 

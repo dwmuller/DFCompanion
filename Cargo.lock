@@ -396,6 +396,7 @@ dependencies = [
  "prost 0.13.5",
  "prost-types 0.13.5",
  "protoc-bin-vendored",
+ "rand",
  "serde",
  "tokio",
  "tokio-stream",

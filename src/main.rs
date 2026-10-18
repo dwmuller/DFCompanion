@@ -9,21 +9,9 @@ use tonic::transport::Server;
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let grpc_address: SocketAddr = "127.0.0.1:50051".parse()?;
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
-    let plugin_token = std::env::var("DFCOMPANION_PLUGIN_TOKEN").ok();
-    if let Some(token) = &plugin_token {
-        if token.len() < 32 {
-            return Err("DFCOMPANION_PLUGIN_TOKEN must be at least 32 bytes".into());
-        }
-    } else {
-        eprintln!(
-            "DFCOMPANION_PLUGIN_TOKEN is not set; the Lua plugin event endpoint will reject requests."
-        );
-    }
+    let plugin_token = dfcompanion::generate_plugin_token()?;
     let (state, queue_rx) = AppState::new();
-    let state = match plugin_token {
-        Some(token) => state.with_plugin_token(token),
-        None => state,
-    };
+    let state = state.with_plugin_token(plugin_token);
     let worker = tokio::spawn(run_companion_worker(
         queue_rx,
         state.notifications_tx.clone(),

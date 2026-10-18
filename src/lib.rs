@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost_types::Timestamp;
+use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
 pub mod api {
@@ -51,6 +52,12 @@ impl AppState {
         // No connected browser is a normal state; notifications are best-effort.
         let _ = self.notifications_tx.send(message.into());
     }
+}
+
+pub fn generate_plugin_token() -> Result<String, rand::Error> {
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.try_fill_bytes(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 pub fn utc_now() -> Result<Timestamp, Box<dyn std::error::Error + Send + Sync>> {
@@ -249,6 +256,42 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(queue_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn main_page_displays_the_plugin_command_and_prevents_token_caching() {
+        let token = "ab".repeat(32);
+        let (state, _) = AppState::new();
+        let response = crate::web::router(state.with_plugin_token(token.clone()))
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains(&format!("dfcompanion-lua-test-event {token}")));
+        assert!(html.contains("Copy DFHack command"));
+    }
+
+    #[test]
+    fn generated_plugin_tokens_are_256_bit_hex_strings() {
+        let token = generate_plugin_token().unwrap();
+
+        assert_eq!(token.len(), 64);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 
     #[tokio::test]

@@ -192,8 +192,14 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
         .into_response()
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../static/index.html"))
+async fn index(State(state): State<AppState>) -> impl IntoResponse {
+    let command = state
+        .plugin_token
+        .as_deref()
+        .map(|token| format!("dfcompanion-lua-test-event {token}"))
+        .unwrap_or_else(|| "DFHack command unavailable.".to_owned());
+    let page = include_str!("../static/index.html").replace("{{DFHACK_COMMAND}}", &command);
+    ([(header::CACHE_CONTROL, "no-store")], Html(page))
 }
 
 async fn htmx_script() -> impl IntoResponse {
