@@ -1,58 +1,56 @@
 # Dwarf Fortress AI Companion
 
-An open-source conversational companion for Dwarf Fortress. The project aims to observe a live fortress through DFHack and provide an AI with useful game context, while leaving control of the game to the player.
+DFCompanion is an early-stage companion for Dwarf Fortress. It connects DFHack observations and player questions in a local web app, with the goal of helping an AI answer questions about a live fortress while leaving control of the game to the player.
 
-## Development environment (Windows)
+This is an experimental prototype, not yet a packaged release. The current build uses mock AI responses; real AI-provider configuration and calls are not implemented.
 
-The companion is written in Rust, with CMake as the build entry point and Cargo managing Rust dependencies. On Windows, use the MSVC Rust target.
+## Getting started
 
-Required tools are Git, CMake 3.24 or later, Rust stable via [rustup](https://rustup.rs/) with the `x86_64-pc-windows-msvc` target, and the MSVC linker plus Windows SDK (available from Visual Studio Build Tools). Run the commands below from a Visual Studio Developer PowerShell or another shell where the MSVC build tools are available.
+The current Lua event prototype has been tested with Dwarf Fortress 53.16 and DFHack 53.16-r2 on Windows. You need a local DFHack installation and a DFCompanion build. See [BUILDING.md](./BUILDING.md) for developer setup and instructions to build and install the Lua script.
 
-The service uses gRPC over HTTP/2 at `127.0.0.1:50051` and HTTP at `127.0.0.1:3000`. Cargo provisions a host `protoc` through the `protoc-bin-vendored` build dependency, so no machine-wide compiler install is required for Rust code generation. The optional DFHack Lua experiment submits events to `POST /api/plugin/events` as JSON over loopback HTTP; it does not require protobuf support in Lua.
+1. Start DFCompanion. The local web app is at <http://127.0.0.1:3000/>.
+2. Copy the `dfcompanion <token>` command shown on the web page.
+3. With a fortress loaded in Dwarf Fortress, paste that command into the DFHack console. This enables the script and sends a connection-test event.
+4. Ask a question in the web app's Chat box. The current response is a mock, not a real AI answer.
 
-## Building
+The generated token changes every time DFCompanion starts. Copy the new command from the web page after restarting the service. Do not share the token: it authorizes local Lua event submissions.
 
-Configure and build from the repository root:
+## Using the DFHack script
 
-```powershell
-cmake -S . -B build -DDFHACK_INSTALL_DIR="E:/SteamLibrary/steamapps/common/DFHack"
-cmake --build build --config Debug
-```
+When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Announcements and other reports are labeled separately. DFHack reports occur more often than visible announcements, so the script may send many events. Forwarding is synchronous.
 
-Set `DFHACK_INSTALL_DIR` to the root of your DFHack installation (the directory containing `hack\scripts`). CMake stores this as a local cache setting in `build`, so it does not need to be committed or repeated on later configure/build runs. To change the path, rerun the configure command with the new value.
+- `disable dfcompanion` stops forwarding reports.
+- `enable dfcompanion` re-enables it during the current DFHack session.
+- `dfcompanion status` displays its current in-memory state.
 
-The `install-dfhack-script` build target builds DFCompanion and copies `scripts/dfcompanion.lua` into `${DFHACK_INSTALL_DIR}/hack/scripts` only when the file differs. It errors with a configuration hint if the path is unset or does not point to a DFHack installation. The VS Code Debug DFCompanion launch runs this target before starting the service, so the installed Lua script stays current.
+The enabled state is not saved; it resets when the map unloads or DFHack exits. If the bounded event queue fills, the script pauses the game and reports the condition. If forwarding fails, the script disables itself and reports the error.
 
-For a release build, use:
+## AI providers and privacy
 
-```powershell
-cmake --build build --config Release
-```
+AI-provider configuration is not available in the current prototype. The first AI integration is planned to support Anthropic, OpenAI, and Google Gemini, with a free-form model ID so users can follow each provider's changing model catalog. Provider/model configuration is intended to be machine-specific, with API keys stored in the operating system's credential vault rather than in a game save.
 
-Run the Rust tests through CTest:
+When AI integration is added, player messages and selected fortress reports will be sent to the chosen provider for inference. The planned setup flow will explain this and require acknowledgement before the first request and after a provider or material privacy-notice change. Provider privacy/data-use policies are not standardized for automatic discovery, so DFCompanion will link to official provider policies rather than copy policy text into the app.
 
-```powershell
-ctest --test-dir build -C Debug --output-on-failure
-```
+### Model suggestions
 
-CMake invokes Cargo for compilation and tests. Cargo downloads dependencies on the first build, so network access is required. The CMake build directory contains Cargo outputs; commit `Cargo.lock` to keep application builds reproducible.
+Model names, availability, prices, and capabilities change frequently. These are starting points from the providers' public catalogs as checked on **October 18, 2026**, not fixed defaults or endorsements. Check current availability and pricing in your account before use; enter the exact model ID accepted by your provider.
 
-The `dfhack-remote` crate is used separately for queries to DFHack's remote API; it is not the plugin-to-Companion event RPC. The worker currently uses a mock AI response. Plugin events and web chat share a bounded queue of 50 items; if full, the gRPC/HTTP response asks the plugin script to pause the game and the UI receives a notification.
+| Provider | Suggested model ID | Why consider it | Current model information |
+|---|---|---|---|
+| Anthropic | `claude-sonnet-5-5` | A balanced starting point for speed and capability. | [Models overview](https://platform.claude.com/docs/en/models/overview) |
+| OpenAI | `gpt-5.4-mini` | A faster, lower-cost option suitable for trying frequent short turns. | [GPT-5.4 Mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini) |
+| Google Gemini | `gemini-3.8-flash` | A fast Flash model intended for efficient, high-volume work. | [Gemini models](https://ai.google.dev/gemini-api/docs/models) and [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash) |
 
-## Testing Lua-to-Companion communication
+Treat these suggestions as perishable: the provider's current catalog and your own results should take precedence.
 
-The DFHack Lua environment in the tested 53.16-r2 installation includes JSON support (`json`), DFHack's TCP socket wrapper (`plugins.luasocket`), and the `eventful` plugin. `scripts/dfcompanion.lua` uses those modules to send HTTP/1.1 JSON requests and read queue responses. It explicitly switches the socket to blocking mode after connecting because DFHack creates new TCP clients as nonblocking; socket timeouts keep each exchange bounded. When enabled, the script subscribes to `eventful`'s `REPORT` event, looks up report text, converts it from DF's CP437 encoding to UTF-8, and labels announcements separately from other reports. The DFHack documentation warns that reports occur more frequently than announcements, so this experiment may send a high volume of events. Forwarding is synchronous; on a forwarding failure the script disables itself and reports the error, and a full queue pauses the game.
+## Current limitations
 
-On each startup, DFCompanion generates a fresh cryptographically random 256-bit bearer token. Open the local web page, then copy the displayed `dfcompanion <token>` command and paste it into the DFHack console. The script receives the token as its argument; it is not saved to disk. The page is marked `no-store` so browsers do not cache the token-bearing HTML.
+- AI responses are mocked; there is no provider setup screen or real AI request yet.
+- `REPORT` is the only forwarded gameplay event type so far. The usefulness and coverage of other events have not been evaluated.
+- Conversation history and report context are not yet used to construct AI requests.
+- Enablement and Companion state are in memory; the Lua script does not persist state to the Dwarf Fortress save.
+- This is a development prototype without a user installer or packaged release.
 
-Copy `scripts\dfcompanion.lua` to the installed DFHack `hack\scripts` folder, start DFCompanion, and run the copied command in DFHack with a fortress site loaded. The command enables the script and submits a connection-test event. Run `disable dfcompanion` to disable it, or `enable dfcompanion` to re-enable it during the current DFHack session. `dfcompanion status` reports its in-memory enablement state. The state is not persisted and resets when the map unloads or DFHack exits. If the queue is full, the endpoint returns an explicit queue-full response and the Lua script pauses the game. A new token is generated after each service restart, so copy the current command again.
+## Developer setup
 
-## Running the development service
-
-After a Debug build, start the service from the repository root:
-
-```powershell
-.\build\cargo\debug\dfcompanion.exe
-```
-
-Open `http://127.0.0.1:3000/` for the local chat/notification page. The gRPC endpoint listens on `127.0.0.1:50051`. This first code slice implements simulation-event submission only; the planned site snapshot RPC procedures are not implemented yet. AI responses are mocked, the Lua script only submits a manual test event, and local gRPC calls do not yet authenticate clients.
+Build, configure the DFHack install directory, install the Lua script, run tests, and set up VS Code using [BUILDING.md](./BUILDING.md).
