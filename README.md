@@ -8,7 +8,7 @@ The companion is written in Rust, with CMake as the build entry point and Cargo 
 
 Required tools are Git, CMake 3.24 or later, Rust stable via [rustup](https://rustup.rs/) with the `x86_64-pc-windows-msvc` target, and the MSVC linker plus Windows SDK (available from Visual Studio Build Tools). Run the commands below from a Visual Studio Developer PowerShell or another shell where the MSVC build tools are available.
 
-No separate `protoc` installation is needed at this stage. The planned `dfhack-remote` Rust crate integration handles its own protobuf code generation; a project-owned `protoc` may be needed later if we add a C++ DFHack plugin or define and compile our own protobuf schemas. `dfhack-remote` is temporarily not in the manifest because its current published release has an unresolvable yanked transitive dependency; add it when that dependency can be resolved cleanly. The current CMake project declares no native languages, so it does not require a C++ compiler to be configured by CMake; the MSVC linker and SDK are still needed by Rust's Windows MSVC target.
+The service uses gRPC over HTTP/2 at `127.0.0.1:50051` and HTTP at `127.0.0.1:3000`. Cargo provisions a host `protoc` through the `protoc-bin-vendored` build dependency, so no machine-wide compiler install is required for Rust code generation. The DFHack plugin will submit events and exchange versioned site-state snapshots; a full plugin build still requires its C++ toolchain and DFHack SDK.
 
 ## Building
 
@@ -31,6 +31,16 @@ Run the Rust tests through CTest:
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-CMake invokes Cargo for compilation and tests. Cargo downloads dependencies on the first build, so network access is required. The CMake build directory contains Cargo outputs; commit `Cargo.lock` once the dependency graph can be resolved to keep application builds reproducible.
+CMake invokes Cargo for compilation and tests. Cargo downloads dependencies on the first build, so network access is required. The CMake build directory contains Cargo outputs; commit `Cargo.lock` to keep application builds reproducible.
 
-The current scaffold intentionally does not depend on `dfhack-remote`, so it can be built independently while that crate's published release has a clean dependency resolution issue: its transitive `zip ^1.1.1` build dependency has only yanked matching releases on crates.io. Do not work around this by silently pinning a yanked release. Revisit the dependency when upstream provides a cleanly resolvable release or another suitable integration approach is selected.
+The `dfhack-remote` crate is used separately for queries to DFHack's remote API; it is not the plugin-to-Companion event RPC. The worker currently uses a mock AI response. Plugin events and web chat share a bounded queue of 50 items; if full, the gRPC response tells the plugin to pause the game and the UI receives a notification.
+
+## Running the development service
+
+After a Debug build, start the service from the repository root:
+
+```powershell
+.\build\cargo\debug\dfcompanion.exe
+```
+
+Open `http://127.0.0.1:3000/` for the local chat/notification page. The gRPC endpoint listens on `127.0.0.1:50051`. This first code slice implements simulation-event submission only; the planned site snapshot RPC procedures are not implemented yet. AI responses are mocked, the DFHack plugin is not included, and local gRPC calls do not yet authenticate clients.

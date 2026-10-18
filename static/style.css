@@ -1,0 +1,28 @@
+body {
+  font: 16px system-ui, sans-serif;
+  margin: 2rem auto;
+  max-width: 52rem;
+  padding: 0 1rem;
+}
+
+#notifications {
+  border: 1px solid #888;
+  min-height: 15rem;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+#notifications li {
+  margin: 0.5rem 0;
+  white-space: pre-wrap;
+}
+
+textarea {
+  box-sizing: border-box;
+  min-height: 5rem;
+  width: 100%;
+}
+
+button {
+  margin-top: 0.5rem;
+}

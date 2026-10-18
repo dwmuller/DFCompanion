@@ -23,31 +23,35 @@ A useful conceptual pipeline is:
 Raw DFHack representations should be normalized before presentation to an AI. The normalized form should contain facts rather than strategic interpretation.
 
 ## Structured representation
-The main application is written in Rust, so S-expressions are not the assumed default for normalized observations or LLM context. The planned DFHack remote API integration will use the `dfhack-remote` crate, which supplies its own protobuf message code generation, once its transitive dependencies can be resolved cleanly. A project-owned `protoc` is deferred unless custom schemas or a native DFHack plugin make it necessary. Keep the normalized representation easy to inspect, log, persist, and process.
+The plugin-to-Companion interface will use gRPC over HTTP/2 with project-owned protobuf messages and `protoc`-generated code. The Rust build provisions a host compiler through Cargo's `protoc-bin-vendored` dependency. The gRPC server runs in the same process as the Companion worker; the DFHack plugin is its client. The Companion may separately use `dfhack-remote` for queries against DFHack's remote API; that is distinct from the custom plugin-to-Companion interface. Keep normalized observations easy to inspect, log, persist, and process.
 
-Illustrative shape only:
+Each simulation event contains a category, a UTC real-world timestamp, a game-world timestamp, and descriptive text. The real timestamp uses protobuf `google.protobuf.Timestamp` for sub-second precision. Game time is represented by year, month, day, and tick from DFHack's World module; year plus tick is sufficient for complete ordering. Numeric priority is omitted initially; if needed later, priority can be associated with categories.
 
-    (event
-      :type unit-death
-      :game-time (...)
-      :unit (:id 847 :name "Oddom" :profession "Axedwarf")
-      :location (:x 143 :y 87 :z 45)
-      :details (...))
+    SimulationEvent {
+      category,
+      real_world_time_utc,
+      game_world_time: { year, month, day, tick },
+      description
+    }
 
-A component boundary may use another wire format if tooling requires it; the wire format need not dictate the application's internal or AI-facing representation.
+The gRPC service needs a procedure to submit a simulation event and procedures to exchange site-state snapshots with the plugin. The `std::ostream`/`std::istream` supplied to DFHack's `plugin_save_site_data` and `plugin_load_site_data` callbacks is not the persistence store. The plugin must use DFHack's Persistence module, which stores named items with `int`, `bool`, or `std::string` values. During site save, request a snapshot from the Companion over gRPC and serialize it into a named string item; during site load, retrieve and deserialize that named item, then send it to the Companion for restoration. These calls are provisionally assumed to fit in a single gRPC request/response. The Persistence item is associated with the saved site; include world/site identifiers if available, but a new unsaved game may not have a save identity.
+
+Each snapshot must include a schema/version identifier and the simulation time at which it was written. This timestamp lets the AI notice a gap between saved context and current game time, such as a play session that occurred while the plugin was disabled. The serialized snapshot must fit in the Persistence module's string representation and in a single gRPC call; exact payload contents, string encoding/serialization format, and safe maximum size still need definition and testing.
+
+Pausing the game under event-queue pressure remains a requirement, but its call direction and mechanism are not part of the confirmed plugin-to-Companion procedures yet. Determine whether to use DFHack's existing remote API or add an explicit plugin command/callback.
 
 ## Game timestamps
-Native events may not contain a complete timestamp. A timestamp can potentially be assembled when an event is received using DFHack world-state values such as current year, month, day, and tick information.
-
-The normalized observation should include a canonical machine-usable game-time value sufficient for ordering and elapsed-game-time calculations. Human calendar fields can accompany it where useful.
+The plugin supplies each event's real-world timestamp in UTC using protobuf `google.protobuf.Timestamp`, which includes seconds and nanoseconds. It obtains simulation time from DFHack's World module as year, month, day, and tick. Year plus tick is the canonical game-time ordering; month and day are retained as readable calendar fields.
 
 ## Wake, defer, ignore
 A deferred event should normally become context the next time the AI runs, regardless of what causes that invocation. Thus a later wake event should bring pending deferred observations along with it, just as a new player chat message would.
 
-Questions left open include retention/consumption rules after deferred observations have been presented.
+Player chat uses the reserved `user_input` category and enters the same queue as simulation events. The Companion worker consumes both from one source. Event categories may later be mapped to Wake/Defer/Ignore; the first implementation processes all accepted categories. Queue capacity is a code constant set to 50.
 
-## Native events first
-The MVP should initially use native DFHack events only. The first technical research task is to inventory EventManager/eventful behavior:
+Events may be batched before real AI calls, which must be rate-limited. The first worker uses a mock AI response. If the queue is full, the gRPC response indicates that the plugin should pause the game, and DFCompanion publishes a queue-full notification to the UI. The incoming event is rejected rather than silently dropped. Numeric priority-based dropping and de-duplication are deferred.
+
+## Plugin event selection
+The DFHack plugin selects which game events to send. Research the EventManager/eventful surface to inform plugin selection:
 
 - available event types;
 - payloads supplied by each event;
@@ -72,23 +76,44 @@ For example, the adapter might report a unit death plus directly retrievable inf
 
 Higher-order locally synthesized events remain an option for situations where they are needed to trigger asynchronous wakeups, reduce AI usage, or capture information unavailable from native events.
 
-## Current architectural hypothesis
-A plausible arrangement is:
+## Service architecture
+The planned arrangement is:
 
-    Browser UI
-        |
-    local companion service <----> AI API
-        |
-    DFHack adapter
-        |
-    Dwarf Fortress
+    HTMX browser UI <-- HTTP + SSE --> Companion service <-- gRPC / protobuf --> DFHack plugin
+                                       |                           |
+                                       |                           v
+                                       |                    Dwarf Fortress
+                                       |
+                                       +---- AI provider API
+                                       |
+                                       +---- DFHack remote API
 
-The companion would run locally beside the game. The browser UI would provide chat, configuration, and eventually observation/event-policy inspection. HTTP and a browser UI are conveniences, not fundamental requirements of the core observation system.
+The service has three logical parts in one Rust process: a gRPC server accepting plugin events and site save/load notifications, a queue-consuming Companion worker that interacts with the AI, and an HTTP service for the UI. The plugin initiates gRPC calls to the Companion. AI messages from event processing and player chat appear in one conversation/notification stream.
+
+The service runs locally beside the game. The UI includes a chat prompt, a shared output stream, and configuration controls. Configuration details beyond AI credentials remain open.
+
+The initial fixed endpoints are HTTP `127.0.0.1:3000` and gRPC `127.0.0.1:50051`. Local gRPC calls are initially unencrypted and unauthenticated; a shared-secret mechanism may be added later. HTTP chat submissions validate the expected Host and Origin.
 
 ## Portability and persistence
 The same fortress is intended to be played on a gaming desktop and personal laptop, with DF state synchronized through OneDrive.
 
-If companion-owned history becomes necessary, it will also need a safe portability/synchronization strategy. No database or storage technology has yet been selected.
+Settings persist independently from site state. During `plugin_save_site_data`, the plugin requests a snapshot from the Companion and writes its serialized form as a named `std::string` through DFHack's Persistence module; during `plugin_load_site_data`, it retrieves the named value and sends it to the Companion for restoration. The callback streams are for other callback data, not this persistent state. Persistence associates the item with the saved site, avoiding the need for the Companion to identify multiple named saves itself. Site save/load callbacks also provide the points to flush pending events into the snapshot or restore them from it. Snapshot contents should include the AI context needed to resume, pending events, a format version, and simulation timestamp; whether to include full chat history remains open. Assume a snapshot fits in one gRPC call and one Persistence string for now, but validate its size and behavior before depending on this assumption. The string encoding/serialization format is undecided. Settings remain independently persisted in user-writable storage suitable for possible Steam distribution. Consider concurrent OneDrive synchronization of game saves.
+
+## Localhost security
+Loopback binding alone does not prevent a malicious website from attempting requests to a local service. Use strict Origin/Host checks, CSRF defenses for state-changing routes, no permissive CORS, and avoid exposing credentials in URLs, logs, or browser event streams. AI credentials are entered in the UI and held in memory initially; secure storage across runs is deferred.
+
+## AI context and provider
+Provider portability is desirable, but no provider, model, API abstraction, context construction strategy, or rate-limit values have been selected. Begin with factual event batches and player messages, then make context and memory policy explicit as the integration is explored. Provider failures should be surfaced in the UI.
+
+## Open integration decisions
+- Select matching Rust/C++ gRPC runtimes and protobuf code-generation tooling.
+- Determine which world/site identity fields are available from DFHack and which simulation-time fields should timestamp snapshots.
+- Define snapshot contents, serialization/string encoding, version migration behavior, and practical payload-size limits for gRPC and Persistence string items.
+- Decide how the Companion requests a game pause through the plugin or DFHack remote API.
+- Decide future queue recovery behavior after a pause and whether category-based filtering or eviction is needed under sustained overload.
+- Select an AI provider/API and define initial batching, rate limits, context limits, and error/retry behavior.
+- Select storage format/location and identify exactly which state is global versus site-scoped.
+- Consider shared-secret authentication for local gRPC calls before using the plugin RPC in a normal gameplay environment.
 
 ## Early proof-of-concept milestone
-Receive a useful native DFHack event, enrich it with enough game state to make the event intelligible, convert it into the normalized representation, and demonstrate that an LLM can correctly understand what happened.
+Verify plugin-event delivery through a protobuf gRPC call into the bounded queue, verify that web chat enters the same queue under `user_input`, and demonstrate the mock worker response in the SSE notification stream.

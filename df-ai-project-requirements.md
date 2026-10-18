@@ -14,21 +14,37 @@ The goal is assistance and understanding, not autonomous play. The player remain
 Direct player/game interaction is outside the companion's scope.
 
 ## MVP objectives
-1. Observe meaningful native DFHack events while a fortress is running.
-2. Convert raw game information into a stable, AI-friendly structured representation.
-3. Maintain conversational interaction in which the AI can combine player questions with live game context.
-4. Allow selected events to wake the AI asynchronously, while other events can be deferred or ignored.
-5. Avoid continuous use of a metered AI service simply to monitor the game.
+1. Receive selected fortress simulation events from a separate DFHack plugin over a gRPC/protobuf interface.
+2. Put plugin events and player chat into one Companion input queue, distinguished by category.
+3. Maintain a conversational UI in which the AI can combine player questions with live game context.
+4. Process events asynchronously, with future batching and rate-limited AI calls.
+5. Ask the plugin to pause the game if the bounded event queue fills.
 6. Keep installation and deployment practical on both the gaming desktop and laptop.
 
+The initial scope is fortress mode at an active site; other game modes are not supported.
+
+## Service components
+- **Plugin RPC interface:** a gRPC service hosted in the DFCompanion process. The DFHack plugin is its client and submits simulation events and exchanges site-state snapshots during site save/load callbacks.
+- **Shared input queue:** a bounded in-memory queue of capacity 50 (a code constant, not initially a user setting). Plugin events carry a category; chat messages use the reserved `user_input` category.
+- **Companion worker:** consumes queued events, may batch them, applies AI API rate limits, and presents resulting messages in the shared conversation stream. The user may also prompt the AI directly.
+- **HTTP/UI service:** serves an HTMX-based interface with a chat prompt, one notification/conversation stream for AI output, and configuration controls. Server-Sent Events (SSE) are the initial choice for delivering updates to the page.
+- **DFHack access:** the AI may request game state through predefined DFHack remote calls or plugin-provided procedures.
+
+In the first implementation, the Companion worker uses a mock AI response; connecting a real AI provider is deferred. Player chat is submitted to the same queue as simulation events so the Companion has one input source.
+
 ## Event policy
-Event categories should be user-configurable through the UI:
+Simulation event categories may eventually be user-configurable through the UI:
 
 - **Wake:** retain the event and invoke the AI promptly.
 - **Defer:** retain it and provide it the next time the AI is invoked, whether by another wake event or by player chat.
 - **Ignore:** do not retain it for AI consumption.
 
-This is intended to make responsiveness, relevance, and API/token cost experimentally tunable.
+The `user_input` category always enters the Companion's processing path. Numeric event priority is not part of the initial event contract; if needed later, priority can be configured per category. The first implementation processes accepted events without category filtering.
+
+When the queue is full, the RPC response tells the plugin that a pause is requested and that the incoming event was not accepted. The plugin is responsible for pausing the game. DFCompanion also publishes a queue-full notification to the UI. Queue capacity starts at 50 and is changed in code, not through runtime configuration.
+
+## Event timestamps
+Each plugin event has a UTC real-world timestamp with sub-second precision, represented as a protobuf `google.protobuf.Timestamp`, and a game-world timestamp containing year, month, day, and tick. The plugin obtains these values from the system clock and DFHack's World module. Year plus tick is sufficient for complete simulation-time ordering; month and day are included for readability.
 
 ## State and persistence principles
 Dwarf Fortress should remain authoritative for current game state. The companion should not duplicate current state merely for convenience if it can be queried reliably through DFHack.
@@ -36,12 +52,21 @@ Dwarf Fortress should remain authoritative for current game state. The companion
 Some companion-owned information may nevertheless require persistence, including:
 - significant observations whose historical occurrence cannot be reconstructed later;
 - player intentions and priorities;
-- useful conversational/derived context.
+- chat history and useful conversational/derived context;
+- settings, including AI provider credentials entered through the UI.
 
-The exact persistence mechanism is intentionally undecided. Any necessary companion state should be portable between the two computers used to play the same synchronized fortress.
+Decisions about how site-independent settings are stored, and whether or not they are  specific to a machine, are deferred for now. Credentials for the AI API service are initially entered through the UI; these will eventually require secure storage between runs.
+
+Site-related state is stored through DFHack's Persistence module as named items, using its supported `int`, `bool`, and `std::string` types; this associates it with a fortress and incorporates it into saved data. During site save, the plugin requests a snapshot from the Companion over gRPC and stores the serialized snapshot in a named string item. During site load, the plugin retrieves that item and sends the snapshot to the Companion to restore. Snapshots are versioned and include simulation time at save, allowing the AI to recognize that play may have occurred since the saved context was captured (for example, while the plugin was disabled). For now, assume the snapshot fits in a single gRPC call; define and validate practical size limits before relying on this in production.
+
+Site-related data may include site-specific settings, e.g. what events to ignore or pass on to the companion.
+
+Saving and restoring site-related data is under control of the DFHack plugin. There is no opportunity to save state separately during shutdown of DFCompanion.
 
 ## Cost
 The project is a hobby project and should keep recurring costs low. Continuous observation should happen locally without requiring continuous AI API calls. Model/provider choice and detailed cost controls remain later decisions.
+
+The AI integration should avoid coupling the application to one provider where practical. Select an inexpensive, readily available service with a usable free tier if possible; provider, model, context strategy, and rate-limit values remain undecided. AI or DFHack communication failures should be surfaced in the UI. No events arriving is a normal dormant state.
 
 ## Learning goals
 The project should expose, rather than hide, important AI-agent concepts: tool use, context construction, memory, event handling, persistence, and the boundary between deterministic local processing and LLM reasoning.
@@ -51,22 +76,30 @@ Initially, prefer simple mechanisms and let the AI infer higher-level meaning fr
 ## Implementation preferences
 - Rust is the implementation language for the main application.
 - Use CMake as the top-level build orchestrator, with Cargo managing Rust dependencies and compiling the Rust code.
-- Plan to use the `dfhack-remote` Rust crate for the initial DFHack remote API integration and its protobuf code generation, once its transitive dependencies can be resolved cleanly; defer a project-owned `protoc` until custom schemas or the likely C++ DFHack plugin require it.
-- Defer setting up a C++ toolchain and DFHack plugin component until research shows that a native plugin is needed; use the least-coupled DFHack integration available initially.
-- A locally running service with a thin browser UI is the current architectural hypothesis, not yet an immutable requirement.
+- Use gRPC over HTTP/2 for the plugin-to-Companion interface, with project-owned protobuf service/message definitions generated by `protoc`. The service runs in the same process as the Companion worker; the DFHack plugin is the gRPC client. Initial fixed ports are HTTP `127.0.0.1:3000` and gRPC `127.0.0.1:50051`.
+- Exchange versioned, simulation-time-stamped site-state snapshots through gRPC; the plugin stores the serialized snapshot in a named `std::string` item using DFHack's Persistence module during site save/load callbacks. The callback stream is not used for persistent state. Assume a snapshot fits in one gRPC call provisionally.
+- A separate C++ DFHack plugin is part of the planned architecture.
+- The HTTP service is local-only and serves an HTMX UI, with SSE for server-to-browser updates.
 - The observation/query interface should ideally become useful independently of the particular AI provider or chat UI.
+
+## Security
+- Bind the HTTP service to loopback only.
+- Treat browser access to localhost as a security boundary: validate request origin/host, protect state-changing endpoints against cross-site requests, avoid permissive CORS, and do not put credentials in URLs or logs.
+- Keep AI credentials in memory after UI entry for the initial implementation; secure persistence is a later requirement.
+- Initial local gRPC traffic is unencrypted and unauthenticated. A shared-secret mechanism may be added later to protect against forged local messages.
 
 ## Initial development setup
 - Install Rust through `rustup` (including Cargo) and install CMake.
 - Install the platform's linker/build tools required by the selected Rust target.
-- Add `dfhack-remote` for DFHack remote API access when its transitive dependencies can be resolved cleanly; no separate `protoc` installation is needed for the crate's generated API.
+- Let Cargo provision the host `protoc` through the pinned-by-lockfile `protoc-bin-vendored` build dependency for Rust protobuf generation. The C++ plugin build will need its own code-generation integration.
+- Select and configure compatible Rust and C++ gRPC/protobuf code-generation toolchains.
+- Set up the C++ toolchain and DFHack SDK needed to build and test the planned plugin.
+- Use the `dfhack-remote` crate for DFHack remote state queries if its dependency graph can be resolved cleanly; it is separate from the plugin-to-Companion RPC interface.
 - Keep Cargo/CMake build outputs out of source control while committing `Cargo.lock` for reproducible application builds.
-- Revisit project-owned protobuf code generation and `protoc` when custom schemas or a native plugin are introduced.
-- Do not install C++/DFHack SDK tooling for the initial companion unless the chosen DFHack integration requires it.
 
 ## Explicitly outside the initial scope
 - Playing Dwarf Fortress autonomously.
 - Choosing fortress geometry or issuing game commands for the player.
 - Screenshot-based state inference when structured DFHack access is available.
 - Elaborate agent frameworks before their value has been demonstrated.
-- Synthetic higher-order events unless native events prove insufficient for an MVP.
+- Game modes other than fortress mode at an active site.

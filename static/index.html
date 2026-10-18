@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DFCompanion</title>
+    <script src="/assets/htmx.min.js" defer></script>
+    <script src="/assets/app.js" defer></script>
+    <link rel="stylesheet" href="/assets/style.css">
+  </head>
+  <body>
+    <h1>DFCompanion</h1>
+    <p>Development mode: AI responses are mocked. Plugin events and chat share one Companion queue.</p>
+    <h2>Conversation and notifications</h2>
+    <ol id="notifications" aria-live="polite"></ol>
+    <h2>Chat</h2>
+    <form hx-post="/chat" hx-target="#chat-status" hx-swap="innerHTML">
+      <label for="message">Message</label>
+      <textarea id="message" name="message" maxlength="8000" required></textarea>
+      <button type="submit">Send</button>
+      <span id="chat-status" role="status"></span>
+    </form>
+  </body>
+</html>
