@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use axum::{
     body::Body,
-    extract::{Form, State},
+    extract::{DefaultBodyLimit, Form, State},
     http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{
@@ -12,7 +12,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 use crate::{utc_now, AppState, QueueItem, USER_INPUT_CATEGORY};
@@ -25,16 +25,171 @@ struct ChatForm {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct PluginEvent {
+    category: String,
+    real_world_time_utc: SimulationTimestampUtc,
+    game_world_time: SimulationTimestamp,
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct SimulationTimestamp {
+    year: i32,
+    month: i32,
+    day: i32,
+    tick: i32,
+}
+
+#[derive(Deserialize)]
+struct SimulationTimestampUtc {
+    seconds: i64,
+    nanos: i32,
+}
+
+#[derive(Serialize)]
+struct PluginEventResult {
+    status: &'static str,
+    message: String,
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/chat", post(chat))
+        .route(
+            "/api/plugin/events",
+            post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
+        )
         .route("/events", get(events))
         .route("/assets/htmx.min.js", get(htmx_script))
         .route("/assets/app.js", get(app_script))
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
         .with_state(state)
+}
+
+async fn plugin_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(event): axum::Json<PluginEvent>,
+) -> impl IntoResponse {
+    if headers.contains_key(header::ORIGIN) {
+        return plugin_event_response(
+            StatusCode::FORBIDDEN,
+            "rejected",
+            "Browser-originated requests are not accepted.",
+        );
+    }
+
+    let Some(expected_token) = state.plugin_token.as_deref() else {
+        return plugin_event_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "Plugin event authentication is not configured.",
+        );
+    };
+
+    let authorized = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected_token);
+    if !authorized {
+        return plugin_event_response(
+            StatusCode::UNAUTHORIZED,
+            "rejected",
+            "Missing or invalid plugin token.",
+        );
+    }
+
+    let category = event.category.trim();
+    if category.is_empty() || category.len() > 128 {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "Category must contain between 1 and 128 bytes.",
+        );
+    }
+    let description = event.description.trim();
+    if description.is_empty() {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "Event description is required.",
+        );
+    }
+    if description.len() > 8_000 {
+        return plugin_event_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "rejected",
+            "Event description exceeds the 8000-byte limit.",
+        );
+    }
+
+    let real_world_time_utc = prost_types::Timestamp {
+        seconds: event.real_world_time_utc.seconds,
+        nanos: event.real_world_time_utc.nanos,
+    };
+    if !crate::validate_timestamp(&real_world_time_utc) {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "UTC timestamp is out of range.",
+        );
+    }
+    let game_world_time = crate::api::SimulationTimestamp {
+        year: event.game_world_time.year,
+        month: event.game_world_time.month,
+        day: event.game_world_time.day,
+        tick: event.game_world_time.tick,
+    };
+    if game_world_time.year < 0
+        || game_world_time.month < 0
+        || game_world_time.day < 0
+        || game_world_time.tick < 0
+    {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "Game-world timestamp fields must be non-negative.",
+        );
+    }
+
+    let item = QueueItem {
+        category: category.to_owned(),
+        real_world_time_utc,
+        game_world_time: Some(game_world_time),
+        text: description.to_owned(),
+    };
+
+    match state.queue_tx.try_send(item) {
+        Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            let message = format!(
+                "The event queue is full (capacity {}). The event was not accepted; pause the game.",
+                crate::EVENT_QUEUE_CAPACITY
+            );
+            state.notify(message.clone());
+            plugin_event_response(StatusCode::TOO_MANY_REQUESTS, "queue_full", &message)
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => plugin_event_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "The Companion queue is unavailable.",
+        ),
+    }
+}
+
+fn plugin_event_response(status_code: StatusCode, status: &'static str, message: &str) -> Response {
+    (
+        status_code,
+        axum::Json(PluginEventResult {
+            status,
+            message: message.to_owned(),
+        }),
+    )
+        .into_response()
 }
 
 async fn index() -> Html<&'static str> {

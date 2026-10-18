@@ -24,6 +24,7 @@ pub struct QueueItem {
 pub struct AppState {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<String>,
+    pub plugin_token: Option<String>,
 }
 
 impl AppState {
@@ -35,9 +36,15 @@ impl AppState {
             Self {
                 queue_tx,
                 notifications_tx,
+                plugin_token: None,
             },
             queue_rx,
         )
+    }
+
+    pub fn with_plugin_token(mut self, token: String) -> Self {
+        self.plugin_token = Some(token);
+        self
     }
 
     pub fn notify(&self, message: impl Into<String>) {
@@ -242,6 +249,116 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(queue_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn lua_http_event_is_authenticated_and_enqueued() {
+        let (state, mut queue_rx) = AppState::new();
+        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
+        let response = crate::web::router(state)
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/plugin/events")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::AUTHORIZATION, "Bearer test-token-that-is-at-least-32-bytes")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"category":"manual_test","real_world_time_utc":{"seconds":1800000000,"nanos":0},"game_world_time":{"year":252,"month":3,"day":7,"tick":1234},"description":"Lua HTTP test event."}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let queued = queue_rx.recv().await.unwrap();
+        assert_eq!(queued.category, "manual_test");
+        assert_eq!(queued.text, "Lua HTTP test event.");
+        assert_eq!(queued.real_world_time_utc.seconds, 1_800_000_000);
+        assert_eq!(queued.game_world_time.unwrap().tick, 1_234);
+    }
+
+    #[tokio::test]
+    async fn lua_http_event_rejects_browser_and_unauthenticated_requests() {
+        let (state, mut queue_rx) = AppState::new();
+        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
+        let router = crate::web::router(state);
+        let body = r#"{"category":"manual_test","real_world_time_utc":{"seconds":1800000000,"nanos":0},"game_world_time":{"year":252,"month":3,"day":7,"tick":1234},"description":"must not enqueue"}"#;
+
+        let browser_response = router
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/plugin/events")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::ORIGIN, "http://127.0.0.1:3000")
+                    .header(
+                        header::AUTHORIZATION,
+                        "Bearer test-token-that-is-at-least-32-bytes",
+                    )
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(browser_response.status(), StatusCode::FORBIDDEN);
+
+        let unauthenticated_response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/plugin/events")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
+        assert!(queue_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn lua_http_event_reports_full_queue_without_accepting_event() {
+        let (state, queue_rx) = AppState::new();
+        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            state
+                .queue_tx
+                .try_send(QueueItem {
+                    category: "test".to_owned(),
+                    real_world_time_utc: Timestamp {
+                        seconds: 1_800_000_000,
+                        nanos: 0,
+                    },
+                    game_world_time: None,
+                    text: "filling queue".to_owned(),
+                })
+                .unwrap();
+        }
+
+        let response = crate::web::router(state)
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/plugin/events")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::AUTHORIZATION, "Bearer test-token-that-is-at-least-32-bytes")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"category":"manual_test","real_world_time_utc":{"seconds":1800000000,"nanos":0},"game_world_time":{"year":252,"month":3,"day":7,"tick":1234},"description":"queue full test"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(queue_rx.len(), EVENT_QUEUE_CAPACITY);
     }
 
     async fn start_test_grpc_server(
