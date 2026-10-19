@@ -4,13 +4,12 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DFCompanion</title>
-    <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/app.js" defer></script>
     <link rel="stylesheet" href="/assets/style.css">
   </head>
   <body>
     <h1>DFCompanion</h1>
-    <p>Development mode: AI responses are mocked. Plugin events and chat share one Companion queue.</p>
+    <p>DFHack reports are collected locally and sent with your next chat message. Nothing is sent to an AI provider until you configure one and acknowledge its privacy notice.</p>
     <h2>Connect DFHack</h2>
     <p>Copy this command into the DFHack console to enable the Lua script and send a connection-test event. Use <code>disable dfcompanion</code> to disable it; use <code>enable dfcompanion</code> to re-enable it during this DFHack session.</p>
     <p class="copy-command">
@@ -25,11 +24,50 @@
     <h2>Conversation and notifications</h2>
     <ol id="notifications" aria-live="polite"></ol>
     <h2>Chat</h2>
-    <form hx-post="/chat" hx-target="#chat-status" hx-swap="innerHTML">
+    <form id="chat-form">
       <label for="message">Message</label>
       <textarea id="message" name="message" maxlength="8000" required></textarea>
       <button type="submit">Send</button>
       <span id="chat-status" role="status"></span>
     </form>
+    <form id="retry-form">
+      <button id="retry-button" type="submit">Retry failed AI request</button>
+      <span id="retry-status" role="status"></span>
+    </form>
+    <section aria-labelledby="settings-heading">
+      <h2 id="settings-heading">AI Provider</h2>
+      <p>Choose a provider and model. Your API key is saved in the operating system credential vault and is never included in this page or settings file.</p>
+      <form id="settings-form">
+        <label for="provider">Provider</label>
+        <select id="provider" name="provider">
+          <option value="anthropic">Anthropic</option>
+          <option value="open_ai">OpenAI</option>
+          <option value="groq">Groq (OpenAI-compatible)</option>
+          <option value="open_ai_compatible">Custom OpenAI-compatible API</option>
+        </select>
+        <label id="base-url-label" for="base-url">API base URL</label>
+        <input id="base-url" name="base_url" type="url" maxlength="512" autocomplete="url">
+        <p id="base-url-help">For custom endpoints, use an HTTPS base URL ending in the API prefix (for example, https://api.example.com/v1). HTTP is allowed only for localhost.</p>
+        <label for="model-id">Model ID (provider changes select a suggested starting model; editable)</label>
+        <input id="model-id" name="model_id" type="text" maxlength="256" required>
+        <label for="api-key">API key</label>
+        <input id="api-key" name="api_key" type="password" maxlength="4096" autocomplete="new-password" placeholder="Leave blank to keep the saved key">
+        <p id="api-key-status"></p>
+        <p>
+          Chat messages and selected fortress reports will be sent to this provider when you ask a question.
+          Review the selected provider's data-use terms and
+          <a id="privacy-policy" href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener noreferrer">privacy policy</a><span id="privacy-policy-custom"></span>.
+        </p>
+        <label>
+          <input id="privacy-acknowledged" name="privacy_acknowledged" type="checkbox">
+          I understand that my messages and selected fortress reports will be sent to the selected provider or API endpoint for processing.
+        </label>
+        <div>
+          <button type="submit">Save provider settings</button>
+          <button id="forget-api-key" type="button">Forget saved API key</button>
+        </div>
+        <span id="settings-status" role="status" aria-live="polite"></span>
+      </form>
+    </section>
   </body>
 </html>

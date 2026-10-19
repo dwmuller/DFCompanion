@@ -51,7 +51,7 @@ A deferred event should normally become context the next time the AI runs, regar
 
 Player chat uses the reserved `user_input` category and enters the same queue as simulation events. The Companion worker consumes both from one source. Event categories may later be mapped to Wake/Defer/Ignore; the first implementation processes all accepted categories. Queue capacity is a code constant set to 50.
 
-Events may be batched before real AI calls, which must be rate-limited. The first worker uses a mock AI response. If the queue is full, the gRPC response indicates that the plugin should pause the game, and DFCompanion publishes a queue-full notification to the UI. The incoming event is rejected rather than silently dropped. Numeric priority-based dropping and de-duplication are deferred.
+Events are accumulated locally and included with the next player-triggered AI request. If the queue is full, the gRPC response indicates that the plugin should pause the game, and DFCompanion publishes a queue-full notification to the UI. The incoming event is rejected rather than silently dropped. Numeric priority-based dropping and de-duplication are deferred.
 
 ## Plugin event selection
 The DFHack plugin selects which game events to send. Research the EventManager/eventful surface to inform plugin selection:
@@ -82,7 +82,7 @@ Higher-order locally synthesized events remain an option for situations where th
 ## Service architecture
 The planned arrangement is:
 
-    HTMX browser UI <-- HTTP + SSE --> Companion service <-- gRPC / protobuf --> DFHack plugin
+    Browser UI <-- HTTP + SSE --> Companion service <-- gRPC / protobuf --> DFHack plugin
                                        |                           |
                                        |                           v
                                        |                    Dwarf Fortress
@@ -93,7 +93,7 @@ The planned arrangement is:
 
 The service has three logical parts in one Rust process: a gRPC server accepting plugin events and site save/load notifications, a queue-consuming Companion worker that interacts with the AI, and an HTTP service for the UI. The plugin initiates gRPC calls to the Companion. AI messages from event processing and player chat appear in one conversation/notification stream.
 
-The service runs locally beside the game. The UI includes a chat prompt, a shared output stream, and configuration controls. Configuration details beyond AI credentials remain open.
+The service runs locally beside the game. The UI includes a chat prompt, a shared output stream, and configuration controls for Anthropic and OpenAI-compatible APIs, including presets for OpenAI and Groq. Model IDs are free-form. Provider/model/custom-endpoint settings are stored in per-user local application data; API keys are stored in the operating system credential vault, with custom endpoint keys scoped to their base URL. The UI links known provider privacy policies and requires acknowledgement before sending data, with acknowledgement bound to the provider, endpoint, and notice version. Custom endpoint policy links cannot be verified automatically.
 
 The initial fixed endpoints are HTTP `127.0.0.1:3000` and gRPC `127.0.0.1:50051`. Local gRPC calls are initially unencrypted and unauthenticated; a shared-secret mechanism may be added later. HTTP chat submissions validate the expected Host and Origin.
 
@@ -103,10 +103,12 @@ The same fortress is intended to be played on a gaming desktop and personal lapt
 Settings persist independently from site state. During `plugin_save_site_data`, the plugin requests a snapshot from the Companion and writes its serialized form as a named `std::string` through DFHack's Persistence module; during `plugin_load_site_data`, it retrieves the named value and sends it to the Companion for restoration. The callback streams are for other callback data, not this persistent state. Persistence associates the item with the saved site, avoiding the need for the Companion to identify multiple named saves itself. Site save/load callbacks also provide the points to flush pending events into the snapshot or restore them from it. Snapshot contents should include the AI context needed to resume, pending events, a format version, and simulation timestamp; whether to include full chat history remains open. Assume a snapshot fits in one gRPC call and one Persistence string for now, but validate its size and behavior before depending on this assumption. The string encoding/serialization format is undecided. Settings remain independently persisted in user-writable storage suitable for possible Steam distribution. Consider concurrent OneDrive synchronization of game saves.
 
 ## Localhost security
-Loopback binding alone does not prevent a malicious website from attempting requests to a local service. Use strict Origin/Host checks, CSRF defenses for state-changing routes, no permissive CORS, and avoid exposing credentials in URLs, logs, or browser event streams. AI credentials are entered in the UI and held in memory initially; secure storage across runs is deferred.
+Loopback binding alone does not prevent a malicious website from attempting requests to a local service. Use strict Origin/Host checks, CSRF defenses for state-changing routes, no permissive CORS, and avoid exposing credentials in URLs, logs, or browser event streams. API keys are entered through the local UI, stored in the operating system credential vault, and sent to the selected provider only in authentication headers.
 
 ## AI context and provider
-Provider portability is desirable, but no provider, model, API abstraction, context construction strategy, or rate-limit values have been selected. Begin with factual event batches and player messages, then make context and memory policy explicit as the integration is explored. Provider failures should be surfaced in the UI.
+Provider portability is implemented through a provider-neutral chat request, an Anthropic adapter, and one OpenAI-compatible chat-completions adapter used by OpenAI, Groq, and user-configured endpoints. Google Gemini is intentionally unsupported because its terms do not permit the project's intended use. Each player message triggers one sequential AI turn; reports accumulate as context and do not independently cause calls. The worker estimates a 16,000-token input limit, dropping oldest pending reports first and then older conversation turns, and caps output at 512 tokens. API failures are surfaced while pending chat and reports are retained for retry. Conversation state is in memory only; settings and credentials persist separately.
+
+The AI should receive introductory orientation explaining that DFCompanion is a Dwarf Fortress player's companion, incoming reports are machine-generated snippets from a simulated game rather than messages addressed to the AI, and observations may be incomplete or ambiguous. Provide sensible default orientation text and eventually let the user replace it with their own text. The storage scope and location for this customization remain undecided; do not implement it until that decision is made.
 
 ## Open integration decisions
 - Select matching Rust/C++ gRPC runtimes and protobuf code-generation tooling.
@@ -114,9 +116,10 @@ Provider portability is desirable, but no provider, model, API abstraction, cont
 - Define snapshot contents, serialization/string encoding, version migration behavior, and practical payload-size limits for gRPC and Persistence string items.
 - Decide how the Companion requests a game pause through the plugin or DFHack remote API.
 - Decide future queue recovery behavior after a pause and whether category-based filtering or eviction is needed under sustained overload.
-- Select an AI provider/API and define initial batching, rate limits, context limits, and error/retry behavior.
+- Add provider-side integration tests and measure token usage against tokenizer-aware estimates before relying on the current context budget.
+- Decide where user-replaced AI orientation text belongs (machine-wide settings versus fortress/site-specific state) before implementing customization.
 - Select storage format/location and identify exactly which state is global versus site-scoped.
 - Consider shared-secret authentication for local gRPC calls before using the plugin RPC in a normal gameplay environment.
 
 ## Early proof-of-concept milestone
-Verify plugin-event delivery through a protobuf gRPC call into the bounded queue, verify that web chat enters the same queue under `user_input`, and demonstrate the mock worker response in the SSE notification stream.
+Verify plugin-event delivery through a protobuf gRPC call into the bounded queue, verify that web chat enters the same queue under `user_input`, and test provider requests through the provider-neutral AI interface.

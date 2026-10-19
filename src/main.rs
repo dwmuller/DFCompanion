@@ -10,12 +10,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let grpc_address: SocketAddr = "127.0.0.1:50051".parse()?;
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
     let plugin_token = dfcompanion::generate_plugin_token()?;
-    let (state, queue_rx) = AppState::new();
+    let (state, queue_rx) = AppState::load().map_err(std::io::Error::other)?;
     let state = state.with_plugin_token(plugin_token);
-    let worker = tokio::spawn(run_companion_worker(
-        queue_rx,
-        state.notifications_tx.clone(),
-    ));
+    let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
 
     let grpc_listener = TcpListener::bind(grpc_address).await?;
     let http_listener = TcpListener::bind(http_address).await?;

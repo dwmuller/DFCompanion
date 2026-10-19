@@ -5,11 +5,16 @@ edition = "2021"
 
 [dependencies]
 axum = { version = "0.7", features = ["form"] }
+directories = "6"
 dfhack-remote = "0.12.0"
+keyring = { version = "3", features = ["windows-native"] }
 prost = "0.13"
 prost-types = "0.13"
 rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 tonic = { version = "0.12", features = ["transport"] }

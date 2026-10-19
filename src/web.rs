@@ -15,7 +15,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
-use crate::{utc_now, AppState, QueueItem, USER_INPUT_CATEGORY};
+use crate::{
+    ai::{Provider, UserSettings},
+    utc_now, AppState, QueueItem, AI_RETRY_CATEGORY, USER_INPUT_CATEGORY,
+};
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
 const HTTP_HOST: &str = "127.0.0.1:3000";
@@ -23,6 +26,26 @@ const HTTP_HOST: &str = "127.0.0.1:3000";
 #[derive(Deserialize)]
 struct ChatForm {
     message: String,
+}
+
+#[derive(Deserialize)]
+struct SettingsForm {
+    provider: Provider,
+    model_id: String,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    forget_api_key: Option<bool>,
+    privacy_acknowledged: bool,
+}
+
+#[derive(Serialize)]
+struct SettingsResponse {
+    provider: Provider,
+    model_id: String,
+    base_url: String,
+    api_key_saved: bool,
+    privacy_acknowledged: bool,
+    privacy_policy_url: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -57,12 +80,18 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/chat", post(chat))
+        .route("/retry", post(retry))
+        .route(
+            "/api/settings",
+            get(get_settings)
+                .post(update_settings)
+                .layer(DefaultBodyLimit::max(8_192)),
+        )
         .route(
             "/api/plugin/events",
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
         )
         .route("/events", get(events))
-        .route("/assets/htmx.min.js", get(htmx_script))
         .route("/assets/app.js", get(app_script))
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
@@ -109,6 +138,13 @@ async fn plugin_event(
             StatusCode::BAD_REQUEST,
             "rejected",
             "Category must contain between 1 and 128 bytes.",
+        );
+    }
+    if matches!(category, USER_INPUT_CATEGORY | AI_RETRY_CATEGORY) {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "Category is reserved for Companion chat controls.",
         );
     }
     let description = event.description.trim();
@@ -202,11 +238,115 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "no-store")], Html(page))
 }
 
-async fn htmx_script() -> impl IntoResponse {
+async fn get_settings(State(state): State<AppState>) -> Response {
+    let settings = match state.ai.settings.get() {
+        Ok(settings) => settings,
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    };
+    let api_key_saved = match state.ai.has_api_key(settings.provider, &settings.base_url) {
+        Ok(saved) => saved,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    };
     (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../static/htmx.min.js"),
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(to_settings_response(settings, api_key_saved)),
     )
+        .into_response()
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(form): axum::Json<SettingsForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+
+    let model_id = form.model_id.trim();
+    if model_id.is_empty() || model_id.len() > 256 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Model ID must contain between 1 and 256 bytes.",
+        )
+            .into_response();
+    }
+    if let Some(key) = &form.api_key {
+        if key.len() > 4_096 {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
+        }
+    }
+    let base_url = match form.provider {
+        Provider::Anthropic => form.provider.default_base_url().to_owned(),
+        Provider::OpenAi | Provider::Groq => form.provider.default_base_url().to_owned(),
+        Provider::OpenAiCompatible => form
+            .base_url
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .trim_end_matches('/')
+            .to_owned(),
+        Provider::Gemini => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Google Gemini is not supported for this application.",
+            )
+                .into_response()
+        }
+    };
+    if form.provider == Provider::OpenAiCompatible {
+        if let Err(error) = crate::ai::validate_compatible_base_url(&base_url) {
+            return (StatusCode::BAD_REQUEST, error).into_response();
+        }
+    }
+
+    let settings = match state.ai.settings.update(
+        form.provider,
+        model_id.to_owned(),
+        base_url,
+        form.privacy_acknowledged,
+    ) {
+        Ok(settings) => settings,
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    };
+
+    if form.forget_api_key.unwrap_or(false) {
+        if let Err(error) = state
+            .ai
+            .forget_api_key(settings.provider, &settings.base_url)
+        {
+            return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+        }
+    } else if let Some(key) = form.api_key.filter(|key| !key.trim().is_empty()) {
+        if let Err(error) = state
+            .ai
+            .save_api_key(settings.provider, &settings.base_url, key.trim())
+        {
+            return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+        }
+    }
+
+    let api_key_saved = match state.ai.has_api_key(settings.provider, &settings.base_url) {
+        Ok(saved) => saved,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    };
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::Json(to_settings_response(settings, api_key_saved)),
+    )
+        .into_response()
+}
+
+fn to_settings_response(settings: UserSettings, api_key_saved: bool) -> SettingsResponse {
+    let privacy_acknowledged = settings.privacy_acknowledged();
+    SettingsResponse {
+        provider: settings.provider,
+        model_id: settings.model_id,
+        base_url: settings.base_url,
+        api_key_saved,
+        privacy_acknowledged,
+        privacy_policy_url: settings.provider.privacy_policy_url(),
+    }
 }
 
 async fn app_script() -> impl IntoResponse {
@@ -300,6 +440,41 @@ async fn chat(
             )
                 .into_response()
         }
+    }
+}
+
+async fn retry(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    let item = QueueItem {
+        category: AI_RETRY_CATEGORY.to_owned(),
+        real_world_time_utc: match utc_now() {
+            Ok(timestamp) => timestamp,
+            Err(error) => {
+                eprintln!("could not timestamp AI retry request: {error}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not timestamp the retry request.",
+                )
+                    .into_response();
+            }
+        },
+        game_world_time: None,
+        text: String::new(),
+    };
+    match state.queue_tx.try_send(item) {
+        Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The event queue is full. Wait briefly, then retry.",
+        )
+            .into_response(),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The Companion queue is unavailable.",
+        )
+            .into_response(),
     }
 }
 

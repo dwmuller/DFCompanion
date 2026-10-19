@@ -4,6 +4,8 @@ use prost_types::Timestamp;
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
+pub mod ai;
+
 pub mod api {
     tonic::include_proto!("dfcompanion.v1");
 }
@@ -12,6 +14,7 @@ pub mod web;
 
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
 pub const USER_INPUT_CATEGORY: &str = "user_input";
+pub const AI_RETRY_CATEGORY: &str = "ai_retry";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueueItem {
@@ -26,10 +29,20 @@ pub struct AppState {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<String>,
     pub plugin_token: Option<String>,
+    pub ai: std::sync::Arc<ai::AiRuntime>,
 }
 
 impl AppState {
     pub fn new() -> (Self, mpsc::Receiver<QueueItem>) {
+        Self::with_ai_settings(ai::SettingsRepository::in_memory())
+    }
+
+    pub fn load() -> Result<(Self, mpsc::Receiver<QueueItem>), String> {
+        let settings = ai::SettingsRepository::load_default()?;
+        Ok(Self::with_ai_settings(settings))
+    }
+
+    fn with_ai_settings(settings: ai::SettingsRepository) -> (Self, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
 
@@ -38,6 +51,7 @@ impl AppState {
                 queue_tx,
                 notifications_tx,
                 plugin_token: None,
+                ai: std::sync::Arc::new(ai::AiRuntime::new(settings)),
             },
             queue_rx,
         )
@@ -70,24 +84,101 @@ pub fn utc_now() -> Result<Timestamp, Box<dyn std::error::Error + Send + Sync>> 
 
 pub fn run_companion_worker(
     mut queue_rx: mpsc::Receiver<QueueItem>,
-    notifications_tx: broadcast::Sender<String>,
+    state: AppState,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     async move {
         while let Some(item) = queue_rx.recv().await {
-            let response = mock_ai_response(&item);
-            let _ = notifications_tx.send(response);
+            match item.category.as_str() {
+                AI_RETRY_CATEGORY => {
+                    try_ai_turn(&state).await;
+                }
+                USER_INPUT_CATEGORY => {
+                    state
+                        .ai
+                        .conversation
+                        .lock()
+                        .await
+                        .pending_user_messages
+                        .push(item.text);
+                    try_ai_turn(&state).await;
+                }
+                _ => {
+                    let dropped_reports = state.ai.conversation.lock().await.push_report(format!(
+                        "{} at game time {}-{}-{} tick {}: {}",
+                        item.category,
+                        item.game_world_time
+                            .as_ref()
+                            .map(|time| time.year)
+                            .unwrap_or_default(),
+                        item.game_world_time
+                            .as_ref()
+                            .map(|time| time.month)
+                            .unwrap_or_default(),
+                        item.game_world_time
+                            .as_ref()
+                            .map(|time| time.day)
+                            .unwrap_or_default(),
+                        item.game_world_time
+                            .as_ref()
+                            .map(|time| time.tick)
+                            .unwrap_or_default(),
+                        item.text
+                    ));
+                    if dropped_reports > 0 {
+                        state.notify(format!(
+                            "{dropped_reports} oldest pending report(s) were discarded to keep the AI context within its input limit."
+                        ));
+                    }
+                    state.notify(format!("DFHack report [{}]: {}", item.category, item.text));
+                }
+            }
         }
     }
 }
 
-fn mock_ai_response(item: &QueueItem) -> String {
-    if item.category == USER_INPUT_CATEGORY {
-        format!("Mock AI: I received your message: {}", item.text)
-    } else {
-        format!(
-            "Mock AI: I received a {} event: {}",
-            item.category, item.text
-        )
+async fn try_ai_turn(state: &AppState) {
+    let settings = match state.ai.settings.get() {
+        Ok(settings) => settings,
+        Err(error) => {
+            state.notify(error);
+            return;
+        }
+    };
+    if !settings.privacy_acknowledged() {
+        state.notify(
+            "AI request not sent. Review the provider privacy notice and acknowledge it in AI Provider settings.",
+        );
+        return;
+    }
+
+    let mut conversation = state.ai.conversation.lock().await;
+    if conversation.pending_user_messages.is_empty() {
+        state.notify("There is no failed AI request to retry.");
+        return;
+    }
+    loop {
+        let prompt = conversation.build_prompt();
+        if prompt.omitted_report_count > 0 {
+            state.notify(format!(
+                "{} oldest pending report(s) were left out to fit the AI context limit.",
+                prompt.omitted_report_count
+            ));
+        }
+        match state.ai.complete(&settings, &prompt).await {
+            Ok(answer) => {
+                conversation.complete(prompt, answer.clone());
+                state.notify(format!("Companion: {answer}"));
+                if conversation.pending_user_messages.is_empty() {
+                    return;
+                }
+            }
+            Err(error) => {
+                state.notify(format!(
+                    "AI request failed. Your chat and collected reports are retained; correct the settings or retry. {error}"
+                ));
+                return;
+            }
+        }
     }
 }
 
@@ -153,6 +244,26 @@ mod tests {
         assert_eq!(queued.real_world_time_utc.seconds, 1_800_000_000);
         assert_eq!(queued.real_world_time_utc.nanos, 123_000_000);
         assert_eq!(queued.game_world_time.unwrap().tick, 1_234);
+
+        let reserved_category_error = client
+            .submit_simulation_event(SimulationEvent {
+                category: USER_INPUT_CATEGORY.to_owned(),
+                real_world_time_utc: Some(Timestamp {
+                    seconds: 1_800_000_000,
+                    nanos: 0,
+                }),
+                game_world_time: Some(SimulationTimestamp {
+                    year: 252,
+                    month: 4,
+                    day: 7,
+                    tick: 1_235,
+                }),
+                description: "must not trigger an AI request".to_owned(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(reserved_category_error.code(), tonic::Code::InvalidArgument);
+        assert!(queue_rx.try_recv().is_err());
 
         server_task.abort();
     }
@@ -256,6 +367,94 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(queue_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn settings_and_retry_routes_reject_cross_origin_requests() {
+        let (state, mut queue_rx) = AppState::new();
+        let router = crate::web::router(state);
+        let settings_response = router
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/settings")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::ORIGIN, "https://attacker.example")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"provider":"anthropic","model_id":"model","api_key":"secret","privacy_acknowledged":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let retry_response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/retry")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::ORIGIN, "https://attacker.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(settings_response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(retry_response.status(), StatusCode::FORBIDDEN);
+        assert!(queue_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn chat_is_not_sent_before_privacy_acknowledgement_and_context_is_retained() {
+        let (state, queue_rx) = AppState::new();
+        let mut notifications = state.notifications_tx.subscribe();
+        state
+            .queue_tx
+            .try_send(QueueItem {
+                category: "dfhack_report".to_owned(),
+                real_world_time_utc: Timestamp {
+                    seconds: 1_800_000_000,
+                    nanos: 0,
+                },
+                game_world_time: None,
+                text: "A caravan arrived.".to_owned(),
+            })
+            .unwrap();
+        state
+            .queue_tx
+            .try_send(QueueItem {
+                category: USER_INPUT_CATEGORY.to_owned(),
+                real_world_time_utc: Timestamp {
+                    seconds: 1_800_000_000,
+                    nanos: 0,
+                },
+                game_world_time: None,
+                text: "What happened?".to_owned(),
+            })
+            .unwrap();
+        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+
+        assert!(notifications
+            .recv()
+            .await
+            .unwrap()
+            .contains("DFHack report"));
+        assert!(notifications
+            .recv()
+            .await
+            .unwrap()
+            .contains("acknowledge it"));
+        let conversation = state.ai.conversation.lock().await;
+        assert_eq!(conversation.pending_reports.len(), 1);
+        assert_eq!(
+            conversation.pending_user_messages,
+            vec!["What happened?".to_owned()]
+        );
+        drop(conversation);
+        worker.abort();
     }
 
     #[tokio::test]
@@ -363,6 +562,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
+        assert!(queue_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn lua_http_event_cannot_submit_chat_or_retry_control_categories() {
+        let (state, mut queue_rx) = AppState::new();
+        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
+        for category in [USER_INPUT_CATEGORY, AI_RETRY_CATEGORY] {
+            let response = crate::web::router(state.clone())
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("POST")
+                        .uri("/api/plugin/events")
+                        .header(header::HOST, "127.0.0.1:3000")
+                        .header(header::AUTHORIZATION, "Bearer test-token-that-is-at-least-32-bytes")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"category":"{category}","real_world_time_utc":{{"seconds":1800000000,"nanos":0}},"game_world_time":{{"year":252,"month":3,"day":7,"tick":1234}},"description":"must not trigger AI"}}"#
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
         assert!(queue_rx.try_recv().is_err());
     }
 

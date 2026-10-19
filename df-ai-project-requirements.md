@@ -27,10 +27,10 @@ The initial scope is fortress mode at an active site; other game modes are not s
 - **Plugin RPC interface:** a gRPC service hosted in the DFCompanion process. The DFHack plugin is its client and submits simulation events and exchanges site-state snapshots during site save/load callbacks.
 - **Shared input queue:** a bounded in-memory queue of capacity 50 (a code constant, not initially a user setting). Plugin events carry a category; chat messages use the reserved `user_input` category.
 - **Companion worker:** consumes queued events, may batch them, applies AI API rate limits, and presents resulting messages in the shared conversation stream. The user may also prompt the AI directly.
-- **HTTP/UI service:** serves an HTMX-based interface with a chat prompt, one notification/conversation stream for AI output, and configuration controls. Server-Sent Events (SSE) are the initial choice for delivering updates to the page.
+- **HTTP/UI service:** serves a browser interface with a chat prompt, one notification/conversation stream for AI output, and configuration controls. Server-Sent Events (SSE) deliver updates to the page.
 - **DFHack access:** the AI may request game state through predefined DFHack remote calls or plugin-provided procedures.
 
-In the first implementation, the Companion worker uses a mock AI response; connecting a real AI provider is deferred. Player chat is submitted to the same queue as simulation events so the Companion has one input source.
+The Companion worker supports Anthropic and OpenAI-compatible APIs, including OpenAI and Groq presets, through provider adapters. Custom compatible endpoints are configurable by base URL. Google Gemini is intentionally unsupported because its terms do not permit the project's intended use. Player chat is submitted to the same queue as simulation events. Reports are accumulated as context and do not independently trigger model calls; one sequential AI turn is made per player message.
 
 ## Event policy
 Simulation event categories may eventually be user-configurable through the UI:
@@ -55,7 +55,7 @@ Some companion-owned information may nevertheless require persistence, including
 - chat history and useful conversational/derived context;
 - settings, including AI provider credentials entered through the UI.
 
-Decisions about how site-independent settings are stored, and whether or not they are  specific to a machine, are deferred for now. Credentials for the AI API service are initially entered through the UI; these will eventually require secure storage between runs.
+Site-independent provider/model settings are stored in per-user local application data. API keys entered through the UI are stored in the operating system credential vault. These settings are machine-specific and are not part of Dwarf Fortress save data.
 
 Site-related state is stored through DFHack's Persistence module as named items, using its supported `int`, `bool`, and `std::string` types; this associates it with a fortress and incorporates it into saved data. During site save, the plugin requests a snapshot from the Companion over gRPC and stores the serialized snapshot in a named string item. During site load, the plugin retrieves that item and sends the snapshot to the Companion to restore. Snapshots are versioned and include simulation time at save, allowing the AI to recognize that play may have occurred since the saved context was captured (for example, while the plugin was disabled). For now, assume the snapshot fits in a single gRPC call; define and validate practical size limits before relying on this in production.
 
@@ -66,7 +66,7 @@ Saving and restoring site-related data is under control of the DFHack plugin. Th
 ## Cost
 The project is a hobby project and should keep recurring costs low. Continuous observation should happen locally without requiring continuous AI API calls. Model/provider choice and detailed cost controls remain later decisions.
 
-The AI integration should avoid coupling the application to one provider where practical. Select an inexpensive, readily available service with a usable free tier if possible; provider, model, context strategy, and rate-limit values remain undecided. AI or DFHack communication failures should be surfaced in the UI. No events arriving is a normal dormant state.
+The AI integration avoids coupling the application to one provider through a provider-neutral chat interface. Anthropic and OpenAI-compatible APIs (OpenAI, Groq, and custom endpoints) are supported; model IDs are free-form. API calls happen only for player chat or retries. The worker estimates a 16,000-token input budget, dropping oldest pending reports first and then older conversation history, and caps generated output at 512 tokens. On API failure, pending chat and reports remain available for retry and the UI shows the error. Conversation state is currently in memory only.
 
 ## Learning goals
 The project should expose, rather than hide, important AI-agent concepts: tool use, context construction, memory, event handling, persistence, and the boundary between deterministic local processing and LLM reasoning.
@@ -79,13 +79,13 @@ Initially, prefer simple mechanisms and let the AI infer higher-level meaning fr
 - Use gRPC over HTTP/2 for the plugin-to-Companion interface, with project-owned protobuf service/message definitions generated by `protoc`. The service runs in the same process as the Companion worker; the DFHack plugin is the gRPC client. Initial fixed ports are HTTP `127.0.0.1:3000` and gRPC `127.0.0.1:50051`.
 - Exchange versioned, simulation-time-stamped site-state snapshots through gRPC; the plugin stores the serialized snapshot in a named `std::string` item using DFHack's Persistence module during site save/load callbacks. The callback stream is not used for persistent state. Assume a snapshot fits in one gRPC call provisionally.
 - A separate C++ DFHack plugin is part of the planned architecture.
-- The HTTP service is local-only and serves an HTMX UI, with SSE for server-to-browser updates.
+- The HTTP service is local-only and serves a browser UI, with SSE for server-to-browser updates.
 - The observation/query interface should ideally become useful independently of the particular AI provider or chat UI.
 
 ## Security
 - Bind the HTTP service to loopback only.
 - Treat browser access to localhost as a security boundary: validate request origin/host, protect state-changing endpoints against cross-site requests, avoid permissive CORS, and do not put credentials in URLs or logs.
-- Keep AI credentials in memory after UI entry for the initial implementation; secure persistence is a later requirement.
+- Store AI credentials in the operating system credential vault; never in the app settings file, a game save, logs, or URLs.
 - Initial local gRPC traffic is unencrypted and unauthenticated. A shared-secret mechanism may be added later to protect against forged local messages.
 
 ## Initial development setup

@@ -4,7 +4,7 @@ use crate::{
     api::{
         companion_server::Companion, EventSubmissionResult, EventSubmissionStatus, SimulationEvent,
     },
-    validate_timestamp, AppState, QueueItem,
+    validate_timestamp, AppState, QueueItem, AI_RETRY_CATEGORY, USER_INPUT_CATEGORY,
 };
 
 #[derive(Clone)]
@@ -25,6 +25,14 @@ impl Companion for CompanionRpc {
         let event = request.into_inner();
         if event.category.trim().is_empty() {
             return Err(Status::invalid_argument("event category is required"));
+        }
+        if matches!(
+            event.category.as_str(),
+            USER_INPUT_CATEGORY | AI_RETRY_CATEGORY
+        ) {
+            return Err(Status::invalid_argument(
+                "event category is reserved for Companion chat controls",
+            ));
         }
         if event.description.trim().is_empty() {
             return Err(Status::invalid_argument("event description is required"));

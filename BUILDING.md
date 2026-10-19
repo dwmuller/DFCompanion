@@ -76,4 +76,4 @@ The launch configuration uses the CodeLLDB debugger. Rust Analyzer alone provide
 
 ## Architecture note
 
-The `dfhack-remote` crate is used separately for queries to DFHack's remote API; it is not the Lua-to-Companion event transport. Plugin/Lua events and web chat share a bounded queue of 50 items. The current Companion worker returns mock responses.
+The `dfhack-remote` crate is used separately for queries to DFHack's remote API; it is not the Lua-to-Companion event transport. Plugin/Lua events and web chat share a bounded queue of 50 items. Reports are buffered for the next player-triggered AI turn; they do not trigger API calls on their own. Provider adapters use HTTPS directly, while provider/model settings and privacy acknowledgement are stored in per-user local application data and API keys use the operating system credential vault.

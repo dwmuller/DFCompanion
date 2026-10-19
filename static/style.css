@@ -23,6 +23,23 @@ textarea {
   width: 100%;
 }
 
+input[type="text"],
+input[type="password"],
+select {
+  box-sizing: border-box;
+  display: block;
+  margin: 0.25rem 0 0.75rem;
+  max-width: 32rem;
+  padding: 0.4rem;
+  width: 100%;
+}
+
+section {
+  border-top: 1px solid #888;
+  margin-top: 2rem;
+  padding-top: 1rem;
+}
+
 button {
   margin-top: 0.5rem;
 }
