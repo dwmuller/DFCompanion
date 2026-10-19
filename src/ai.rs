@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-pub const NOTICE_VERSION: u32 = 1;
 pub const MAX_INPUT_TOKENS: usize = 16_000;
 pub const MAX_OUTPUT_TOKENS: u32 = 512;
 pub const MAX_HISTORY_MESSAGES: usize = 20;
@@ -70,14 +69,6 @@ impl Provider {
     fn uses_openai_compatible_api(self) -> bool {
         matches!(self, Self::OpenAi | Self::Groq | Self::OpenAiCompatible)
     }
-
-    fn endpoint_identity(self, base_url: &str) -> String {
-        if self.uses_openai_compatible_api() {
-            base_url.to_owned()
-        } else {
-            self.default_base_url().to_owned()
-        }
-    }
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -90,10 +81,6 @@ pub struct UserSettings {
     pub model_id: String,
     #[serde(default = "default_openai_base_url")]
     pub base_url: String,
-    acknowledged_provider: Option<Provider>,
-    acknowledged_notice_version: Option<u32>,
-    #[serde(default)]
-    acknowledged_endpoint: Option<String>,
 }
 
 fn default_openai_base_url() -> String {
@@ -106,19 +93,7 @@ impl Default for UserSettings {
             provider: Provider::Anthropic,
             model_id: "claude-sonnet-5-5".to_owned(),
             base_url: Provider::OpenAi.default_base_url().to_owned(),
-            acknowledged_provider: None,
-            acknowledged_notice_version: None,
-            acknowledged_endpoint: None,
         }
-    }
-}
-
-impl UserSettings {
-    pub fn privacy_acknowledged(&self) -> bool {
-        self.acknowledged_provider == Some(self.provider)
-            && self.acknowledged_notice_version == Some(NOTICE_VERSION)
-            && self.acknowledged_endpoint.as_deref()
-                == Some(self.provider.endpoint_identity(&self.base_url).as_str())
     }
 }
 
@@ -153,9 +128,6 @@ impl SettingsRepository {
             settings.provider = Provider::Anthropic;
             settings.model_id = UserSettings::default().model_id;
             settings.base_url = Provider::Anthropic.default_base_url().to_owned();
-            settings.acknowledged_provider = None;
-            settings.acknowledged_notice_version = None;
-            settings.acknowledged_endpoint = None;
         }
         Ok(Self {
             path: Some(path),
@@ -175,7 +147,6 @@ impl SettingsRepository {
         provider: Provider,
         model_id: String,
         base_url: String,
-        privacy_acknowledged: bool,
     ) -> Result<UserSettings, String> {
         let mut current = self
             .settings
@@ -186,15 +157,10 @@ impl SettingsRepository {
         } else {
             provider.default_base_url().to_owned()
         };
-        let acknowledged_endpoint =
-            privacy_acknowledged.then(|| provider.endpoint_identity(&base_url));
         let next = UserSettings {
             provider,
             model_id,
             base_url,
-            acknowledged_provider: privacy_acknowledged.then_some(provider),
-            acknowledged_notice_version: privacy_acknowledged.then_some(NOTICE_VERSION),
-            acknowledged_endpoint,
         };
         self.persist(&next)?;
         *current = next.clone();
@@ -639,37 +605,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_acknowledgement_is_bound_to_provider_and_notice_version() {
-        let mut settings = UserSettings::default();
-        settings.acknowledged_provider = Some(Provider::Anthropic);
-        settings.acknowledged_notice_version = Some(NOTICE_VERSION);
-        settings.acknowledged_endpoint = Some(Provider::Anthropic.endpoint_identity(""));
-        assert!(settings.privacy_acknowledged());
-
-        settings.provider = Provider::OpenAi;
-        assert!(!settings.privacy_acknowledged());
-
-        settings.provider = Provider::Anthropic;
-        settings.acknowledged_notice_version = Some(NOTICE_VERSION - 1);
-        assert!(!settings.privacy_acknowledged());
-    }
-
-    #[test]
-    fn endpoint_changes_require_new_privacy_acknowledgement() {
-        let mut settings = UserSettings::default();
-        settings.provider = Provider::OpenAiCompatible;
-        settings.base_url = "https://api.example.com/v1".to_owned();
-        settings.acknowledged_provider = Some(Provider::OpenAiCompatible);
-        settings.acknowledged_notice_version = Some(NOTICE_VERSION);
-        settings.acknowledged_endpoint =
-            Some(Provider::OpenAiCompatible.endpoint_identity(&settings.base_url));
-        assert!(settings.privacy_acknowledged());
-
-        settings.base_url = "https://other.example.com/v1".to_owned();
-        assert!(!settings.privacy_acknowledged());
-    }
-
-    #[test]
     fn compatible_endpoint_builds_chat_completion_url_and_rejects_insecure_urls() {
         assert_eq!(
             openai_compatible_chat_url("https://api.groq.com/openai/v1")
@@ -766,7 +701,6 @@ mod tests {
                 Provider::OpenAiCompatible,
                 "custom-model".to_owned(),
                 "https://example.com/v1".to_owned(),
-                true,
             )
             .unwrap();
         repository
@@ -774,18 +708,18 @@ mod tests {
                 Provider::OpenAi,
                 "openai-example".to_owned(),
                 Provider::OpenAi.default_base_url().to_owned(),
-                false,
             )
             .unwrap();
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("openai-example"));
         assert!(!contents.contains("gemini-example"));
         assert!(!contents.contains("api_key"));
+        assert!(!contents.contains("acknowledged"));
         fs::remove_file(path).unwrap();
     }
 
     #[test]
-    fn saved_gemini_settings_migrate_to_anthropic_without_acknowledgement() {
+    fn saved_gemini_settings_migrate_to_anthropic() {
         let path = std::env::temp_dir().join(format!(
             "dfcompanion-gemini-settings-test-{}.json",
             std::process::id()
@@ -805,7 +739,6 @@ mod tests {
         let settings = repository.get().unwrap();
         assert!(matches!(settings.provider, Provider::Anthropic));
         assert_eq!(settings.model_id, UserSettings::default().model_id);
-        assert!(!settings.privacy_acknowledged());
 
         fs::remove_file(path).unwrap();
     }

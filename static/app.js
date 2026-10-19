@@ -49,7 +49,7 @@ function updateProviderPolicy() {
   }
   document.getElementById("privacy-policy-custom").textContent = policyUrl
     ? ""
-    : " Consult the selected service's data-use and privacy terms before saving.";
+    : " Consult the selected service's data-use and privacy terms before using AI features.";
   const baseUrlInput = document.getElementById("base-url");
   const custom = provider === "open_ai_compatible";
   baseUrlInput.disabled = !custom;
@@ -72,8 +72,6 @@ async function loadSettings() {
     document.getElementById("provider").value = settings.provider;
     document.getElementById("model-id").value = settings.model_id;
     document.getElementById("base-url").value = settings.base_url;
-    document.getElementById("privacy-acknowledged").checked =
-      settings.privacy_acknowledged;
     document.getElementById("api-key-status").textContent =
       settings.api_key_saved ? "An API key is saved in the operating system credential vault." : "No API key is saved for this provider.";
     updateProviderPolicy();
@@ -104,7 +102,6 @@ document.getElementById("chat-form").addEventListener("submit", async (event) =>
 });
 
 document.getElementById("provider").addEventListener("change", () => {
-  document.getElementById("privacy-acknowledged").checked = false;
   document.getElementById("model-id").value =
     providerDefaultModels[document.getElementById("provider").value];
   document.getElementById("base-url").value =
@@ -112,10 +109,6 @@ document.getElementById("provider").addEventListener("change", () => {
   document.getElementById("settings-status").textContent =
     "Model ID changed to this provider's suggested starting model. You can edit it if needed.";
   updateProviderPolicy();
-});
-
-document.getElementById("base-url").addEventListener("input", () => {
-  document.getElementById("privacy-acknowledged").checked = false;
 });
 
 document.getElementById("settings-form").addEventListener("submit", async (event) => {
@@ -127,7 +120,6 @@ document.getElementById("settings-form").addEventListener("submit", async (event
     model_id: document.getElementById("model-id").value,
     base_url: document.getElementById("base-url").value,
     api_key: document.getElementById("api-key").value,
-    privacy_acknowledged: document.getElementById("privacy-acknowledged").checked,
   };
   try {
     const response = await fetch("/api/settings", {
@@ -142,9 +134,7 @@ document.getElementById("settings-form").addEventListener("submit", async (event
     document.getElementById("api-key").value = "";
     document.getElementById("api-key-status").textContent =
       settings.api_key_saved ? "An API key is saved in the operating system credential vault." : "No API key is saved for this provider.";
-    status.textContent = settings.privacy_acknowledged
-      ? "Settings saved. AI requests may now be sent to this provider."
-      : "Settings saved. Acknowledge the privacy notice before an AI request can be sent.";
+    status.textContent = "Settings saved.";
   } catch (error) {
     status.textContent = `Could not save settings: ${error.message}`;
   }
@@ -161,7 +151,6 @@ document.getElementById("forget-api-key").addEventListener("click", async () => 
         model_id: document.getElementById("model-id").value,
         base_url: document.getElementById("base-url").value,
         forget_api_key: true,
-        privacy_acknowledged: document.getElementById("privacy-acknowledged").checked,
       }),
     });
     if (!response.ok) {

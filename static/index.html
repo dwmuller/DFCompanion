@@ -9,7 +9,7 @@
   </head>
   <body>
     <h1>DFCompanion</h1>
-    <p>DFHack reports are collected locally and sent with your next chat message. Nothing is sent to an AI provider until you configure one and acknowledge its privacy notice.</p>
+    <p>DFHack reports are collected locally and sent to your configured AI provider with your next chat message. Review the provider's privacy and data-use terms before using AI features.</p>
     <h2>Connect DFHack</h2>
     <p>Copy this command into the DFHack console to enable the Lua script and send a connection-test event. Use <code>disable dfcompanion</code> to disable it; use <code>enable dfcompanion</code> to re-enable it during this DFHack session.</p>
     <p class="copy-command">
@@ -59,9 +59,6 @@
           <a id="privacy-policy" href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener noreferrer">privacy policy</a><span id="privacy-policy-custom"></span>.
         </p>
         <label>
-          <input id="privacy-acknowledged" name="privacy_acknowledged" type="checkbox">
-          I understand that my messages and selected fortress reports will be sent to the selected provider or API endpoint for processing.
-        </label>
         <div>
           <button type="submit">Save provider settings</button>
           <button id="forget-api-key" type="button">Forget saved API key</button>

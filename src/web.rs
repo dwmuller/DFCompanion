@@ -35,7 +35,6 @@ struct SettingsForm {
     base_url: Option<String>,
     api_key: Option<String>,
     forget_api_key: Option<bool>,
-    privacy_acknowledged: bool,
 }
 
 #[derive(Serialize)]
@@ -44,7 +43,6 @@ struct SettingsResponse {
     model_id: String,
     base_url: String,
     api_key_saved: bool,
-    privacy_acknowledged: bool,
     privacy_policy_url: Option<&'static str>,
 }
 
@@ -300,12 +298,11 @@ async fn update_settings(
         }
     }
 
-    let settings = match state.ai.settings.update(
-        form.provider,
-        model_id.to_owned(),
-        base_url,
-        form.privacy_acknowledged,
-    ) {
+    let settings = match state
+        .ai
+        .settings
+        .update(form.provider, model_id.to_owned(), base_url)
+    {
         Ok(settings) => settings,
         Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
     };
@@ -338,13 +335,11 @@ async fn update_settings(
 }
 
 fn to_settings_response(settings: UserSettings, api_key_saved: bool) -> SettingsResponse {
-    let privacy_acknowledged = settings.privacy_acknowledged();
     SettingsResponse {
         provider: settings.provider,
         model_id: settings.model_id,
         base_url: settings.base_url,
         api_key_saved,
-        privacy_acknowledged,
         privacy_policy_url: settings.provider.privacy_policy_url(),
     }
 }

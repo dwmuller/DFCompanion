@@ -2,7 +2,7 @@
 
 DFCompanion is an early-stage companion for Dwarf Fortress. It connects DFHack observations and player questions in a local web app, with the goal of helping an AI answer questions about a live fortress while leaving control of the game to the player.
 
-This is an experimental prototype, not yet a packaged release. It can send chat turns to Anthropic or an OpenAI-compatible API after you configure an API key, model ID, and privacy acknowledgement.
+This is an experimental prototype, not yet a packaged release. It can send chat turns to Anthropic or an OpenAI-compatible API after you configure an API key and model ID.
 
 ## Getting started
 
@@ -12,7 +12,7 @@ The current Lua event prototype has been tested with Dwarf Fortress 53.16 and DF
 2. Copy the `dfcompanion <token>` command shown on the web page.
 3. With a fortress loaded in Dwarf Fortress, paste that command into the DFHack console. This enables the script and sends a connection-test event.
 4. Configure AI access in the web app's **AI Provider** section (see [Getting AI API access](#getting-ai-api-access)).
-5. Review the selected provider's privacy policy, acknowledge the data-sharing notice, and save the settings.
+5. Review the selected provider's privacy policy and data-use terms, then save the settings.
 6. Ask a question in the web app's Chat box. Reports received since the previous AI answer are sent along with your question.
 
 The generated token changes every time DFCompanion starts. Copy the new command from the web page after restarting the service. Do not share the token: it authorizes local Lua event submissions.
@@ -33,7 +33,7 @@ Choose Anthropic, OpenAI, Groq, or a custom OpenAI-compatible API in the **AI Pr
 
 OpenAI and Groq are handled through the same OpenAI-compatible chat-completions adapter. Other services can be configured if they implement a compatible `POST /chat/completions` endpoint with bearer-token authentication. Compatibility varies; some services may not support every request option or response shape. For custom services, check the service's privacy and data-use terms yourself; DFCompanion cannot identify or link a custom endpoint's policies.
 
-DFCompanion does not make AI calls just because reports arrive. It keeps reports in local memory until you ask a question, then sends the accumulated reports and chat context to the selected provider. Review the linked policy and acknowledge the notice before the first request; changing providers or the notice version requires acknowledgement again. Provider policy pages are maintained by the providers and can change.
+DFCompanion does not make AI calls just because reports arrive. It keeps reports in local memory until you ask a question, then sends the accumulated reports and chat context to the selected provider. Review the linked policy and data-use terms before using AI features. Provider policy pages are maintained by the providers and can change.
 
 If a request fails, the app displays the error and keeps your pending chat and reports in memory. Correct the provider/model/key settings if needed, then use **Retry failed AI request**. The conversation and pending context are not saved when DFCompanion exits.
 

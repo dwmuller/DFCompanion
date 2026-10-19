@@ -144,13 +144,6 @@ async fn try_ai_turn(state: &AppState) {
             return;
         }
     };
-    if !settings.privacy_acknowledged() {
-        state.notify(
-            "AI request not sent. Review the provider privacy notice and acknowledge it in AI Provider settings.",
-        );
-        return;
-    }
-
     let mut conversation = state.ai.conversation.lock().await;
     if conversation.pending_user_messages.is_empty() {
         state.notify("There is no failed AI request to retry.");
@@ -383,7 +376,7 @@ mod tests {
                     .header(header::ORIGIN, "https://attacker.example")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"provider":"anthropic","model_id":"model","api_key":"secret","privacy_acknowledged":true}"#,
+                        r#"{"provider":"anthropic","model_id":"model","api_key":"secret"}"#,
                     ))
                     .unwrap(),
             )
@@ -408,8 +401,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_is_not_sent_before_privacy_acknowledgement_and_context_is_retained() {
+    async fn chat_without_privacy_acknowledgement_reaches_provider_validation_and_retains_context()
+    {
         let (state, queue_rx) = AppState::new();
+        state
+            .ai
+            .settings
+            .update(
+                crate::ai::Provider::OpenAiCompatible,
+                "test-model".to_owned(),
+                "http://example.com/v1".to_owned(),
+            )
+            .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
         state
             .queue_tx
@@ -446,7 +449,7 @@ mod tests {
             .recv()
             .await
             .unwrap()
-            .contains("acknowledge it"));
+            .contains("AI request failed"));
         let conversation = state.ai.conversation.lock().await;
         assert_eq!(conversation.pending_reports.len(), 1);
         assert_eq!(
