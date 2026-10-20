@@ -284,13 +284,6 @@ async fn update_settings(
             .trim()
             .trim_end_matches('/')
             .to_owned(),
-        Provider::Gemini => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "Google Gemini is not supported for this application.",
-            )
-                .into_response()
-        }
     };
     if form.provider == Provider::OpenAiCompatible {
         if let Err(error) = crate::ai::validate_compatible_base_url(&base_url) {

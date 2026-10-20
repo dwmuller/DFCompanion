@@ -20,7 +20,6 @@ pub enum Provider {
     OpenAi,
     Groq,
     OpenAiCompatible,
-    Gemini,
 }
 
 impl Provider {
@@ -30,7 +29,6 @@ impl Provider {
             Self::OpenAi => "OpenAI",
             Self::Groq => "Groq",
             Self::OpenAiCompatible => "OpenAI-compatible provider",
-            Self::Gemini => "Google Gemini",
         }
     }
 
@@ -39,7 +37,7 @@ impl Provider {
             Self::Anthropic => Some("https://www.anthropic.com/legal/privacy"),
             Self::OpenAi => Some("https://openai.com/policies/privacy-policy/"),
             Self::Groq => Some("https://groq.com/privacy-policy/"),
-            Self::OpenAiCompatible | Self::Gemini => None,
+            Self::OpenAiCompatible => None,
         }
     }
 
@@ -49,7 +47,6 @@ impl Provider {
             Self::Groq => "https://api.groq.com/openai/v1",
             Self::OpenAiCompatible => "",
             Self::Anthropic => "https://api.anthropic.com",
-            Self::Gemini => "",
         }
     }
 
@@ -62,7 +59,6 @@ impl Provider {
                 let digest = Sha256::digest(base_url.as_bytes());
                 format!("openai-compatible-{}", hex_string(&digest))
             }
-            Self::Gemini => "gemini-unsupported".to_owned(),
         }
     }
 
@@ -118,17 +114,12 @@ impl SettingsRepository {
     }
 
     fn load(path: PathBuf) -> Result<Self, String> {
-        let mut settings = match fs::read(&path) {
+        let settings = match fs::read(&path) {
             Ok(contents) => serde_json::from_slice(&contents)
                 .map_err(|error| format!("Could not read AI settings: {error}"))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => UserSettings::default(),
             Err(error) => return Err(format!("Could not read AI settings: {error}")),
         };
-        if settings.provider == Provider::Gemini {
-            settings.provider = Provider::Anthropic;
-            settings.model_id = UserSettings::default().model_id;
-            settings.base_url = Provider::Anthropic.default_base_url().to_owned();
-        }
         Ok(Self {
             path: Some(path),
             settings: RwLock::new(settings),
@@ -385,12 +376,6 @@ impl AiRuntime {
         settings: &UserSettings,
         prompt: &Prompt,
     ) -> Result<String, String> {
-        if settings.provider == Provider::Gemini {
-            return Err(
-                "Google Gemini is not supported for this application. Choose another provider."
-                    .to_owned(),
-            );
-        }
         if settings.provider == Provider::OpenAiCompatible {
             validate_compatible_base_url(&settings.base_url)?;
         }
@@ -415,7 +400,6 @@ impl AiRuntime {
             Provider::OpenAi | Provider::Groq | Provider::OpenAiCompatible => {
                 self.openai_compatible(settings, prompt, &key).await?
             }
-            Provider::Gemini => unreachable!("unsupported provider was rejected above"),
         };
         Ok(response)
     }
@@ -715,31 +699,6 @@ mod tests {
         assert!(!contents.contains("gemini-example"));
         assert!(!contents.contains("api_key"));
         assert!(!contents.contains("acknowledged"));
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn saved_gemini_settings_migrate_to_anthropic() {
-        let path = std::env::temp_dir().join(format!(
-            "dfcompanion-gemini-settings-test-{}.json",
-            std::process::id()
-        ));
-        fs::write(
-            &path,
-            r#"{
-                "provider": "gemini",
-                "model_id": "legacy-model",
-                "acknowledged_provider": "gemini",
-                "acknowledged_notice_version": 1
-            }"#,
-        )
-        .unwrap();
-
-        let repository = SettingsRepository::load(path.clone()).unwrap();
-        let settings = repository.get().unwrap();
-        assert!(matches!(settings.provider, Provider::Anthropic));
-        assert_eq!(settings.model_id, UserSettings::default().model_id);
-
         fs::remove_file(path).unwrap();
     }
 }
