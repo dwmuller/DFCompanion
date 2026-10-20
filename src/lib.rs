@@ -5,6 +5,7 @@ use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
 pub mod ai;
+pub mod game_state;
 
 pub mod api {
     tonic::include_proto!("dfcompanion.v1");
@@ -45,13 +46,14 @@ impl AppState {
     fn with_ai_settings(settings: ai::SettingsRepository) -> (Self, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
+        let ai = std::sync::Arc::new(ai::AiRuntime::new(settings, notifications_tx.clone()));
 
         (
             Self {
                 queue_tx,
                 notifications_tx,
                 plugin_token: None,
-                ai: std::sync::Arc::new(ai::AiRuntime::new(settings)),
+                ai,
             },
             queue_rx,
         )

@@ -20,6 +20,8 @@ tokio-stream = { version = "0.1", features = ["sync", "net"] }
 tonic = { version = "0.12", features = ["transport"] }
 
 [dev-dependencies]
+# Same prost version that dfhack-proto generates its messages with.
+prost_014 = { package = "prost", version = "0.14" }
 tower = { version = "0.5", features = ["util"] }
 
 [build-dependencies]

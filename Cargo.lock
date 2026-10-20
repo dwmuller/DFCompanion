@@ -422,6 +422,7 @@ dependencies = [
  "directories",
  "keyring",
  "prost 0.13.5",
+ "prost 0.14.4",
  "prost-types 0.13.5",
  "protoc-bin-vendored",
  "rand 0.8.8",
