@@ -8,6 +8,7 @@ pub mod ai;
 pub mod ai_config;
 pub mod ai_providers;
 pub mod ai_tools;
+pub mod chat_commands;
 pub mod game_state;
 
 pub mod api {
@@ -100,6 +101,10 @@ pub fn run_companion_worker(
                     try_ai_turn(&state).await;
                 }
                 USER_INPUT_CATEGORY => {
+                    if let Some(command) = chat_commands::ChatCommand::parse(&item.text) {
+                        run_chat_command(&state, command).await;
+                        continue;
+                    }
                     state
                         .ai
                         .conversation
@@ -140,6 +145,16 @@ pub fn run_companion_worker(
                 }
             }
         }
+    }
+}
+
+async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatCommand, String>) {
+    match command {
+        Ok(chat_commands::ChatCommand::CallTool { name, arguments }) => {
+            let result = state.ai.call_tool(&name, arguments).await;
+            state.notify(format!("Tool {name} result: {result}"));
+        }
+        Err(error) => state.notify(error),
     }
 }
 
@@ -353,6 +368,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worker_runs_chat_commands_without_involving_the_ai() {
+        let (state, queue_rx) = AppState::new();
+        let mut notifications = state.notifications_tx.subscribe();
+        let queue_tx = state.queue_tx.clone();
+        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        for text in ["/call no_such_tool a=1", "/bogus"] {
+            queue_tx
+                .send(QueueItem {
+                    category: USER_INPUT_CATEGORY.to_owned(),
+                    real_world_time_utc: utc_now().unwrap(),
+                    game_world_time: None,
+                    text: text.to_owned(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let result = notifications.recv().await.unwrap();
+        assert!(result.contains("Unknown tool: no_such_tool"), "{result}");
+        let error = notifications.recv().await.unwrap();
+        assert!(error.contains("Unknown chat command: /bogus"), "{error}");
+        assert!(state
+            .ai
+            .conversation
+            .lock()
+            .await
+            .pending_user_messages
+            .is_empty());
+        worker.abort();
+    }
+
+    #[tokio::test]
     async fn web_chat_rejects_cross_origin_request() {
         let (state, mut queue_rx) = AppState::new();
         let response = crate::web::router(state)
@@ -561,11 +608,11 @@ mod tests {
         let providers = providers.as_array().unwrap();
         let openai_chat = providers
             .iter()
-            .find(|provider| provider["name"] == "OpenAI Chat Completions")
+            .find(|provider| provider["name"] == "OpenAI: Chat Completions API")
             .unwrap();
         let openai_responses = providers
             .iter()
-            .find(|provider| provider["name"] == "OpenAI Responses")
+            .find(|provider| provider["name"] == "OpenAI: Responses API")
             .unwrap();
         assert_eq!(openai_chat["adapter_kind"], "OpenAI");
         assert_eq!(openai_responses["adapter_kind"], "OpenAIResp");

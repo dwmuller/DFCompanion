@@ -1,13 +1,20 @@
-use genai::chat::{Tool, ToolName};
-use serde_json::{json, Value};
-use tokio::sync::broadcast;
+//! AI tools: schema definitions plus a thin dispatcher onto [`GameState`].
+//! To add a tool, add its definition to [`definitions`] and a match arm in [`run`].
 
-const UNIT_LIST_TOOL_NAME: &str = "list_fortress_units";
-const MAX_TOOL_CALLS_PER_TURN: usize = 3;
+use genai::chat::{Tool, ToolCall, ToolName};
+use serde::{de::DeserializeOwned, Deserialize};
+use serde_json::{json, Value};
+
+use crate::game_state::{GameState, MAX_UNIT_PAGE_SIZE};
+
+pub const MAX_TOOL_CALLS_PER_TURN: usize = 3;
+
+const LIST_UNITS: &str = "list_fortress_units";
 const MAX_UNIT_OFFSET: usize = 5_000;
+const DEFAULT_UNIT_LIMIT: usize = 25;
 
 pub fn definitions() -> Vec<Tool> {
-    vec![Tool::new(ToolName::Custom(UNIT_LIST_TOOL_NAME.to_owned()))
+    vec![Tool::new(ToolName::Custom(LIST_UNITS.to_owned()))
         .with_description(
             "List fortress units, including citizens, visitors, and other races supplied by DFHack. Returns a small page with IDs, names, race and caste numeric identifiers, soldier status, age, and position. Use the unit ID when discussing a particular person. Request another page with the returned next_offset when needed. This is read-only.",
         )
@@ -23,7 +30,7 @@ pub fn definitions() -> Vec<Tool> {
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": crate::game_state::MAX_UNIT_PAGE_SIZE,
+                    "maximum": MAX_UNIT_PAGE_SIZE,
                     "description": "Maximum number of units to return. Defaults to 25."
                 }
             },
@@ -31,106 +38,140 @@ pub fn definitions() -> Vec<Tool> {
         }))]
 }
 
-pub async fn execute(
-    name: &str,
-    arguments: &Value,
-    notifications_tx: broadcast::Sender<String>,
-) -> String {
-    let result = if name == UNIT_LIST_TOOL_NAME {
-        parse_unit_list_arguments(arguments).map_err(str::to_owned)
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ListUnitsArgs {
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_unit_limit")]
+    limit: usize,
+}
+
+fn default_unit_limit() -> usize {
+    DEFAULT_UNIT_LIMIT
+}
+
+/// Deserializes tool arguments into a typed struct. Argument structs should use
+/// `#[serde(deny_unknown_fields)]` so unexpected arguments are rejected.
+fn parse_args<T: DeserializeOwned>(arguments: Value) -> Result<T, String> {
+    // Some providers send no arguments as null instead of an empty object.
+    let arguments = if arguments.is_null() {
+        json!({})
     } else {
-        Err(format!("Unknown tool: {name}"))
+        arguments
     };
+    serde_json::from_value(arguments).map_err(|error| format!("Invalid tool arguments: {error}"))
+}
 
-    match result {
-        Ok((offset, limit)) => {
-            match crate::game_state::list_units(offset, limit, notifications_tx).await {
-                Ok(value) => value,
-                Err(error) => json!({"error": error}),
-            }
+fn parse_list_units_args(arguments: Value) -> Result<ListUnitsArgs, String> {
+    let args: ListUnitsArgs = parse_args(arguments)?;
+    if args.offset > MAX_UNIT_OFFSET {
+        return Err("offset exceeds the maximum supported unit-list index.".to_owned());
+    }
+    if !(1..=MAX_UNIT_PAGE_SIZE).contains(&args.limit) {
+        return Err("limit must be between 1 and the maximum page size.".to_owned());
+    }
+    Ok(args)
+}
+
+async fn run(game_state: &GameState, name: &str, arguments: Value) -> Result<Value, String> {
+    match name {
+        LIST_UNITS => {
+            let args = parse_list_units_args(arguments)?;
+            game_state
+                .run(move |game| game.list_units(args.offset, args.limit))
+                .await
         }
-        Err(error) => json!({"error": error}),
+        _ => Err(format!("Unknown tool: {name}")),
     }
-    .to_string()
 }
 
-pub fn ensure_call_budget(call_count: &mut usize, requested_calls: usize) -> Result<(), String> {
-    *call_count = call_count.saturating_add(requested_calls);
-    if *call_count > MAX_TOOL_CALLS_PER_TURN {
-        return Err(format!(
-            "The model exceeded the limit of {MAX_TOOL_CALLS_PER_TURN} game-state tool calls in one turn."
-        ));
-    }
-    Ok(())
+/// Runs a tool call and returns the JSON text to send back to the model.
+/// Failures are reported as `{"error": ...}` so the model can recover.
+pub async fn execute(game_state: &GameState, call: &ToolCall) -> String {
+    execute_named(game_state, &call.fn_name, call.fn_arguments.clone()).await
 }
 
-fn parse_unit_list_arguments(arguments: &Value) -> Result<(usize, usize), &'static str> {
-    let object = arguments
-        .as_object()
-        .ok_or("Tool arguments must be an object.")?;
-    if object.keys().any(|key| key != "offset" && key != "limit") {
-        return Err("Only offset and limit arguments are supported.");
+pub async fn execute_named(game_state: &GameState, name: &str, arguments: Value) -> String {
+    run(game_state, name, arguments)
+        .await
+        .unwrap_or_else(|error| json!({"error": error}))
+        .to_string()
+}
+
+/// Per-turn limit on tool calls.
+pub struct ToolBudget {
+    remaining: usize,
+}
+
+impl ToolBudget {
+    pub fn new() -> Self {
+        Self {
+            remaining: MAX_TOOL_CALLS_PER_TURN,
+        }
     }
-    let offset = object
-        .get("offset")
-        .map(|value| {
-            value
-                .as_u64()
-                .ok_or("offset must be a non-negative integer.")
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let limit = object
-        .get("limit")
-        .map(|value| value.as_u64().ok_or("limit must be a positive integer."))
-        .transpose()?
-        .unwrap_or(25);
-    let offset = usize::try_from(offset).map_err(|_| "offset is too large.")?;
-    let limit = usize::try_from(limit).map_err(|_| "limit is too large.")?;
-    if offset > MAX_UNIT_OFFSET {
-        return Err("offset exceeds the maximum supported unit-list index.");
+
+    /// Consumes one call. When exhausted, returns the message to give the model
+    /// instead of running the tool.
+    pub fn take(&mut self) -> Result<(), String> {
+        if self.remaining == 0 {
+            return Err(format!(
+                "Tool call limit of {MAX_TOOL_CALLS_PER_TURN} per turn reached. Answer with the information already gathered."
+            ));
+        }
+        self.remaining -= 1;
+        Ok(())
     }
-    if limit == 0 || limit > crate::game_state::MAX_UNIT_PAGE_SIZE {
-        return Err("limit must be between 1 and the maximum page size.");
+}
+
+impl Default for ToolBudget {
+    fn default() -> Self {
+        Self::new()
     }
-    Ok((offset, limit))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn unit_list_arguments_are_bounded() {
-        assert_eq!(parse_unit_list_arguments(&json!({})).unwrap(), (0, 25));
-        assert_eq!(
-            parse_unit_list_arguments(&json!({"offset": 100, "limit": 50})).unwrap(),
-            (100, 50)
-        );
-        assert!(parse_unit_list_arguments(&json!({"limit": 51})).is_err());
-        assert!(parse_unit_list_arguments(&json!({"offset": 5001})).is_err());
-        assert!(parse_unit_list_arguments(&json!({"query": "dwarf"})).is_err());
+    fn game_state() -> GameState {
+        GameState::new(tokio::sync::broadcast::channel(1).0)
+    }
+
+    #[tokio::test]
+    async fn unknown_tools_are_reported_as_errors() {
+        let result = execute_named(&game_state(), "nope", json!({})).await;
+        assert!(result.contains("Unknown tool: nope"));
     }
 
     #[test]
-    fn tool_calls_are_capped_per_turn() {
-        let mut count = 0;
-        assert!(ensure_call_budget(&mut count, 2).is_ok());
-        assert!(ensure_call_budget(&mut count, 1).is_ok());
-        assert!(ensure_call_budget(&mut count, 1).is_err());
-    }
-
-    #[test]
-    fn tool_definition_has_a_closed_argument_schema() {
+    fn definitions_have_strict_schemas() {
         let definitions = definitions();
-        assert_eq!(definitions.len(), 1);
-        assert_eq!(
-            definitions[0].name,
-            ToolName::Custom(UNIT_LIST_TOOL_NAME.to_owned())
-        );
-        assert_eq!(
-            definitions[0].schema.as_ref().unwrap()["additionalProperties"],
-            false
-        );
+        assert!(!definitions.is_empty());
+        for definition in definitions {
+            assert_eq!(definition.schema.unwrap()["additionalProperties"], false);
+        }
+    }
+
+    #[test]
+    fn unit_arguments_are_bounded() {
+        let parse = |value| parse_list_units_args(value).map(|a| (a.offset, a.limit));
+        assert_eq!(parse(json!({})), Ok((0, 25)));
+        assert_eq!(parse(Value::Null), Ok((0, 25)));
+        assert_eq!(parse(json!({"offset": 100, "limit": 50})), Ok((100, 50)));
+        assert!(parse(json!({"limit": 51})).is_err());
+        assert!(parse(json!({"limit": 0})).is_err());
+        assert!(parse(json!({"offset": 5001})).is_err());
+        assert!(parse(json!({"offset": -1})).is_err());
+        assert!(parse(json!({"query": "dwarf"})).is_err());
+    }
+
+    #[test]
+    fn budget_is_capped_per_turn() {
+        let mut budget = ToolBudget::new();
+        for _ in 0..MAX_TOOL_CALLS_PER_TURN {
+            assert!(budget.take().is_ok());
+        }
+        assert!(budget.take().is_err());
     }
 }

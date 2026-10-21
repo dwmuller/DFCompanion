@@ -1,104 +1,183 @@
+//! Connection to Dwarf Fortress through DFHack's RemoteFortressReader.
+//!
+//! [`GameState`] owns one cached DFHack connection. The version check runs only
+//! when a connection is (re)established. Query methods validate their arguments,
+//! make synchronous DFHack calls, and shape the data for the AI. They block, so
+//! async callers should use [`GameState::run`].
+
+use dfhack_remote::Client;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 const TESTED_DWARF_FORTRESS_VERSION: &str = "53.16";
 const TESTED_DFHACK_VERSION: &str = "53.16-r2";
 pub const MAX_UNIT_PAGE_SIZE: usize = 50;
 const MAX_UNIT_REPLY_BYTES: usize = 12 * 1024;
-static LAST_VERSION_WARNING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-pub async fn list_units(
-    offset: usize,
-    limit: usize,
-    notifications_tx: tokio::sync::broadcast::Sender<String>,
-) -> Result<Value, String> {
-    if limit == 0 || limit > MAX_UNIT_PAGE_SIZE {
-        return Err(format!(
-            "The unit list page size must be between 1 and {MAX_UNIT_PAGE_SIZE}."
-        ));
-    }
-
-    tokio::task::spawn_blocking(move || list_units_blocking(offset, limit, notifications_tx))
-        .await
-        .map_err(|error| format!("DFHack query task failed: {error}"))?
+#[derive(Default)]
+struct Connection {
+    client: Option<Client>,
+    last_version_warning: Option<String>,
 }
 
-fn list_units_blocking(
-    offset: usize,
-    limit: usize,
+/// Cheaply cloneable handle to the shared DFHack connection.
+#[derive(Clone)]
+pub struct GameState {
+    connection: Arc<Mutex<Connection>>,
     notifications_tx: tokio::sync::broadcast::Sender<String>,
-) -> Result<Value, String> {
-    let mut client = dfhack_remote::connect()
-        .map_err(|error| format!("Could not connect to the DFHack remote interface: {error}"))?;
-    let version = client
-        .remote_fortress_reader()
-        .get_version_info()
-        .map_err(|error| format!("Could not check DFHack/game version: {error}"))?
-        .reply;
-    let version_warning = version_mismatch_warning(
-        version.dwarf_fortress_version.as_deref(),
-        version.dfhack_version.as_deref(),
-    );
-    let mut previous_warning = LAST_VERSION_WARNING
-        .lock()
-        .map_err(|error| format!("Version warning state is unavailable: {error}"))?;
-    notify_version_warning(version_warning, &mut previous_warning, &notifications_tx);
-    drop(previous_warning);
-    let units = client
-        .remote_fortress_reader()
-        .get_unit_list()
-        .map_err(|error| format!("Could not retrieve the fortress unit list: {error}"))?
-        .reply
-        .creature_list;
+}
 
-    let total = units.len();
-    let mut counts_by_race_id = BTreeMap::<String, usize>::new();
-    for unit in &units {
-        let race_id = unit
-            .race
-            .map(|race| race.mat_type.to_string())
-            .unwrap_or_else(|| "unknown".to_owned());
-        *counts_by_race_id.entry(race_id).or_default() += 1;
+impl GameState {
+    pub fn new(notifications_tx: tokio::sync::broadcast::Sender<String>) -> Self {
+        Self {
+            connection: Arc::default(),
+            notifications_tx,
+        }
     }
-    let mut page = units
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .map(|unit| {
-            json!({
-                "id": unit.id,
-                "name": unit.name.as_deref().filter(|name| !name.is_empty())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("Unnamed unit {}", unit.id)),
-                "race_id": unit.race.map(|race| race.mat_type),
-                "caste_id": unit.race.map(|race| race.mat_index),
-                "is_soldier": unit.is_soldier,
-                "age": unit.age,
-                "position": unit.pos_x.zip(unit.pos_y).zip(unit.pos_z)
-                    .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
+
+    /// Runs a blocking query on the blocking thread pool.
+    pub async fn run<T, F>(&self, query: F) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce(&GameState) -> Result<T, String> + Send + 'static,
+    {
+        let game_state = self.clone();
+        tokio::task::spawn_blocking(move || query(&game_state))
+            .await
+            .map_err(|error| format!("DFHack query task failed: {error}"))?
+    }
+
+    /// Runs `call` with the cached client, connecting (and checking versions)
+    /// first when needed. A call that fails because the link is broken discards
+    /// the connection. If that connection was an older one, the call is retried
+    /// once on a fresh connection, since the game may have been restarted.
+    fn with_client<T>(
+        &self,
+        what: &str,
+        mut call: impl FnMut(&mut Client) -> dfhack_remote::Result<T>,
+    ) -> Result<T, String> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|error| format!("DFHack connection state is unavailable: {error}"))?;
+        let mut may_retry = connection.client.is_some();
+        loop {
+            if connection.client.is_none() {
+                self.establish(&mut connection)?;
+            }
+            let client = connection
+                .client
+                .as_mut()
+                .expect("connection was just established");
+            match call(client) {
+                Ok(value) => return Ok(value),
+                Err(error) if is_link_failure(&error) => {
+                    connection.client = None;
+                    if !may_retry {
+                        return Err(format!("{what}: {error}"));
+                    }
+                    may_retry = false;
+                }
+                Err(error) => return Err(format!("{what}: {error}")),
+            }
+        }
+    }
+
+    fn establish(&self, connection: &mut Connection) -> Result<(), String> {
+        let mut client = dfhack_remote::connect().map_err(|error| {
+            format!("Could not connect to the DFHack remote interface: {error}")
+        })?;
+        let version = client
+            .remote_fortress_reader()
+            .get_version_info()
+            .map_err(|error| format!("Could not check DFHack/game version: {error}"))?
+            .reply;
+        let warning = version_mismatch_warning(
+            version.dwarf_fortress_version.as_deref(),
+            version.dfhack_version.as_deref(),
+        );
+        notify_version_warning(
+            warning,
+            &mut connection.last_version_warning,
+            &self.notifications_tx,
+        );
+        connection.client = Some(client);
+        Ok(())
+    }
+
+    /// Returns a page of fortress units with a per-race summary.
+    pub fn list_units(&self, offset: usize, limit: usize) -> Result<Value, String> {
+        if !(1..=MAX_UNIT_PAGE_SIZE).contains(&limit) {
+            return Err(format!(
+                "The unit list page size must be between 1 and {MAX_UNIT_PAGE_SIZE}."
+            ));
+        }
+        let units = self
+            .with_client("Could not retrieve the fortress unit list", |client| {
+                client.remote_fortress_reader().get_unit_list()
+            })?
+            .reply
+            .creature_list;
+
+        let total = units.len();
+        let mut counts_by_race_id = BTreeMap::<String, usize>::new();
+        for unit in &units {
+            let race_id = unit
+                .race
+                .map(|race| race.mat_type.to_string())
+                .unwrap_or_else(|| "unknown".to_owned());
+            *counts_by_race_id.entry(race_id).or_default() += 1;
+        }
+        let mut page = units
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|unit| {
+                json!({
+                    "id": unit.id,
+                    "name": unit.name.as_deref().filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("Unnamed unit {}", unit.id)),
+                    "race_id": unit.race.map(|race| race.mat_type),
+                    "caste_id": unit.race.map(|race| race.mat_index),
+                    "is_soldier": unit.is_soldier,
+                    "age": unit.age,
+                    "position": unit.pos_x.zip(unit.pos_y).zip(unit.pos_z)
+                        .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
+                })
             })
-        })
-        .collect::<Vec<_>>();
-    loop {
-        let next_offset = offset.saturating_add(page.len());
-        let mut result = json!({
-            "total_units": total,
-            "counts_by_race_id": &counts_by_race_id,
-            "offset": offset,
-            "returned": page.len(),
-            "units": &page,
-        });
-        if next_offset < total {
-            result["next_offset"] = json!(next_offset);
+            .collect::<Vec<_>>();
+        loop {
+            let next_offset = offset.saturating_add(page.len());
+            let mut result = json!({
+                "total_units": total,
+                "counts_by_race_id": &counts_by_race_id,
+                "offset": offset,
+                "returned": page.len(),
+                "units": &page,
+            });
+            if next_offset < total {
+                result["next_offset"] = json!(next_offset);
+            }
+            if result.to_string().len() <= MAX_UNIT_REPLY_BYTES {
+                return Ok(result);
+            }
+            if page.is_empty() {
+                return Err("A unit-list response exceeded the 12 KiB size limit.".to_owned());
+            }
+            page.pop();
         }
-        if result.to_string().len() <= MAX_UNIT_REPLY_BYTES {
-            return Ok(result);
-        }
-        if page.is_empty() {
-            return Err("A unit-list response exceeded the 12 KiB size limit.".to_owned());
-        }
-        page.pop();
     }
+}
+
+fn is_link_failure(error: &dfhack_remote::Error) -> bool {
+    matches!(
+        error,
+        dfhack_remote::Error::CommunicationFailure(_) | dfhack_remote::Error::ProtocolError(_)
+    )
 }
 
 fn notify_version_warning(

@@ -165,7 +165,8 @@ fn material_and_item_lists() {
 #[ignore = "requires a running game"]
 async fn list_units_end_to_end() {
     let (tx, mut rx) = tokio::sync::broadcast::channel(16);
-    let result = dfcompanion::game_state::list_units(0, 25, tx).await;
+    let game_state = dfcompanion::game_state::GameState::new(tx);
+    let result = game_state.run(|g| g.list_units(0, 25)).await;
     while let Ok(message) = rx.try_recv() {
         println!("notification: {message}");
     }

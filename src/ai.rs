@@ -154,7 +154,7 @@ fn estimate_prompt_tokens(
 pub struct AiRuntime {
     pub configurations: ConfigurationRepository,
     pub conversation: Mutex<Conversation>,
-    notifications_tx: tokio::sync::broadcast::Sender<String>,
+    game_state: crate::game_state::GameState,
 }
 
 impl AiRuntime {
@@ -165,8 +165,14 @@ impl AiRuntime {
         Self {
             configurations,
             conversation: Mutex::new(Conversation::default()),
-            notifications_tx,
+            game_state: crate::game_state::GameState::new(notifications_tx),
         }
+    }
+
+    /// Runs a tool directly, as the model would, for manual testing.
+    /// Returns the JSON text the model would receive.
+    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> String {
+        crate::ai_tools::execute_named(&self.game_state, name, arguments).await
     }
 
     pub async fn complete(
@@ -215,7 +221,7 @@ impl AiRuntime {
             .with_tools(crate::ai_tools::definitions())
             .with_store(false);
         let options = ChatOptions::default().with_max_tokens(MAX_OUTPUT_TOKENS);
-        let mut tool_call_count = 0;
+        let mut budget = crate::ai_tools::ToolBudget::new();
         loop {
             let response = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
@@ -245,7 +251,6 @@ impl AiRuntime {
                         )
                     });
             }
-            crate::ai_tools::ensure_call_budget(&mut tool_call_count, tool_calls.len())?;
             let assistant_message =
                 response
                     .into_assistant_message_for_tool_use()
@@ -254,12 +259,10 @@ impl AiRuntime {
                     })?;
             request = request.append_message(assistant_message);
             for call in tool_calls {
-                let result = crate::ai_tools::execute(
-                    &call.fn_name,
-                    &call.fn_arguments,
-                    self.notifications_tx.clone(),
-                )
-                .await;
+                let result = match budget.take() {
+                    Ok(()) => crate::ai_tools::execute(&self.game_state, &call).await,
+                    Err(message) => serde_json::json!({"error": message}).to_string(),
+                };
                 request = request.append_message(GenaiMessage::from(ToolResponse::from_tool_call(
                     &call, result,
                 )));

@@ -47,11 +47,11 @@ mod tests {
     fn built_in_catalog_has_unique_named_providers_and_known_methods() {
         let providers = built_in_providers().unwrap();
         assert!(providers.iter().any(|provider| {
-            provider.name == "OpenAI Chat Completions"
+            provider.name == "OpenAI: Chat Completions API"
                 && provider.adapter_kind == AdapterKind::OpenAI
         }));
         assert!(providers.iter().any(|provider| {
-            provider.name == "OpenAI Responses" && provider.adapter_kind == AdapterKind::OpenAIResp
+            provider.name == "OpenAI: Responses API" && provider.adapter_kind == AdapterKind::OpenAIResp
         }));
     }
 }
