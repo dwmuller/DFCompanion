@@ -618,7 +618,7 @@ async fn chat(
     match state.queue_tx.try_send(item) {
         Ok(()) => {
             state.notify(format!("You: {message}"));
-            (StatusCode::OK, "<span>Message queued.</span>").into_response()
+            (StatusCode::OK, "Message queued.").into_response()
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let warning = format!(

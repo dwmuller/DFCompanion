@@ -148,11 +148,34 @@ pub fn run_companion_worker(
     }
 }
 
+/// Lays out tool output for reading: one top-level field per line, and one
+/// line per array element, with everything else compact.
+fn format_tool_result(result: &str) -> String {
+    let Ok(serde_json::Value::Object(fields)) = serde_json::from_str(result) else {
+        return result.to_owned();
+    };
+    let mut lines = Vec::new();
+    for (key, value) in fields {
+        match value {
+            serde_json::Value::Array(items) if !items.is_empty() => {
+                lines.push(format!("{key}:"));
+                lines.extend(items.iter().map(|item| format!("  {item}")));
+            }
+            other => lines.push(format!("{key}: {other}")),
+        }
+    }
+    lines.join("\n")
+}
+
 async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatCommand, String>) {
     match command {
         Ok(chat_commands::ChatCommand::CallTool { name, arguments }) => {
             let result = state.ai.call_tool(&name, arguments).await;
-            state.notify(format!("Tool {name} result: {result}"));
+            state.notify(format!("Tool {name} result:\n{}", format_tool_result(&result)));
+        }
+        Ok(chat_commands::ChatCommand::ListTools) => state.notify(ai_tools::describe_tools()),
+        Ok(chat_commands::ChatCommand::DescribeTool { name }) => {
+            state.notify(ai_tools::describe_tool(&name).unwrap_or_else(|error| error))
         }
         Err(error) => state.notify(error),
     }

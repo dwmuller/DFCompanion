@@ -90,6 +90,16 @@ document.getElementById("chat-form").addEventListener("submit", async (event) =>
   }
 });
 
+document.getElementById("message").addEventListener("keydown", (event) => {
+  // Enter sends; Shift+Enter inserts a newline. Ignore Enter while composing (IME).
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    if (event.currentTarget.value.trim() !== "") {
+      document.getElementById("chat-form").requestSubmit();
+    }
+  }
+});
+
 document.getElementById("retry-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const status = document.getElementById("retry-status");

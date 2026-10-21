@@ -160,20 +160,48 @@ fn material_and_item_lists() {
     assert!(ok, "a list call failed");
 }
 
-/// The path the AI tool takes.
+/// Drop any cached copy of the Lua module from an earlier version.
+fn reload_lua_module() {
+    let mut client = connect();
+    let _ = client.core().run_command(dfhack_remote::CoreRunCommandRequest {
+        command: "lua".to_owned(),
+        arguments: vec!["package.loaded['rpc.dfcompanion']=nil".to_owned()],
+    });
+}
+
+/// Every AI tool, through the same dispatcher the model uses.
 #[tokio::test]
 #[ignore = "requires a running game"]
-async fn list_units_end_to_end() {
-    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
-    let game_state = dfcompanion::game_state::GameState::new(tx);
-    let result = game_state.run(|g| g.list_units(0, 25)).await;
-    while let Ok(message) = rx.try_recv() {
-        println!("notification: {message}");
+async fn ai_tools_end_to_end() {
+    use dfcompanion::ai_tools::execute_named;
+    reload_lua_module();
+    let game_state = dfcompanion::game_state::GameState::new(tokio::sync::broadcast::channel(16).0);
+    let call = |name: &'static str, args: serde_json::Value| {
+        let game_state = game_state.clone();
+        async move {
+            let text = execute_named(&game_state, name, args).await;
+            println!("{name}: {text}");
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()
+        }
+    };
+    let overview = call("get_fortress_overview", serde_json::json!({})).await;
+    assert!(overview.get("error").is_none(), "{overview}");
+    let mut first_id = None;
+    for tool in ["list_residents", "list_pets_livestock", "list_other_creatures", "list_dead_missing"] {
+        let list = call(tool, serde_json::json!({"limit": 5})).await;
+        assert!(list.get("error").is_none(), "{list}");
+        if first_id.is_none() {
+            first_id = list["creatures"][0]["id"].as_i64();
+        }
     }
-    match result {
-        Ok(value) => println!("{}", serde_json::to_string_pretty(&value).unwrap()),
-        Err(error) => panic!("list_units failed: {error}"),
+    if let Some(id) = first_id {
+        let details = call("get_unit_details", serde_json::json!({"unit_id": id})).await;
+        assert!(details.get("error").is_none(), "{details}");
     }
+    let unknown = call("get_unit_details", serde_json::json!({"unit_id": 999_999_999})).await;
+    assert!(unknown.get("error").is_some(), "{unknown}");
+    let reports = call("get_recent_reports", serde_json::json!({"limit": 5})).await;
+    assert!(reports.get("error").is_none(), "{reports}");
 }
 
 fn whole_map_request() -> BlockRequest {

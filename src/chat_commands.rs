@@ -8,6 +8,10 @@ use serde_json::Value;
 pub enum ChatCommand {
     /// Runs an AI tool directly, for manual testing.
     CallTool { name: String, arguments: Value },
+    /// Lists the AI tools and their arguments.
+    ListTools,
+    /// Describes one AI tool in full.
+    DescribeTool { name: String },
 }
 
 impl ChatCommand {
@@ -17,7 +21,8 @@ impl ChatCommand {
     /// `/call <tool> [arguments]` takes either a JSON object (`{"limit": 5}`)
     /// or whitespace-separated `key=value` pairs (`limit=5 offset=10`). Each
     /// value is read as JSON when it is valid JSON (numbers, `true`, `null`,
-    /// quoted strings) and as plain text otherwise.
+    /// quoted strings) and as plain text otherwise. Values containing spaces
+    /// must be quoted (`race="magma crab"` or `race='magma crab'`).
     pub fn parse(text: &str) -> Option<Result<Self, String>> {
         let rest = text.trim_start().strip_prefix('/')?;
         if rest.is_empty() || rest.starts_with(char::is_whitespace) {
@@ -26,6 +31,14 @@ impl ChatCommand {
         let (command, rest) = split_word(rest);
         Some(match command {
             "call" => parse_call(rest),
+            "tools" if rest.is_empty() => Ok(ChatCommand::ListTools),
+            "tools" => Err("Usage: /tools".to_owned()),
+            "tool" if !rest.is_empty() && !rest.contains(char::is_whitespace) => {
+                Ok(ChatCommand::DescribeTool {
+                    name: rest.to_owned(),
+                })
+            }
+            "tool" => Err("Usage: /tool <tool name>".to_owned()),
             // Add more chat commands here as needed.
             _ => Err(format!("Unknown chat command: /{command}")),
         })
@@ -51,6 +64,55 @@ fn parse_call(text: &str) -> Result<ChatCommand, String> {
     })
 }
 
+/// Splits on whitespace that is not inside single or double quotes. Quotes are
+/// kept in the tokens; a backslash escapes the next character inside quotes.
+fn split_arguments(text: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                current.push(c);
+                if c == '\\' {
+                    current.extend(chars.next());
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                }
+                current.push(c);
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err("Arguments contain an unterminated quote.".to_owned());
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
+fn parse_value(value: &str) -> Value {
+    if let Some(inner) = value
+        .strip_prefix('\'')
+        .and_then(|v| v.strip_suffix('\''))
+    {
+        return Value::String(inner.to_owned());
+    }
+    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_owned()))
+}
+
 fn parse_call_arguments(text: &str) -> Result<Value, String> {
     if text.is_empty() {
         return Ok(Value::Null);
@@ -60,13 +122,12 @@ fn parse_call_arguments(text: &str) -> Result<Value, String> {
             .map_err(|error| format!("Arguments are not valid JSON: {error}"));
     }
     let mut object = serde_json::Map::new();
-    for pair in text.split_whitespace() {
+    for pair in split_arguments(text)? {
         let (key, value) = pair
             .split_once('=')
             .filter(|(key, _)| !key.is_empty())
             .ok_or_else(|| format!("Expected key=value but found \"{pair}\"."))?;
-        let value = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_owned()));
-        if object.insert(key.to_owned(), value).is_some() {
+        if object.insert(key.to_owned(), parse_value(value)).is_some() {
             return Err(format!("Argument \"{key}\" was given more than once."));
         }
     }
@@ -115,6 +176,33 @@ mod tests {
             ChatCommand::parse("/call t  {\"a\": 1}").unwrap(),
             call("t", json!({"a": 1}))
         );
+    }
+
+    #[test]
+    fn tools_command_takes_no_arguments() {
+        assert_eq!(ChatCommand::parse("/tools"), Some(Ok(ChatCommand::ListTools)));
+        assert!(ChatCommand::parse("/tools x").unwrap().is_err());
+        assert_eq!(
+            ChatCommand::parse("/tool get_unit_details"),
+            Some(Ok(ChatCommand::DescribeTool {
+                name: "get_unit_details".to_owned()
+            }))
+        );
+        assert!(ChatCommand::parse("/tool").unwrap().is_err());
+        assert!(ChatCommand::parse("/tool a b").unwrap().is_err());
+    }
+
+    #[test]
+    fn quoted_values_may_contain_spaces() {
+        assert_eq!(
+            ChatCommand::parse("/call t race=\"magma crab\" limit=5").unwrap(),
+            call("t", json!({"race": "magma crab", "limit": 5}))
+        );
+        assert_eq!(
+            ChatCommand::parse("/call t race='magma crab' a=\"x \\\"y\\\" z\"").unwrap(),
+            call("t", json!({"race": "magma crab", "a": "x \"y\" z"}))
+        );
+        assert!(ChatCommand::parse("/call t race=\"magma crab").unwrap().is_err());
     }
 
     #[test]

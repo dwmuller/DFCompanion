@@ -40,7 +40,7 @@ Build the service and install/update the Lua script in DFHack:
 cmake --build build --config Debug --target install-dfhack-script
 ```
 
-The install target builds DFCompanion and copies `scripts/dfcompanion.lua` to `${DFHACK_INSTALL_DIR}/hack/scripts` only when the contents differ. It fails with a configuration hint if the setting is empty or the expected scripts directory does not exist.
+The install target builds DFCompanion and copies `scripts/*.lua` to `${DFHACK_INSTALL_DIR}/hack/scripts` and `lua/**/*.lua` to `${DFHACK_INSTALL_DIR}/hack/lua`, only when the contents differ. The latter holds `rpc.dfcompanion`, the module the service calls through DFHack's `RunLua` RPC (DFHack only permits modules named `rpc.*`). The target fails with a configuration hint if the setting is empty or the expected scripts directory does not exist. A running game caches modules it has already loaded, so after changing a `lua/` file, restart the game or run `lua package.loaded['rpc.dfcompanion']=nil` in the DFHack console.
 
 For a release build:
 
@@ -57,6 +57,22 @@ Run the Rust tests through CTest:
 ```powershell
 ctest --test-dir build -C Debug --output-on-failure
 ```
+
+### Live-game tests
+
+`tests/live_game_tests.rs` talks to a real game through DFHack's remote interface. These tests are marked `#[ignore]`, so CTest and plain `cargo test` skip them. They are read-only and do not change the game.
+
+Before running them, start Dwarf Fortress with DFHack, load a fortress (a game with no fort loaded may make some tests fail), and make sure DFHack's remote server is listening on its default port. Then run them with Cargo from the repository root:
+
+```powershell
+# All live tests
+cargo test --test live_game_tests -- --ignored
+
+# One test, with its printed output (e.g. tool results as the AI sees them)
+cargo test --test live_game_tests ai_tools_end_to_end -- --ignored --nocapture
+```
+
+To check whether the game is running first: `Get-Process -Name "Dwarf Fortress"`.
 
 ## Run the service manually
 

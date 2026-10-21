@@ -4,8 +4,14 @@
 //! when a connection is (re)established. Query methods validate their arguments,
 //! make synchronous DFHack calls, and shape the data for the AI. They block, so
 //! async callers should use [`GameState::run`].
+//!
+//! The AI should know only what the player knows. Creature information therefore
+//! comes from the `rpc.dfcompanion` Lua module (see `lua/rpc/dfcompanion.lua`),
+//! which lists the creatures the player is aware of, grouped like the game's
+//! Creatures screen. Queries fail rather than fall back to the unfiltered unit
+//! list when that module is unavailable.
 
-use dfhack_remote::Client;
+use dfhack_remote::{Client, CoreRunLuaRequest, UnitDefinition};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -14,8 +20,114 @@ use std::{
 
 const TESTED_DWARF_FORTRESS_VERSION: &str = "53.16";
 const TESTED_DFHACK_VERSION: &str = "53.16-r2";
-pub const MAX_UNIT_PAGE_SIZE: usize = 50;
-const MAX_UNIT_REPLY_BYTES: usize = 12 * 1024;
+pub const MAX_CREATURE_PAGE_SIZE: usize = 50;
+pub const MAX_REPORTS: usize = 50;
+const MAX_CREATURE_REPLY_BYTES: usize = 12 * 1024;
+const LUA_MODULE: &str = "rpc.dfcompanion";
+
+/// The groups of the game's Creatures screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreatureGroup {
+    Residents,
+    PetsAndLivestock,
+    Other,
+    DeadOrMissing,
+}
+
+impl CreatureGroup {
+    const ALL: [CreatureGroup; 4] = [
+        Self::Residents,
+        Self::PetsAndLivestock,
+        Self::Other,
+        Self::DeadOrMissing,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Residents => "residents",
+            Self::PetsAndLivestock => "pets",
+            Self::Other => "other",
+            Self::DeadOrMissing => "dead",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Residents => "residents",
+            Self::PetsAndLivestock => "pets_and_livestock",
+            Self::Other => "other_creatures",
+            Self::DeadOrMissing => "dead_or_missing",
+        }
+    }
+}
+
+/// The creatures the player knows of, as rows produced by the Lua module.
+struct KnownCreatures(BTreeMap<&'static str, Vec<Value>>);
+
+impl KnownCreatures {
+    fn parse(json_text: &str) -> Result<Self, String> {
+        let mut parsed: Value = serde_json::from_str(json_text)
+            .map_err(|error| format!("The DFCompanion Lua module returned invalid data: {error}"))?;
+        let mut groups = BTreeMap::new();
+        for group in CreatureGroup::ALL {
+            // The Lua JSON encoder writes an empty list as an empty object.
+            let rows = match parsed.get_mut(group.key()).map(Value::take) {
+                Some(Value::Array(rows)) => rows,
+                Some(Value::Object(map)) if map.is_empty() => Vec::new(),
+                _ => {
+                    return Err(format!(
+                        "The DFCompanion Lua module returned no \"{}\" list.",
+                        group.key()
+                    ))
+                }
+            };
+            groups.insert(group.key(), rows);
+        }
+        Ok(Self(groups))
+    }
+
+    fn rows(&self, group: CreatureGroup) -> &[Value] {
+        &self.0[group.key()]
+    }
+
+    fn find(&self, id: i64) -> Option<(CreatureGroup, &Value)> {
+        CreatureGroup::ALL.into_iter().find_map(|group| {
+            self.rows(group)
+                .iter()
+                .find(|row| row["id"].as_i64() == Some(id))
+                .map(|row| (group, row))
+        })
+    }
+}
+
+fn text_field<'a>(row: &'a Value, field: &str) -> &'a str {
+    row[field].as_str().unwrap_or("")
+}
+
+/// Unnamed creatures (most animals) have an empty name; omit it instead.
+fn tidy_row(row: &Value) -> Value {
+    let mut row = row.clone();
+    if text_field(&row, "name").is_empty() {
+        if let Some(object) = row.as_object_mut() {
+            object.remove("name");
+        }
+    }
+    row
+}
+
+fn count_by_race(rows: &[Value]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for row in rows {
+        *counts.entry(text_field(row, "race").to_owned()).or_default() += 1;
+    }
+    counts
+}
+
+fn matches_search(row: &Value, search: &str) -> bool {
+    ["name", "race", "profession"]
+        .iter()
+        .any(|field| text_field(row, field).to_lowercase().contains(search))
+}
 
 #[derive(Default)]
 struct Connection {
@@ -108,68 +220,197 @@ impl GameState {
         Ok(())
     }
 
-    /// Returns a page of fortress units with a per-race summary.
-    pub fn list_units(&self, offset: usize, limit: usize) -> Result<Value, String> {
-        if !(1..=MAX_UNIT_PAGE_SIZE).contains(&limit) {
-            return Err(format!(
-                "The unit list page size must be between 1 and {MAX_UNIT_PAGE_SIZE}."
-            ));
-        }
-        let units = self
+    fn unit_list(&self) -> Result<Vec<UnitDefinition>, String> {
+        Ok(self
             .with_client("Could not retrieve the fortress unit list", |client| {
                 client.remote_fortress_reader().get_unit_list()
             })?
             .reply
-            .creature_list;
+            .creature_list)
+    }
 
-        let total = units.len();
-        let mut counts_by_race_id = BTreeMap::<String, usize>::new();
-        for unit in &units {
-            let race_id = unit
-                .race
-                .map(|race| race.mat_type.to_string())
-                .unwrap_or_else(|| "unknown".to_owned());
-            *counts_by_race_id.entry(race_id).or_default() += 1;
+    fn known_creatures(&self) -> Result<KnownCreatures, String> {
+        let reply = self
+            .with_client(
+                "Could not determine which creatures the player knows of (is the DFCompanion Lua module installed?)",
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: "known_creatures".to_owned(),
+                        arguments: Vec::new(),
+                    })
+                },
+            )?
+            .reply
+            .value;
+        KnownCreatures::parse(&reply.concat())
+    }
+
+    fn game_date(&self) -> Result<Value, String> {
+        let reply = self
+            .with_client("Could not retrieve the game date", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "game_date".to_owned(),
+                    arguments: Vec::new(),
+                })
+            })?
+            .reply
+            .value;
+        serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the game date: {error}"))
+    }
+
+    /// Returns a high-level snapshot: world, save, pause state, view, and the
+    /// number of known creatures in each group.
+    pub fn fortress_overview(&self) -> Result<Value, String> {
+        let map = self
+            .with_client("Could not retrieve map info", |client| {
+                client.remote_fortress_reader().get_map_info()
+            })?
+            .reply;
+        let paused = self
+            .with_client("Could not retrieve pause state", |client| {
+                client.remote_fortress_reader().get_pause_state()
+            })?
+            .reply;
+        let view = self
+            .with_client("Could not retrieve view info", |client| {
+                client.remote_fortress_reader().get_view_info()
+            })?
+            .reply;
+        let creatures = self.known_creatures()?;
+        let game_date = self.game_date()?;                let counts = CreatureGroup::ALL
+            .into_iter()
+            .map(|group| (group.label(), creatures.rows(group).len()))
+            .collect::<BTreeMap<_, _>>();
+        Ok(json!({
+            "world_name": map.world_name_english.or(map.world_name),
+            "save_name": map.save_name,
+            "paused": paused,
+            "game_date": game_date,
+            "map_size_in_blocks": map.block_size_x.zip(map.block_size_y).zip(map.block_size_z)
+                .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
+            "view_position": view.view_pos_x.zip(view.view_pos_y).zip(view.view_pos_z)
+                .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
+            "followed_unit_id": view.follow_unit_id.filter(|id| *id >= 0),
+            "known_creature_counts": counts,
+            "pets_and_livestock_by_race": count_by_race(creatures.rows(CreatureGroup::PetsAndLivestock)),
+        }))
+    }
+
+    /// Returns detailed information about one creature the player knows of.
+    /// Creatures the player does not know of are reported as nonexistent.
+    pub fn unit_details(&self, unit_id: i32) -> Result<Value, String> {
+        let creatures = self.known_creatures()?;
+        let (group, row) = creatures
+            .find(i64::from(unit_id))
+            .ok_or_else(|| format!("No known creature with ID {unit_id}."))?;
+        let mut details = tidy_row(row);
+        details["group"] = json!(group.label());
+        if let Some(unit) = self.unit_list()?.iter().find(|unit| unit.id == unit_id) {
+            details["blood_percent"] = json!(unit
+                .blood_max
+                .zip(unit.blood_count)
+                .filter(|(max, _)| *max > 0)
+                .map(|(max, count)| count * 100 / max));
+            details["wound_count"] = json!(unit.wounds.len());
+            details["inventory_item_count"] = json!(unit.inventory.len());
+            details["rider_id"] = json!(unit.rider_id.filter(|id| *id >= 0));
         }
-        let mut page = units
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|unit| {
+        Ok(details)
+    }
+
+    /// Returns the most recent game reports (announcements), newest last.
+    pub fn recent_reports(&self, limit: usize) -> Result<Value, String> {
+        if !(1..=MAX_REPORTS).contains(&limit) {
+            return Err(format!("The report limit must be between 1 and {MAX_REPORTS}."));
+        }
+        let reports = self
+            .with_client("Could not retrieve game reports", |client| {
+                client.remote_fortress_reader().get_reports()
+            })?
+            .reply
+            .reports;
+        let skip = reports.len().saturating_sub(limit);
+        let recent = reports
+            .into_iter()
+            .skip(skip)
+            .map(|report| {
                 json!({
-                    "id": unit.id,
-                    "name": unit.name.as_deref().filter(|name| !name.is_empty())
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("Unnamed unit {}", unit.id)),
-                    "race_id": unit.race.map(|race| race.mat_type),
-                    "caste_id": unit.race.map(|race| race.mat_index),
-                    "is_soldier": unit.is_soldier,
-                    "age": unit.age,
-                    "position": unit.pos_x.zip(unit.pos_y).zip(unit.pos_z)
-                        .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
+                    "text": report.text.unwrap_or_default().chars().take(300).collect::<String>(),
+                    "year": report.year,
+                    "tick_in_year": report.time,
+                    "announcement": report.announcement,
                 })
             })
             .collect::<Vec<_>>();
-        loop {
-            let next_offset = offset.saturating_add(page.len());
-            let mut result = json!({
-                "total_units": total,
-                "counts_by_race_id": &counts_by_race_id,
-                "offset": offset,
-                "returned": page.len(),
-                "units": &page,
-            });
-            if next_offset < total {
-                result["next_offset"] = json!(next_offset);
-            }
-            if result.to_string().len() <= MAX_UNIT_REPLY_BYTES {
-                return Ok(result);
-            }
-            if page.is_empty() {
-                return Err("A unit-list response exceeded the 12 KiB size limit.".to_owned());
-            }
-            page.pop();
+        Ok(json!({"returned": recent.len(), "reports": recent}))
+    }
+
+    /// Returns a page of the known creatures in one group of the game's
+    /// Creatures screen, optionally restricted to rows whose name, race, or
+    /// profession contains `search` (case-insensitive).
+    pub fn list_creatures(
+        &self,
+        group: CreatureGroup,
+        offset: usize,
+        limit: usize,
+        search: Option<&str>,
+    ) -> Result<Value, String> {
+        if !(1..=MAX_CREATURE_PAGE_SIZE).contains(&limit) {
+            return Err(format!(
+                "The page size must be between 1 and {MAX_CREATURE_PAGE_SIZE}."
+            ));
         }
+        let creatures = self.known_creatures()?;
+        let search = search.map(str::to_lowercase).filter(|s| !s.is_empty());
+        let matching = creatures
+            .rows(group)
+            .iter()
+            .filter(|row| search.as_deref().is_none_or(|s| matches_search(row, s)))
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(page_result(group, &matching, offset, limit)?)
+    }
+}
+
+/// Builds one page of `rows`, dropping trailing rows until the reply fits the
+/// size limit.
+fn page_result(
+    group: CreatureGroup,
+    rows: &[Value],
+    offset: usize,
+    limit: usize,
+) -> Result<Value, String> {
+    let total = rows.len();
+    let counts_by_race = count_by_race(rows);
+    let mut page = rows
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(tidy_row)
+        .collect::<Vec<_>>();
+    loop {
+        let next_offset = offset.saturating_add(page.len());
+        let mut result = json!({
+            "group": group.label(),
+            "total_matching": total,
+            "counts_by_race": &counts_by_race,
+            "offset": offset,
+            "returned": page.len(),
+            "creatures": &page,
+        });
+        if next_offset < total {
+            result["next_offset"] = json!(next_offset);
+        }
+        if result.to_string().len() <= MAX_CREATURE_REPLY_BYTES {
+            return Ok(result);
+        }
+        if page.is_empty() {
+            return Err("A creature-list response exceeded the 12 KiB size limit.".to_owned());
+        }
+        page.pop();
     }
 }
 
