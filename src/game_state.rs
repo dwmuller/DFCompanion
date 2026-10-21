@@ -5,6 +5,7 @@ const TESTED_DWARF_FORTRESS_VERSION: &str = "53.16";
 const TESTED_DFHACK_VERSION: &str = "53.16-r2";
 pub const MAX_UNIT_PAGE_SIZE: usize = 50;
 const MAX_UNIT_REPLY_BYTES: usize = 12 * 1024;
+static LAST_VERSION_WARNING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 pub async fn list_units(
     offset: usize,
@@ -38,9 +39,11 @@ fn list_units_blocking(
         version.dwarf_fortress_version.as_deref(),
         version.dfhack_version.as_deref(),
     );
-    if let Some(warning) = &version_warning {
-        let _ = notifications_tx.send(warning.clone());
-    }
+    let mut previous_warning = LAST_VERSION_WARNING
+        .lock()
+        .map_err(|error| format!("Version warning state is unavailable: {error}"))?;
+    notify_version_warning(version_warning, &mut previous_warning, &notifications_tx);
+    drop(previous_warning);
     let units = client
         .remote_fortress_reader()
         .get_unit_list()
@@ -88,9 +91,6 @@ fn list_units_blocking(
         if next_offset < total {
             result["next_offset"] = json!(next_offset);
         }
-        if let Some(warning) = &version_warning {
-            result["version_warning"] = json!(warning);
-        }
         if result.to_string().len() <= MAX_UNIT_REPLY_BYTES {
             return Ok(result);
         }
@@ -98,6 +98,24 @@ fn list_units_blocking(
             return Err("A unit-list response exceeded the 12 KiB size limit.".to_owned());
         }
         page.pop();
+    }
+}
+
+fn notify_version_warning(
+    warning: Option<String>,
+    previous_warning: &mut Option<String>,
+    notifications_tx: &tokio::sync::broadcast::Sender<String>,
+) {
+    if warning == *previous_warning {
+        return;
+    }
+    match warning {
+        Some(warning) => {
+            if notifications_tx.send(warning.clone()).is_ok() {
+                *previous_warning = Some(warning);
+            }
+        }
+        None => *previous_warning = None,
     }
 }
 
@@ -151,5 +169,34 @@ mod tests {
         assert!(version_mismatch_warning(None, None)
             .unwrap()
             .contains("could not be verified"));
+    }
+
+    #[test]
+    fn version_warning_is_notified_only_when_it_changes() {
+        let (notifications_tx, mut notifications_rx) = tokio::sync::broadcast::channel(4);
+        let first_warning = Some("first warning".to_owned());
+        let mut previous_warning = None;
+
+        notify_version_warning(
+            first_warning.clone(),
+            &mut previous_warning,
+            &notifications_tx,
+        );
+        assert_eq!(notifications_rx.try_recv().unwrap(), "first warning");
+
+        notify_version_warning(
+            first_warning.clone(),
+            &mut previous_warning,
+            &notifications_tx,
+        );
+        assert!(notifications_rx.try_recv().is_err());
+
+        let changed_warning = Some("changed warning".to_owned());
+        notify_version_warning(changed_warning, &mut previous_warning, &notifications_tx);
+        assert_eq!(notifications_rx.try_recv().unwrap(), "changed warning");
+
+        notify_version_warning(None, &mut previous_warning, &notifications_tx);
+        notify_version_warning(first_warning, &mut previous_warning, &notifications_tx);
+        assert_eq!(notifications_rx.try_recv().unwrap(), "first warning");
     }
 }
