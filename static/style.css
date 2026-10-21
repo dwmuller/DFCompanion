@@ -25,6 +25,7 @@ textarea {
 
 input[type="text"],
 input[type="password"],
+input[type="url"],
 select {
   box-sizing: border-box;
   display: block;
@@ -32,6 +33,16 @@ select {
   max-width: 32rem;
   padding: 0.4rem;
   width: 100%;
+}
+
+textarea {
+  box-sizing: border-box;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0.4rem;
+}
+
+li button {
+  margin-left: 0.4rem;
 }
 
 section {

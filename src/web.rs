@@ -2,21 +2,22 @@ use std::convert::Infallible;
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Form, State},
+    extract::{DefaultBodyLimit, Form, Path, State},
     http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive},
         Html, IntoResponse, Response, Sse,
     },
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
+use genai::adapter::AdapterKind;
 use serde::{Deserialize, Serialize};
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 use crate::{
-    ai::{Provider, UserSettings},
+    ai_config::{AiConfiguration, ConfigurationRepository},
     utc_now, AppState, QueueItem, AI_RETRY_CATEGORY, USER_INPUT_CATEGORY,
 };
 
@@ -29,21 +30,44 @@ struct ChatForm {
 }
 
 #[derive(Deserialize)]
-struct SettingsForm {
-    provider: Provider,
+#[serde(deny_unknown_fields)]
+struct ConfigurationForm {
+    name: String,
+    #[serde(
+        alias = "method",
+        deserialize_with = "crate::ai_config::deserialize_interaction_method"
+    )]
+    interaction_method: AdapterKind,
     model_id: String,
-    base_url: Option<String>,
+    url: String,
+    system_text: String,
     api_key: Option<String>,
-    forget_api_key: Option<bool>,
 }
 
 #[derive(Serialize)]
-struct SettingsResponse {
-    provider: Provider,
-    model_id: String,
-    base_url: String,
+struct ConfigurationSummary {
+    #[serde(flatten)]
+    configuration: AiConfiguration,
     api_key_saved: bool,
-    privacy_policy_url: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct ConfigurationListResponse {
+    configurations: Vec<ConfigurationSummary>,
+    active_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveConfigurationForm {
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiKeyForm {
+    api_key: Option<String>,
+    forget: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -77,13 +101,29 @@ struct PluginEventResult {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/ai-configurations", get(configurations_page))
         .route("/chat", post(chat))
         .route("/retry", post(retry))
         .route(
-            "/api/settings",
-            get(get_settings)
-                .post(update_settings)
-                .layer(DefaultBodyLimit::max(8_192)),
+            "/api/ai-configurations",
+            get(list_configurations)
+                .post(create_configuration)
+                .layer(DefaultBodyLimit::max(32_768)),
+        )
+        .route("/api/ai-providers", get(list_providers))
+        .route(
+            "/api/ai-configurations/active",
+            put(select_configuration).layer(DefaultBodyLimit::max(8_192)),
+        )
+        .route(
+            "/api/ai-configurations/:id",
+            put(update_configuration)
+                .delete(delete_configuration)
+                .layer(DefaultBodyLimit::max(32_768)),
+        )
+        .route(
+            "/api/ai-configurations/:id/key",
+            post(update_api_key).layer(DefaultBodyLimit::max(8_192)),
         )
         .route(
             "/api/plugin/events",
@@ -91,6 +131,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/events", get(events))
         .route("/assets/app.js", get(app_script))
+        .route("/assets/ai-configurations.js", get(configuration_script))
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
         .with_state(state)
@@ -236,105 +277,272 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "no-store")], Html(page))
 }
 
-async fn get_settings(State(state): State<AppState>) -> Response {
-    let settings = match state.ai.settings.get() {
-        Ok(settings) => settings,
-        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
-    };
-    let api_key_saved = match state.ai.has_api_key(settings.provider, &settings.base_url) {
-        Ok(saved) => saved,
-        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
-    };
+async fn configurations_page() -> impl IntoResponse {
     (
         [(header::CACHE_CONTROL, "no-store")],
-        axum::Json(to_settings_response(settings, api_key_saved)),
+        Html(include_str!("../static/ai-configurations.html")),
     )
-        .into_response()
 }
 
-async fn update_settings(
+async fn list_configurations(State(state): State<AppState>) -> Response {
+    match configuration_list(&state.ai.configurations) {
+        Ok(response) => {
+            ([(header::CACHE_CONTROL, "no-store")], axum::Json(response)).into_response()
+        }
+        Err(response) => response,
+    }
+}
+
+async fn list_providers() -> Response {
+    match crate::ai_providers::built_in_providers() {
+        Ok(providers) => {
+            ([(header::CACHE_CONTROL, "no-store")], axum::Json(providers)).into_response()
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not load built-in AI providers.",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn create_configuration(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::Json(form): axum::Json<SettingsForm>,
+    axum::Json(form): axum::Json<ConfigurationForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    if form
+        .api_key
+        .as_ref()
+        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
+    {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
+    }
+
+    let configuration = match state.ai.configurations.create(
+        form.name,
+        form.interaction_method,
+        form.model_id,
+        form.url,
+        form.system_text,
+    ) {
+        Ok(configuration) => configuration,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    if let Some(key) = form.api_key.filter(|key| !key.trim().is_empty()) {
+        if let Err(error) = state
+            .ai
+            .configurations
+            .save_api_key(&configuration.id, &key)
+        {
+            let cleanup = state.ai.configurations.delete(&configuration.id);
+            let detail = cleanup
+                .err()
+                .map(|cleanup_error| format!(" Configuration cleanup also failed: {cleanup_error}"))
+                .unwrap_or_default();
+            return (StatusCode::SERVICE_UNAVAILABLE, format!("{error}{detail}")).into_response();
+        }
+    }
+    list_configurations(State(state)).await
+}
+
+async fn update_configuration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    axum::Json(form): axum::Json<ConfigurationForm>,
 ) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
 
-    let model_id = form.model_id.trim();
-    if model_id.is_empty() || model_id.len() > 256 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Model ID must contain between 1 and 256 bytes.",
-        )
-            .into_response();
-    }
-    if let Some(key) = &form.api_key {
-        if key.len() > 4_096 {
-            return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
-        }
-    }
-    let base_url = match form.provider {
-        Provider::Anthropic => form.provider.default_base_url().to_owned(),
-        Provider::OpenAi | Provider::Groq => form.provider.default_base_url().to_owned(),
-        Provider::OpenAiCompatible => form
-            .base_url
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .trim_end_matches('/')
-            .to_owned(),
-    };
-    if form.provider == Provider::OpenAiCompatible {
-        if let Err(error) = crate::ai::validate_compatible_base_url(&base_url) {
-            return (StatusCode::BAD_REQUEST, error).into_response();
-        }
+    if let Err(error) = state.ai.configurations.get(&id) {
+        return (StatusCode::NOT_FOUND, error).into_response();
     }
 
-    let settings = match state
-        .ai
-        .settings
-        .update(form.provider, model_id.to_owned(), base_url)
+    if form
+        .api_key
+        .as_ref()
+        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
     {
-        Ok(settings) => settings,
-        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
-    };
-
-    if form.forget_api_key.unwrap_or(false) {
-        if let Err(error) = state
-            .ai
-            .forget_api_key(settings.provider, &settings.base_url)
-        {
-            return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+        return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
+    }
+    let new_key = form.api_key.filter(|key| !key.trim().is_empty());
+    let previous_key = if new_key.is_some() {
+        match state.ai.configurations.has_api_key(&id) {
+            Ok(true) => match state.ai.configurations.get_api_key(&id) {
+                Ok(key) => Some(key),
+                Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+            },
+            Ok(false) => None,
+            Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
         }
-    } else if let Some(key) = form.api_key.filter(|key| !key.trim().is_empty()) {
-        if let Err(error) = state
-            .ai
-            .save_api_key(settings.provider, &settings.base_url, key.trim())
-        {
+    } else {
+        None
+    };
+    if let Some(key) = &new_key {
+        if let Err(error) = state.ai.configurations.save_api_key(&id, key) {
             return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
         }
     }
 
-    let api_key_saved = match state.ai.has_api_key(settings.provider, &settings.base_url) {
-        Ok(saved) => saved,
-        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
-    };
-    (
-        [(header::CACHE_CONTROL, "no-store")],
-        axum::Json(to_settings_response(settings, api_key_saved)),
-    )
-        .into_response()
+    let updated = state.ai.configurations.update(
+        &id,
+        form.name,
+        form.interaction_method,
+        form.model_id,
+        form.url,
+        form.system_text,
+    );
+    if let Err(error) = updated {
+        if new_key.is_some() {
+            let rollback = match previous_key {
+                Some(previous_key) => state.ai.configurations.save_api_key(&id, &previous_key),
+                None => state.ai.configurations.forget_api_key(&id),
+            };
+            if let Err(rollback_error) = rollback {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{error} API key rollback also failed: {rollback_error}"),
+                )
+                    .into_response();
+            }
+        }
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    list_configurations(State(state)).await
 }
 
-fn to_settings_response(settings: UserSettings, api_key_saved: bool) -> SettingsResponse {
-    SettingsResponse {
-        provider: settings.provider,
-        model_id: settings.model_id,
-        base_url: settings.base_url,
-        api_key_saved,
-        privacy_policy_url: settings.provider.privacy_policy_url(),
+async fn select_configuration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(form): axum::Json<ActiveConfigurationForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
     }
+    if let Err(error) = state.ai.configurations.set_active(form.id.as_deref()) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    list_configurations(State(state)).await
+}
+
+async fn update_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    axum::Json(form): axum::Json<ApiKeyForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    if let Err(error) = state.ai.configurations.get(&id) {
+        return (StatusCode::NOT_FOUND, error).into_response();
+    }
+    if form
+        .api_key
+        .as_ref()
+        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
+    {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
+    }
+    let result = match (form.forget.unwrap_or(false), form.api_key) {
+        (true, Some(key)) if !key.trim().is_empty() => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Choose either saving or forgetting the API key.",
+            )
+                .into_response()
+        }
+        (true, _) => state.ai.configurations.forget_api_key(&id),
+        (false, Some(key)) => state.ai.configurations.save_api_key(&id, &key),
+        (false, None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "API key or forget=true is required.",
+            )
+                .into_response()
+        }
+    };
+    if let Err(error) = result {
+        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+    }
+    list_configurations(State(state)).await
+}
+
+async fn delete_configuration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    if let Err(error) = state.ai.configurations.get(&id) {
+        return (StatusCode::NOT_FOUND, error).into_response();
+    }
+    let previous_key = match state.ai.configurations.has_api_key(&id) {
+        Ok(true) => match state.ai.configurations.get_api_key(&id) {
+            Ok(key) => Some(key),
+            Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+        },
+        Ok(false) => None,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    };
+    if let Err(error) = state.ai.configurations.forget_api_key(&id) {
+        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+    }
+    if let Err(error) = state.ai.configurations.delete(&id) {
+        let rollback = previous_key.map_or(Ok(()), |key| {
+            state.ai.configurations.save_api_key(&id, &key)
+        });
+        if let Err(rollback_error) = rollback {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{error} API key rollback also failed: {rollback_error}"),
+            )
+                .into_response();
+        }
+        return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    list_configurations(State(state)).await
+}
+
+fn configuration_list(
+    repository: &ConfigurationRepository,
+) -> Result<ConfigurationListResponse, Response> {
+    let (configurations, active_id) = repository
+        .list()
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())?;
+    let configurations = configurations
+        .into_iter()
+        .map(|configuration| {
+            let api_key_saved = repository
+                .has_api_key(&configuration.id)
+                .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?;
+            Ok(ConfigurationSummary {
+                configuration,
+                api_key_saved,
+            })
+        })
+        .collect::<Result<Vec<_>, Response>>()?;
+    Ok(ConfigurationListResponse {
+        configurations,
+        active_id,
+    })
+}
+
+async fn configuration_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../static/ai-configurations.js"),
+    )
 }
 
 async fn app_script() -> impl IntoResponse {

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "OpenAI: Chat Completions API",
+    "api_url": "https://api.openai.com/v1/",
+    "adapter_kind": "OpenAI",
+    "models": ["gpt-5.4-mini", "gpt-5.4"]
+  },
+  {
+    "name": "OpenAI: Responses API",
+    "api_url": "https://api.openai.com/v1/",
+    "adapter_kind": "OpenAIResp",
+    "models": ["gpt-5.4-mini", "gpt-5.4"]
+  },
+  {
+    "name": "Anthropic",
+    "api_url": "https://api.anthropic.com/",
+    "adapter_kind": "Anthropic",
+    "models": ["claude-sonnet-5-5"]
+  },
+  {
+    "name": "DeepSeek: Chat Completions API",
+    "api_url": "https://api.deepseek.com",
+    "adapter_kind": "OpenAI",
+    "models": ["deepseek-flash", "deepseek-v4-pro"]
+  },
+  {
+    "name": "DeepSeek: AnthropicAPI",
+    "api_url": "https://api.deepseek.com/anthropic",
+    "adapter_kind": "Anthropic",
+    "models": ["deepseek-flash", "deepseek-v4-pro"]
+  }
+]

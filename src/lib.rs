@@ -5,6 +5,9 @@ use rand::RngCore;
 use tokio::sync::{broadcast, mpsc};
 
 pub mod ai;
+pub mod ai_config;
+pub mod ai_providers;
+pub mod ai_tools;
 pub mod game_state;
 
 pub mod api {
@@ -35,18 +38,20 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> (Self, mpsc::Receiver<QueueItem>) {
-        Self::with_ai_settings(ai::SettingsRepository::in_memory())
+        Self::with_ai_configurations(ai_config::ConfigurationRepository::in_memory())
     }
 
     pub fn load() -> Result<(Self, mpsc::Receiver<QueueItem>), String> {
-        let settings = ai::SettingsRepository::load_default()?;
-        Ok(Self::with_ai_settings(settings))
+        let configurations = ai_config::ConfigurationRepository::load_default()?;
+        Ok(Self::with_ai_configurations(configurations))
     }
 
-    fn with_ai_settings(settings: ai::SettingsRepository) -> (Self, mpsc::Receiver<QueueItem>) {
+    fn with_ai_configurations(
+        configurations: ai_config::ConfigurationRepository,
+    ) -> (Self, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
-        let ai = std::sync::Arc::new(ai::AiRuntime::new(settings, notifications_tx.clone()));
+        let ai = std::sync::Arc::new(ai::AiRuntime::new(configurations, notifications_tx.clone()));
 
         (
             Self {
@@ -139,8 +144,12 @@ pub fn run_companion_worker(
 }
 
 async fn try_ai_turn(state: &AppState) {
-    let settings = match state.ai.settings.get() {
-        Ok(settings) => settings,
+    let configuration = match state.ai.configurations.active() {
+        Ok(Some(configuration)) => configuration,
+        Ok(None) => {
+            state.notify("Select an AI configuration before sending a chat message.");
+            return;
+        }
         Err(error) => {
             state.notify(error);
             return;
@@ -152,14 +161,14 @@ async fn try_ai_turn(state: &AppState) {
         return;
     }
     loop {
-        let prompt = conversation.build_prompt();
+        let prompt = conversation.build_prompt(&configuration.system_text);
         if prompt.omitted_report_count > 0 {
             state.notify(format!(
                 "{} oldest pending report(s) were left out to fit the AI context limit.",
                 prompt.omitted_report_count
             ));
         }
-        match state.ai.complete(&settings, &prompt).await {
+        match state.ai.complete(&configuration, &prompt).await {
             Ok(answer) => {
                 conversation.complete(prompt, answer.clone());
                 state.notify(format!("Companion: {answer}"));
@@ -169,7 +178,7 @@ async fn try_ai_turn(state: &AppState) {
             }
             Err(error) => {
                 state.notify(format!(
-                    "AI request failed. Your chat and collected reports are retained; correct the settings or retry. {error}"
+                    "AI request failed. Your chat and collected reports are retained; correct the configuration or retry. {error}"
                 ));
                 return;
             }
@@ -365,7 +374,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settings_and_retry_routes_reject_cross_origin_requests() {
+    async fn configuration_and_retry_routes_reject_cross_origin_requests() {
         let (state, mut queue_rx) = AppState::new();
         let router = crate::web::router(state);
         let settings_response = router
@@ -373,12 +382,12 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
-                    .uri("/api/settings")
+                    .uri("/api/ai-configurations")
                     .header(header::HOST, "127.0.0.1:3000")
                     .header(header::ORIGIN, "https://attacker.example")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"provider":"anthropic","model_id":"model","api_key":"secret"}"#,
+                        r#"{"name":"Profile","interaction_method":"Anthropic","model_id":"model","url":"https://api.anthropic.com/","system_text":"text","api_key":"secret"}"#,
                     ))
                     .unwrap(),
             )
@@ -403,16 +412,180 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_without_privacy_acknowledgement_reaches_provider_validation_and_retains_context()
-    {
+    async fn configuration_api_supports_create_select_rename_and_delete() {
+        let (state, _) = AppState::new();
+        let router = crate::web::router(state);
+        let create_body = |name: &str| {
+            format!(
+                r#"{{"name":"{name}","interaction_method":"OpenAI","model_id":"gpt-test","url":"https://api.openai.com/v1/","system_text":"Use the provided evidence."}}"#
+            )
+        };
+        let create = |name: &str| {
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/ai-configurations")
+                .header(header::HOST, "127.0.0.1:3000")
+                .header(header::ORIGIN, "http://127.0.0.1:3000")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_body(name)))
+                .unwrap()
+        };
+        let first = router.clone().oneshot(create("Primary")).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_body = axum::body::to_bytes(first.into_body(), 32_768)
+            .await
+            .unwrap();
+        let first_result: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+        let first_id = first_result["configurations"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(first_result["active_id"], first_id);
+        assert_eq!(first_result["configurations"][0]["api_key_saved"], false);
+        assert!(first_result["configurations"][0].get("api_key").is_none());
+
+        let second = router.clone().oneshot(create("Secondary")).await.unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_body = axum::body::to_bytes(second.into_body(), 32_768)
+            .await
+            .unwrap();
+        let second_result: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+        let second_id = second_result["configurations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|configuration| configuration["name"] == "Secondary")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(second_result["active_id"], first_id);
+
+        let select = router
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("PUT")
+                    .uri("/api/ai-configurations/active")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::ORIGIN, "http://127.0.0.1:3000")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(r#"{{"id":"{second_id}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(select.status(), StatusCode::OK);
+        let select_body = axum::body::to_bytes(select.into_body(), 32_768)
+            .await
+            .unwrap();
+        let select_result: serde_json::Value = serde_json::from_slice(&select_body).unwrap();
+        assert_eq!(select_result["active_id"], second_id);
+
+        let rename = router
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("PUT")
+                    .uri(format!("/api/ai-configurations/{first_id}"))
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::ORIGIN, "http://127.0.0.1:3000")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(create_body("Renamed")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rename.status(), StatusCode::OK);
+
+        let delete = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/ai-configurations/{second_id}"))
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::ORIGIN, "http://127.0.0.1:3000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::OK);
+        let delete_body = axum::body::to_bytes(delete.into_body(), 32_768)
+            .await
+            .unwrap();
+        let delete_result: serde_json::Value = serde_json::from_slice(&delete_body).unwrap();
+        assert!(delete_result["active_id"].is_null());
+        assert_eq!(delete_result["configurations"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn configuration_management_page_is_served_separately() {
+        let (state, _) = AppState::new();
+        let response = crate::web::router(state)
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/ai-configurations")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 32_768)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("AI Configurations"));
+        assert!(html.contains("configuration-system-text"));
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_route_returns_setup_presets_without_configuration_ids() {
+        let (state, _) = AppState::new();
+        let response = crate::web::router(state)
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/ai-providers")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 32_768)
+            .await
+            .unwrap();
+        let providers: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let providers = providers.as_array().unwrap();
+        let openai_chat = providers
+            .iter()
+            .find(|provider| provider["name"] == "OpenAI Chat Completions")
+            .unwrap();
+        let openai_responses = providers
+            .iter()
+            .find(|provider| provider["name"] == "OpenAI Responses")
+            .unwrap();
+        assert_eq!(openai_chat["adapter_kind"], "OpenAI");
+        assert_eq!(openai_responses["adapter_kind"], "OpenAIResp");
+        assert!(openai_chat["api_url"].is_string());
+        assert!(openai_chat["models"].is_array());
+        assert!(openai_chat.get("id").is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_without_api_key_retains_context_for_retry() {
         let (state, queue_rx) = AppState::new();
         state
             .ai
-            .settings
-            .update(
-                crate::ai::Provider::OpenAiCompatible,
+            .configurations
+            .create(
+                "test config".to_owned(),
+                genai::adapter::AdapterKind::OpenAI,
                 "test-model".to_owned(),
-                "http://example.com/v1".to_owned(),
+                "https://api.openai.com/v1/".to_owned(),
+                crate::ai::DEFAULT_SYSTEM_TEXT.to_owned(),
             )
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();

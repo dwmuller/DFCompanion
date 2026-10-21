@@ -2,7 +2,8 @@
 
 DFCompanion is an early-stage companion for Dwarf Fortress. It connects DFHack observations and player questions in a local web app, with the goal of helping an AI answer questions about a live fortress while leaving control of the game to the player.
 
-This is an experimental prototype, not yet a packaged release. It can send chat turns to Anthropic or an OpenAI-compatible API after you configure an API key and model ID.
+This is an experimental prototype, not yet a packaged release. It can send chat turns using OpenAI Chat Completions, OpenAI Responses, or Anthropic after you configure a named AI configuration. You can use any provider you want that supports one of these
+APIs and for which you have an API key.
 
 ## Getting started
 
@@ -11,8 +12,8 @@ The current Lua event prototype has been tested with Dwarf Fortress 53.16 and DF
 1. Start DFCompanion. The local web app is at <http://127.0.0.1:3000/>.
 2. Copy the `dfcompanion <token>` command shown on the web page.
 3. With a fortress loaded in Dwarf Fortress, paste that command into the DFHack console. This enables the script and sends a connection-test event.
-4. Configure AI access in the web app's **AI Provider** section (see [Getting AI API access](#getting-ai-api-access)).
-5. Review the selected provider's privacy policy and data-use terms, then save the settings.
+4. Open **Manage AI configurations**, create a configuration, and save its API key (see [Getting AI API access](#getting-ai-api-access)).
+5. Select the configuration on the main page. Review the selected service's privacy policy and data-use terms before chatting.
 6. Ask a question in the web app's Chat box. Reports received since the previous AI answer are sent along with your question.
 
 The generated token changes every time DFCompanion starts. Copy the new command from the web page after restarting the service. Do not share the token: it authorizes local Lua event submissions.
@@ -29,13 +30,13 @@ The enabled state is not saved; it resets when the map unloads or DFHack exits. 
 
 ## AI providers and privacy
 
-Choose Anthropic, OpenAI, Groq, or a custom OpenAI-compatible API in the **AI Provider** section of the web app. OpenAI and Groq use their known API endpoints; for a custom service, enter its HTTPS API base URL (usually ending in `/v1`). Changing providers selects a suggested starting model ID where one is available; the model field remains free-form so you can enter the exact ID accepted by your service. Provider, model, and custom endpoint settings are saved in your per-user local application data. API keys are saved in the operating system's credential vault (Windows Credential Manager on Windows), not in the settings file or a game save. Custom API keys are associated with the configured base URL. Use **Forget saved API key** to remove the selected endpoint's key.
+Create, rename, select, and delete named AI configurations on the **AI Configurations** page. Each has an interaction method (OpenAI Chat Completions, OpenAI Responses, or Anthropic), API URL, model ID, and editable system text. Built-in provider presets suggest a URL, interaction method, and model choices; these are editable hints, and the provider choice itself is not saved. A **Custom** choice makes no changes to the fields. The main page's dropdown selects which configuration will be used for chat. Use an HTTPS API base URL and the exact model ID accepted by the selected service. HTTP is allowed only for localhost. Configuration metadata is stored in `ai-configurations.json` in per-user local application data. New installations begin with an empty configuration list; existing settings and credential-vault entries are left untouched and are not migrated.
 
-OpenAI and Groq are handled through the same OpenAI-compatible chat-completions adapter. Other services can be configured if they implement a compatible `POST /chat/completions` endpoint with bearer-token authentication. Compatibility varies; some services may not support every request option or response shape. For custom services, check the service's privacy and data-use terms yourself; DFCompanion cannot identify or link a custom endpoint's policies.
+The provider-neutral [`genai` Rust library](https://github.com/jeremychone/rust-genai) supplies the adapters for the three interaction methods. API keys are stored in the operating system credential vault (Windows Credential Manager on Windows), under a configuration-specific account; they are never returned to the browser or written to the configuration file or a game save. Leave the key field blank when editing to keep the saved key. Use **Forget API key** to remove it.
 
 DFCompanion does not make AI calls just because reports arrive. It keeps reports in local memory until you ask a question, then sends the accumulated reports and chat context to the selected provider. Review the linked policy and data-use terms before using AI features. Provider policy pages are maintained by the providers and can change.
 
-If a request fails, the app displays the error and keeps your pending chat and reports in memory. Correct the provider/model/key settings if needed, then use **Retry failed AI request**. The conversation and pending context are not saved when DFCompanion exits.
+If a request fails, the app displays the error and keeps your pending chat and reports in memory. Correct the configuration or key if needed, then use **Retry failed AI request**. The conversation and pending context are not saved when DFCompanion exits.
 
 ### Getting AI API access
 
@@ -43,9 +44,7 @@ AI API access is separate from using a provider's consumer chat app or subscript
 
 - **Anthropic:** create or sign in to an account at [Anthropic Console](https://console.anthropic.com/), review API access and billing, then create an API key in the console.
 - **OpenAI:** create or sign in to an account at [OpenAI Platform](https://platform.openai.com/), review API billing and limits, then create an API key in the platform.
-- **Groq:** create or sign in to an account at [Groq Console](https://console.groq.com/), review its API and usage limits, then create an API key. Groq's OpenAI-compatible API uses the preset base URL in DFCompanion.
-
-For a custom OpenAI-compatible service, obtain its API key, base URL, and exact model ID from that service, then select **Custom OpenAI-compatible API** and enter them in the web app. Google Gemini is intentionally not offered because its terms do not permit the project's intended use.
+Google Gemini is intentionally not offered because its terms do not permit the project's intended use. The separate [`genai-rs`](https://github.com/evansenter/genai-rs) project you may encounter is a Gemini API client, not the provider-neutral `genai` crate used by DFCompanion.
 
 Before using a key, check the provider's current pricing, free-tier limits, billing requirements, and model availability. Set any available spending limits or alerts. Keep the key private and enter it only in DFCompanion's local **API key** field; do not paste it into chat, a game save, source code, or a public issue. DFCompanion stores it in the operating system credential vault and sends it to the chosen provider only in the provider's API authentication header.
 
@@ -53,12 +52,11 @@ Before using a key, check the provider's current pricing, free-tier limits, bill
 
 Model names, availability, prices, and capabilities change frequently. These are starting points from the providers' public catalogs as checked on **October 18, 2026**, not fixed defaults or endorsements. Check current availability and pricing in your account before use; enter the exact model ID accepted by your provider.
 
-| Provider | Suggested model ID | Why consider it | Current model information |
+| Interaction method | Suggested model ID | Why consider it | Current model information |
 |---|---|---|---|
 | Anthropic | `claude-sonnet-5-5` | A balanced starting point for speed and capability. | [Models overview](https://platform.claude.com/docs/en/models/overview) |
-| OpenAI | `gpt-5.4-mini` | A faster, lower-cost option suitable for trying frequent short turns. | [GPT-5.4 Mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini) |
-| Groq | No fixed suggestion | Select a model currently available to your Groq account. | [Groq model catalog](https://console.groq.com/docs/models) |
-| Custom OpenAI-compatible API | No fixed suggestion | Use a model ID documented by the selected service. | Consult that service's model catalog. |
+| OpenAI Chat Completions | `gpt-5.4-mini` | A faster, lower-cost option suitable for trying frequent short turns. | [GPT-5.4 Mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini) |
+| OpenAI Responses | `gpt-5.4-mini` | Uses OpenAI's Responses API with native tool-call handling. | [Responses API guide](https://developers.openai.com/api/docs/guides/text) |
 
 Treat these suggestions as perishable: the provider's current catalog and your own results should take precedence.
 
