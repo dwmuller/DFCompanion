@@ -258,15 +258,17 @@ impl AiRuntime {
                         "The AI returned tool calls without an assistant turn.".to_owned()
                     })?;
             request = request.append_message(assistant_message);
-            for call in tool_calls {
+            // All results must travel in one message: Anthropic-style APIs require every
+            // tool_result for a turn in the single message after the tool_use turn.
+            let mut responses = Vec::with_capacity(tool_calls.len());
+            for call in &tool_calls {
                 let result = match budget.take() {
-                    Ok(()) => crate::ai_tools::execute(&self.game_state, &call).await,
+                    Ok(()) => crate::ai_tools::execute(&self.game_state, call).await,
                     Err(message) => serde_json::json!({"error": message}).to_string(),
                 };
-                request = request.append_message(GenaiMessage::from(ToolResponse::from_tool_call(
-                    &call, result,
-                )));
+                responses.push(ToolResponse::from_tool_call(call, result));
             }
+            request = request.append_message(GenaiMessage::from(responses));
         }
     }
 }
@@ -507,6 +509,68 @@ mod tests {
                 .to_string()
                 .contains("Custom system instructions."));
         }
+    }
+
+    #[tokio::test]
+    async fn anthropic_tool_results_share_one_message() {
+        use crate::ai_config::{AiConfiguration, ConfigurationRepository};
+        use genai::adapter::AdapterKind;
+
+        let (sender, _) = broadcast::channel(4);
+        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), sender);
+        let (url, mut requests, server) = start_mock_provider(vec![
+            json!({
+                "id": "msg_tools",
+                "type": "message",
+                "role": "assistant",
+                "model": "test-model",
+                "content": [
+                    {"type": "tool_use", "id": "call-1", "name": "unknown_a", "input": {}},
+                    {"type": "tool_use", "id": "call-2", "name": "unknown_b", "input": {}}
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            }),
+            json!({
+                "id": "msg_final",
+                "type": "message",
+                "role": "assistant",
+                "model": "test-model",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            }),
+        ])
+        .await;
+        let configuration = AiConfiguration {
+            id: "test-config".to_owned(),
+            name: "Test".to_owned(),
+            interaction_method: AdapterKind::Anthropic,
+            model_id: "test-model".to_owned(),
+            url,
+            system_text: "Custom system instructions.".to_owned(),
+        };
+        let prompt = Prompt {
+            history: Vec::new(),
+            current_user_content: "Use tools.".to_owned(),
+            omitted_report_count: 0,
+            included_user_message_count: 1,
+        };
+
+        let result = runtime
+            .complete_with_key(&configuration, &prompt, "test-secret")
+            .await
+            .unwrap();
+        let _ = requests.recv().await.unwrap();
+        let (_, _, _, second_request) = requests.recv().await.unwrap();
+        server.abort();
+
+        assert_eq!(result, "done");
+        let messages = second_request["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3, "{second_request}");
+        let results = messages[2]["content"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|part| part["type"] == "tool_result"));
     }
 
     #[tokio::test]
