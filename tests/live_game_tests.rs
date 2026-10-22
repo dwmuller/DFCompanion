@@ -272,6 +272,8 @@ async fn ai_tools_end_to_end() {
     assert!(busy["workshops"].as_array().unwrap().iter().all(|w| w["job_count"].as_u64().unwrap() > 0), "{busy}");
     let counts = call("get_building_counts", serde_json::json!({})).await;
     assert!(counts["buildings"].is_array(), "{counts}");
+    let moods = call("get_strange_moods", serde_json::json!({})).await;
+    assert!(moods["moods"].is_array(), "{moods}");
 }
 
 fn whole_map_request() -> BlockRequest {

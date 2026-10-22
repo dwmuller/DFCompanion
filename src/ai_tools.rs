@@ -312,6 +312,12 @@ fn registry() -> &'static [ToolSpec] {
                 |game, _: NoArgs| game.building_counts(),
             ),
             tool(
+                "get_strange_moods",
+                "List citizens currently in a strange mood (fey, secretive, possessed, macabre, fell), like DFHack's showmood: each one's skill, claimed workshop and its position, every demanded item with how many are needed and delivered so far (all_demands_met), and the ticks and days left before the dwarf goes insane (1200 ticks per day). A dwarf who fails to finish goes berserk or melancholy, so unmet demands and a low days_left are urgent. This is read-only.",
+                json!({}),
+                |game, _: NoArgs| game.strange_moods(),
+            ),
+            tool(
                 "search_items",
                 "Find and count the fortress's items (stockpiled, stored in containers, or lying around; not items carried by creatures), grouped by type and description, largest quantity first: e.g. logs, drinks, food, bars, boulders, furniture. Each group shows its total quantity, how much is forbidden or rotten, and up to three sample positions (z levels match the game's UI). Also returns quantity_by_type for everything matched. Use `search` for words like \"wine\" or \"cobaltite\" and `item_type` to look at one kind of item (e.g. WOOD, DRINK, FOOD, BAR, BOULDER, CLOTH). Request another page with the returned next_offset when needed. This is read-only.",
                 json!({

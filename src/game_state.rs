@@ -530,6 +530,11 @@ impl GameState {
         self.call_lua_json("count buildings", "building_counts", Vec::new())
     }
 
+    /// Citizens in a strange mood: demands, deliveries, workshop and time left.
+    pub fn strange_moods(&self) -> Result<Value, String> {
+        self.call_lua_json("list strange moods", "strange_moods", Vec::new())
+    }
+
     /// Returns a page of item groups (see `search_items` in the Lua module).
     pub fn search_items(
         &self,
