@@ -260,6 +260,24 @@ impl GameState {
         Ok(reply.concat())
     }
 
+    fn z_offset(&self) -> Result<i64, String> {
+        let reply = self
+            .with_client("Could not retrieve the display z offset", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "z_offset".to_owned(),
+                    arguments: Vec::new(),
+                })
+            })?
+            .reply
+            .value;
+        reply
+            .concat()
+            .trim()
+            .parse()
+            .map_err(|error| format!("Could not parse the display z offset: {error}"))
+    }
+
     /// Returns a high-level snapshot: world, save, pause state, view, and the
     /// number of known creatures in each group.
     pub fn fortress_overview(&self) -> Result<Value, String> {
@@ -280,6 +298,7 @@ impl GameState {
             .reply;
         let creatures = self.known_creatures()?;
         let game_date = self.game_date()?;
+        let z_offset = self.z_offset()?;
         let counts = CreatureGroup::ALL
             .into_iter()
             .map(|group| (group.label(), creatures.rows(group).len()))
@@ -292,7 +311,7 @@ impl GameState {
             "map_size_in_blocks": map.block_size_x.zip(map.block_size_y).zip(map.block_size_z)
                 .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
             "view_position": view.view_pos_x.zip(view.view_pos_y).zip(view.view_pos_z)
-                .map(|((x, y), z)| json!({"x": x, "y": y, "z": z})),
+                .map(|((x, y), z)| json!({"x": x, "y": y, "z": i64::from(z) + z_offset})),
             "followed_unit_id": view.follow_unit_id.filter(|id| *id >= 0),
             "known_creature_counts": counts,
             "pets_and_livestock_by_race": count_by_race(creatures.rows(CreatureGroup::PetsAndLivestock)),

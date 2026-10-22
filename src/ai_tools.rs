@@ -132,7 +132,7 @@ fn registry() -> &'static [ToolSpec] {
         vec![
             tool(
                 "get_fortress_overview",
-                "Get a snapshot of the current game: world and save names, whether the game is paused, the current game date and time (YYYY-MM-DD:T, month 1-12, day 1-28, T = ticks into the day, 0-1199), the map size and viewed position, and how many creatures the player knows of in each group (residents, pets and livestock, other creatures, dead or missing). Start here for general questions about the fortress. This is read-only.",
+                "Get a snapshot of the current game: world and save names, whether the game is paused, the current game date and time (YYYY-MM-DD:T, month 1-12, day 1-28, T = ticks into the day, 0-1199), the map size and viewed position (z levels match the game's UI), and how many creatures the player knows of in each group (residents, pets and livestock, other creatures, dead or missing). Start here for general questions about the fortress. This is read-only.",
                 json!({}),
                 |game, _: NoArgs| game.fortress_overview(),
             ),

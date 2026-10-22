@@ -26,12 +26,23 @@ local function name_of(unit)
     return text(dfhack.translation.translateName(U.getVisibleName(unit)))
 end
 
+-- The game's UI shows z relative to the surface-referenced level, not the raw
+-- map index that DFHack and RemoteFortressReader use.
+local function ui_z(z)
+    return z + df.global.world.map.region_z - 100
+end
+
 local function position_of(unit)
     local x, y, z = dfhack.units.getPosition(unit)
     if not x or x < 0 then
         return nil
     end
-    return {x = x, y = y, z = z}
+    return {x = x, y = y, z = ui_z(z)}
+end
+
+-- The amount to add to a raw map z to get the z shown in the game's UI.
+function z_offset()
+    return tostring(ui_z(0))
 end
 
 local function sex_of(unit)
