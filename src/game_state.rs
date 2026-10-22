@@ -343,13 +343,17 @@ impl GameState {
 
     /// Returns the newest `limit` announcements, oldest first, optionally
     /// restricted to the inclusive game-date range `from`..`to`
-    /// ("YYYY-MM-DD" or "YYYY-MM-DD:T").
+    /// ("YYYY-MM-DD" or "YYYY-MM-DD:T") and to report ids in
+    /// `since_id < id <= until_id`. With `since_id`, returns the oldest
+    /// `limit` matches instead, so callers can page forward without gaps.
     pub fn recent_reports(
         &self,
         limit: usize,
         from: Option<&str>,
         to: Option<&str>,
         category: Option<&str>,
+        since_id: Option<i64>,
+        until_id: Option<i64>,
     ) -> Result<Value, String> {
         if !(1..=MAX_REPORTS).contains(&limit) {
             return Err(format!("The report limit must be between 1 and {MAX_REPORTS}."));
@@ -369,6 +373,8 @@ impl GameState {
                         from.unwrap_or_default().to_owned(),
                         to.unwrap_or_default().to_owned(),
                         category.unwrap_or_default().to_owned(),
+                        since_id.map(|id| id.to_string()).unwrap_or_default(),
+                        until_id.map(|id| id.to_string()).unwrap_or_default(),
                     ],
                 })
             })?

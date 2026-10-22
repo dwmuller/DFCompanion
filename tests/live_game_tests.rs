@@ -216,6 +216,19 @@ async fn ai_tools_end_to_end() {
     assert!(deaths["reports"].as_array().unwrap().iter().all(|r| r["category"] == "death"), "{deaths}");
     let bad = call("get_recent_reports", serde_json::json!({"category": "nope"})).await;
     assert!(bad.get("error").is_some(), "{bad}");
+    // Paging forward by id: the oldest reports after an id, with no gaps.
+    let latest_id = reports["latest_id"].as_i64().expect("latest_id");
+    let newest_id = reports["reports"].as_array().unwrap().last().unwrap()["id"].as_i64().unwrap();
+    assert!(latest_id >= newest_id, "{reports}");
+    let nothing_newer = call("get_recent_reports", serde_json::json!({"since_id": latest_id})).await;
+    assert_eq!(nothing_newer["total_matching"], 0, "{nothing_newer}");
+    let page = call("get_recent_reports", serde_json::json!({"since_id": newest_id - 200, "limit": 3})).await;
+    assert!(page.get("error").is_none(), "{page}");
+    let ids: Vec<i64> = page["reports"].as_array().unwrap().iter().map(|r| r["id"].as_i64().unwrap()).collect();
+    assert!(!ids.is_empty() && ids.iter().all(|id| *id > newest_id - 200) && ids.windows(2).all(|w| w[0] < w[1]), "{page}");
+    let bounded = call("get_recent_reports", serde_json::json!({"since_id": newest_id - 200, "until_id": ids[0], "limit": 50})).await;
+    let bounded_ids: Vec<i64> = bounded["reports"].as_array().unwrap().iter().map(|r| r["id"].as_i64().unwrap()).collect();
+    assert_eq!(bounded_ids, vec![ids[0]], "{bounded}");
     let items = call("search_items", serde_json::json!({"item_type": "WOOD", "limit": 5})).await;
     assert!(items.get("error").is_none(), "{items}");
     assert!(items["total_matching"].as_u64().unwrap() > 0, "{items}");

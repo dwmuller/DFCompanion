@@ -134,6 +134,8 @@ struct ReportsArgs {
     from: Option<String>,
     to: Option<String>,
     category: Option<String>,
+    since_id: Option<i64>,
+    until_id: Option<i64>,
 }
 
 fn default_report_limit() -> usize {
@@ -221,7 +223,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_recent_reports",
-                "Get in-game announcements (combat, moods, arrivals, and so on) with their game dates, oldest first. Returns the newest `limit` announcements, optionally restricted to a game-date range. Dates are written YYYY-MM-DD or YYYY-MM-DD:T, where T is the tick within the day (0-1199); a date without ticks covers the whole day. This is read-only.",
+                "Get in-game announcements (combat, moods, arrivals, and so on) with their game dates, oldest first. Returns the newest `limit` announcements, optionally restricted to a game-date range. Each report has a unique, increasing `id`, and the result includes `latest_id`; use `since_id` (and `until_id`) to fetch exactly the reports after a known id, for example to check for new reports or to confirm none were missed. Dates are written YYYY-MM-DD or YYYY-MM-DD:T, where T is the tick within the day (0-1199); a date without ticks covers the whole day. This is read-only.",
                 json!({
                     "limit": {
                         "type": "integer",
@@ -237,6 +239,16 @@ fn registry() -> &'static [ToolSpec] {
                         "type": "string",
                         "description": "Only return reports at or before this game date (inclusive)."
                     },
+                    "since_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Only return reports with an id greater than this (exclusive). When given, the OLDEST matching reports are returned, so repeating the call with the last returned id as since_id pages forward without gaps. Use the `latest_id` field of a result as the starting point for later checks."
+                    },
+                    "until_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Only return reports with an id up to and including this one."
+                    },
                     "category": {
                         "type": "string",
                         "enum": ["death", "combat", "mood", "arrivals", "jobs", "mining", "population", "environment", "other"],
@@ -249,6 +261,8 @@ fn registry() -> &'static [ToolSpec] {
                         args.from.as_deref(),
                         args.to.as_deref(),
                         args.category.as_deref(),
+                        args.since_id,
+                        args.until_id,
                     )
                 },
             ),

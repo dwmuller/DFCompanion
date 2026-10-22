@@ -280,11 +280,15 @@ function report_entry(r)
     }
 end
 
--- Announcements, oldest first, as JSON: {total_matching, reports = [{id, date,
--- type, category, text}]}. Arguments: limit, from, to, category (strings; ""
--- means unbounded/any). Returns the newest `limit` announcements within the
--- inclusive from/to range and, if given, the category.
-function recent_reports(limit, from, to, category)
+-- Announcements, oldest first, as JSON: {total_matching, latest_id, reports =
+-- [{id, date, type, category, text}]}. Arguments: limit, from, to, category,
+-- since_id, until_id (strings; "" means unbounded/any). Selects announcements
+-- within the inclusive from/to range, the category, and the report ids
+-- since_id < id <= until_id. Returns the newest `limit` matches, or, when
+-- since_id is given, the oldest `limit` matches so that repeated calls using
+-- the last returned id as since_id page forward without gaps. latest_id is the
+-- id of the newest report of any kind.
+function recent_reports(limit, from, to, category, since_id, until_id)
     limit = tonumber(limit)
     if category == '' then
         category = nil
@@ -294,13 +298,21 @@ function recent_reports(limit, from, to, category)
     end
     local low = (from and from ~= '') and parse_date(from, false) or nil
     local high = (to and to ~= '') and parse_date(to, true) or nil
+    since_id = (since_id and since_id ~= '') and tonumber(since_id) or nil
+    until_id = (until_id and until_id ~= '') and tonumber(until_id) or nil
     local reports = df.global.world.status.reports
     local picked, total = {}, 0
-    for i = #reports - 1, 0, -1 do
+    local forward = since_id ~= nil
+    local first, last, step = #reports - 1, 0, -1
+    if forward then
+        first, last, step = 0, #reports - 1, 1
+    end
+    for i = first, last, step do
         local r = reports[i]
         if r.flags.announcement then
             local when = r.year * 403200 + r.time
-            if (not low or when >= low) and (not high or when <= high) then
+            if (not low or when >= low) and (not high or when <= high)
+                and (not since_id or r.id > since_id) and (not until_id or r.id <= until_id) then
                 local entry = report_entry(r)
                 if not category or entry.category == category then
                     total = total + 1
@@ -311,11 +323,16 @@ function recent_reports(limit, from, to, category)
             end
         end
     end
-    local ordered = {}
-    for i = #picked, 1, -1 do
-        table.insert(ordered, picked[i])
+    local ordered = picked
+    if not forward then
+        ordered = {}
+        for i = #picked, 1, -1 do
+            table.insert(ordered, picked[i])
+        end
     end
-    return json.encode({total_matching = total, reports = ordered}, {pretty = false})
+    local latest_id = #reports > 0 and reports[#reports - 1].id or nil
+    return json.encode({total_matching = total, latest_id = latest_id, reports = ordered},
+        {pretty = false})
 end
 
 -- Item groups matching `search` (substring of the item description or type
