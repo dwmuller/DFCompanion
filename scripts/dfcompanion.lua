@@ -96,7 +96,7 @@ local function submit_event(token, category, description)
             year = dfhack.world.ReadCurrentYear(),
             month = dfhack.world.ReadCurrentMonth() + 1, -- 0-based in DFHack; tools report 1-based
             day = dfhack.world.ReadCurrentDay(),
-            tick = dfhack.world.ReadCurrentTick(),
+            tick = dfhack.world.ReadCurrentTick() % 1200, -- ticks into the day, not the year
         },
         description = description,
     }
