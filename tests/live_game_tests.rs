@@ -234,6 +234,16 @@ async fn ai_tools_end_to_end() {
     assert!(items["total_matching"].as_u64().unwrap() > 0, "{items}");
     let bad = call("search_items", serde_json::json!({"item_type": "NOPE"})).await;
     assert!(bad.get("error").is_some(), "{bad}");
+    let stocks = call("get_food_drink_summary", serde_json::json!({})).await;
+    assert!(stocks.get("error").is_none(), "{stocks}");
+    assert!(stocks["population"].as_u64().unwrap() > 0, "{stocks}");
+    let drinks = call("search_items", serde_json::json!({"item_type": "DRINK", "limit": 1})).await;
+    assert_eq!(
+        stocks["drink"]["total"].as_u64(),
+        drinks["quantity_by_type"]["drink"].as_u64().or(Some(0)),
+        "{stocks} {drinks}"
+    );
+    assert!(stocks["food"]["available"].as_u64().unwrap() <= stocks["food"]["total"].as_u64().unwrap(), "{stocks}");
 }
 
 fn whole_map_request() -> BlockRequest {

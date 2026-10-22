@@ -384,6 +384,23 @@ impl GameState {
             .map_err(|error| format!("Could not parse the game reports: {error}"))
     }
 
+    /// Returns food and drink stocks with rough days of supply (see
+    /// `food_drink_summary` in the Lua module).
+    pub fn food_drink_summary(&self) -> Result<Value, String> {
+        let reply = self
+            .with_client("Could not summarize food and drink (is the DFCompanion Lua module installed?)", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "food_drink_summary".to_owned(),
+                    arguments: Vec::new(),
+                })
+            })?
+            .reply
+            .value;
+        serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the food and drink summary: {error}"))
+    }
+
     /// Returns a page of item groups (see `search_items` in the Lua module).
     pub fn search_items(
         &self,

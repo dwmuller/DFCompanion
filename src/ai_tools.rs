@@ -185,6 +185,12 @@ fn registry() -> &'static [ToolSpec] {
             )
             .required(&["unit_id"]),
             tool(
+                "get_food_drink_summary",
+                "Summarize the fortress's food and drink stocks: total, available (not forbidden or rotten), forbidden and rotten units; a rough estimate of days of supply at the current population; the drink varieties (e.g. wine, rum) and the most plentiful food kinds; and food by category (prepared meals, meat, fish, dairy and eggs). Counts match the game's status header; edible raw plants are reported separately. The result states its consumption assumptions. Use search_items for details about a specific item or its location. This is read-only.",
+                json!({}),
+                |game, _: NoArgs| game.food_drink_summary(),
+            ),
+            tool(
                 "search_items",
                 "Find and count the fortress's items (stockpiled, stored in containers, or lying around; not items carried by creatures), grouped by type and description, largest quantity first: e.g. logs, drinks, food, bars, boulders, furniture. Each group shows its total quantity, how much is forbidden or rotten, and up to three sample positions (z levels match the game's UI). Also returns quantity_by_type for everything matched. Use `search` for words like \"wine\" or \"cobaltite\" and `item_type` to look at one kind of item (e.g. WOOD, DRINK, FOOD, BAR, BOULDER, CLOTH). Request another page with the returned next_offset when needed. This is read-only.",
                 json!({
