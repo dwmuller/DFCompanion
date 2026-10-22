@@ -37,6 +37,51 @@ showGameEvents.addEventListener("change", () => {
 });
 applyGameEventVisibility();
 
+eventStream.addEventListener("unsolicited", (event) => {
+  const item = document.createElement("li");
+  item.textContent = `Companion: ${event.data}`;
+  notifications.appendChild(item);
+  notifications.scrollTop = notifications.scrollHeight;
+  // The server replays history right after (re)connecting; only beep for live comments.
+  if (Date.now() - connectedAt > 2000) {
+    beep();
+  }
+});
+
+let connectedAt = Date.now();
+eventStream.addEventListener("open", () => (connectedAt = Date.now()));
+
+function beep() {
+  try {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 660;
+    gain.gain.value = 0.05;
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.15);
+    oscillator.onended = () => context.close();
+  } catch {
+    // Audio may be blocked until the page has had user interaction.
+  }
+}
+
+// Timed turns cost tokens, so they are opt-in. The browser remembers the
+// choice and tells the service on each page load.
+const timedTurns = document.getElementById("timed-turns");
+async function sendTimedTurns() {
+  localStorage.setItem("timedTurns", timedTurns.checked);
+  await fetch("/api/timed-turns", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: timedTurns.checked }),
+  });
+}
+timedTurns.checked = localStorage.getItem("timedTurns") === "true";
+timedTurns.addEventListener("change", sendTimedTurns);
+sendTimedTurns();
+
 eventStream.addEventListener("warning", (event) => {
   const item = document.createElement("li");
   item.textContent = event.data;

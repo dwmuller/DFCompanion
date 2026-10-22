@@ -62,7 +62,7 @@ Treat these suggestions as perishable: the provider's current catalog and your o
 
 ## Current limitations
 
-- AI calls occur only after player chat or a retry; fortress reports do not independently trigger requests.
+- AI calls occur for player chat, a retry, and once when a configuration is selected or the service starts. If you tick "Let the companion check in on its own", they also occur within 5 seconds after a game event and every 30 seconds while the game is running; the page beeps when such a comment arrives. This is off by default because it uses your API quota. Automatic calls pause after an AI failure until you send a message or retry.
 - Input is limited to an estimated 16,000 tokens by dropping oldest pending reports first, then older conversation turns; output is capped at 4,096 tokens.
 - `REPORT` is the only forwarded gameplay event type so far. The usefulness and coverage of other events have not been evaluated.
 - Conversation history and pending reports are held in memory only; they are not restored after restarting the Companion.

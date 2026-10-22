@@ -23,6 +23,7 @@ url = "2"
 # Same prost version that dfhack-proto generates its messages with.
 prost_014 = { package = "prost", version = "0.14" }
 tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["test-util"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

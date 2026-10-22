@@ -119,6 +119,7 @@ pub fn router(state: AppState) -> Router {
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
         )
         .route("/events", get(events))
+        .route("/api/timed-turns", get(get_timed_turns).put(set_timed_turns))
         .route("/assets/app.js", get(app_script))
         .route("/assets/ai-configurations.js", get(configuration_script))
         .route("/assets/style.css", get(stylesheet))
@@ -341,6 +342,9 @@ async fn select_configuration(
     if let Err(error) = state.ai.configurations.set_active(form.id.as_deref()) {
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
+    if form.id.is_some() {
+        let _ = state.queue_tx.try_send(QueueItem::Orient);
+    }
     list_configurations(State(state)).await
 }
 
@@ -473,9 +477,36 @@ async fn stylesheet() -> impl IntoResponse {
 /// Game-event echoes get their own SSE event type so the page can hide them.
 fn notification_event(message: String) -> Event {
     match message.strip_prefix(GAME_EVENT_PREFIX) {
-        Some(text) => Event::default().event("game_event").data(text),
+        Some(text) => return Event::default().event("game_event").data(text),
+        None => {}
+    }
+    match message.strip_prefix(crate::UNSOLICITED_PREFIX) {
+        Some(text) => Event::default().event("unsolicited").data(text),
         None => Event::default().data(message),
     }
+}
+
+#[derive(Deserialize)]
+struct TimedTurnsForm {
+    enabled: bool,
+}
+
+async fn get_timed_turns(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({"enabled": state.timed_turns_enabled()}))
+}
+
+async fn set_timed_turns(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(form): axum::Json<TimedTurnsForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    state
+        .timed_turns
+        .store(form.enabled, std::sync::atomic::Ordering::Relaxed);
+    get_timed_turns(State(state)).await.into_response()
 }
 
 async fn events(

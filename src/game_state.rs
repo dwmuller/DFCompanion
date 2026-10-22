@@ -279,6 +279,39 @@ impl GameState {
             .map_err(|error| format!("Could not parse the display z offset: {error}"))
     }
 
+    /// A one-line description of the connected game, used to verify the link
+    /// at startup.
+    pub fn startup_summary(&self) -> Result<String, String> {
+        let paused = self.is_paused()?;
+        let date = self.game_date()?;
+        let name = self
+            .with_client("Could not retrieve the fortress name", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "fortress_name".to_owned(),
+                    arguments: Vec::new(),
+                })
+            })?
+            .reply
+            .value
+            .concat();
+        let name = if name.is_empty() { "(no fortress loaded)".to_owned() } else { name };
+        Ok(format!(
+            "Connected to Dwarf Fortress. Fortress: {name}. Date: {date}. Game is {}.",
+            if paused { "paused" } else { "running" }
+        ))
+    }
+
+    /// Whether the game is paused (a single cheap call, for scheduling).
+    pub fn is_paused(&self) -> Result<bool, String> {
+        let reply = self
+            .with_client("Could not retrieve pause state", |client| {
+                client.remote_fortress_reader().get_pause_state()
+            })?
+            .reply;
+        Ok(reply)
+    }
+
     /// Returns a high-level snapshot: world, save, pause state, view, and the
     /// number of known creatures in each group.
     pub fn fortress_overview(&self) -> Result<Value, String> {

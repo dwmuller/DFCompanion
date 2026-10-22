@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
+use tokio::time::{sleep_until, Instant};
 
 pub mod ai;
 pub mod ai_config;
@@ -19,6 +21,9 @@ pub mod web;
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
 /// Marks UI notifications that echo game events, so the browser can hide them.
 pub const GAME_EVENT_PREFIX: &str = "Game event: ";
+/// Marks a companion comment the player did not ask for (from a timed turn),
+/// so the page can beep.
+pub const UNSOLICITED_PREFIX: &str = "Unsolicited companion comment: ";
 
 /// A game event in the format of the `get_recent_reports` tool.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -57,8 +62,12 @@ impl GameEvent {
 pub enum QueueItem {
     UserInput(String),
     AiRetry,
+    /// An AI configuration was just selected: give the AI a turn to look around.
+    Orient,
     GameEvent(GameEvent),
 }
+
+const ORIENT_MESSAGE: &str = "[Automatic session start] You are now connected to the player's Dwarf Fortress game. Use the read-only game-state tools to get your bearings on the fortress, then give the player a brief greeting and summary of its situation.";
 
 const NOTIFICATION_HISTORY_LIMIT: usize = 500;
 
@@ -119,6 +128,9 @@ pub struct AppState {
     pub notifications_tx: broadcast::Sender<String>,
     pub history: NotificationHistory,
     pub ai: std::sync::Arc<ai::AiRuntime>,
+    /// Whether the AI gets automatic (timed) turns. Off by default because
+    /// they spend tokens without the player asking.
+    pub timed_turns: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -145,9 +157,14 @@ impl AppState {
                 notifications_tx,
                 history,
                 ai,
+                timed_turns: Default::default(),
             },
             queue_rx,
         )
+    }
+
+    pub fn timed_turns_enabled(&self) -> bool {
+        self.timed_turns.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn notify(&self, message: impl Into<String>) {
@@ -156,17 +173,61 @@ impl AppState {
     }
 }
 
+/// How long a game event may wait before the AI gets a turn that includes it.
+pub const EVENT_FLUSH_DELAY: Duration = Duration::from_secs(5);
+/// How often the AI gets a turn on its own while the game is running.
+pub const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+enum Wake {
+    Item(QueueItem),
+    Flush,
+    Check,
+}
+
+/// Processes the queue. Besides player input, the AI gets a turn (with all
+/// pending reports) at most `EVENT_FLUSH_DELAY` after a game event arrives,
+/// and every `PERIODIC_CHECK_INTERVAL` while the game is running. After an AI
+/// failure, automatic turns stop until the player sends a message or retries,
+/// so a broken configuration cannot flood the chat or burn requests.
 pub fn run_companion_worker(
     mut queue_rx: mpsc::Receiver<QueueItem>,
     state: AppState,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     async move {
-        while let Some(item) = queue_rx.recv().await {
-            match item {
-                QueueItem::AiRetry => {
-                    try_ai_turn(&state).await;
+        let mut flush_at: Option<Instant> = None;
+        let mut next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+        let mut suspended = false;
+        loop {
+            let flush_deadline = flush_at.unwrap_or(next_check);
+            let wake = tokio::select! {
+                item = queue_rx.recv() => match item {
+                    Some(item) => Wake::Item(item),
+                    None => break,
+                },
+                _ = sleep_until(flush_deadline), if flush_at.is_some() => Wake::Flush,
+                _ = sleep_until(next_check) => Wake::Check,
+            };
+            match wake {
+                Wake::Item(QueueItem::AiRetry) => {
+                    suspended = !try_ai_turn(&state, TurnKind::Retry).await;
+                    flush_at = None;
+                    next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
-                QueueItem::UserInput(text) => {
+                Wake::Item(QueueItem::Orient) => {
+                    if has_active_configuration(&state) {
+                        state
+                            .ai
+                            .conversation
+                            .lock()
+                            .await
+                            .pending_user_messages
+                            .push(ORIENT_MESSAGE.to_owned());
+                        suspended = !try_ai_turn(&state, TurnKind::Player).await;
+                        flush_at = None;
+                        next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                    }
+                }
+                Wake::Item(QueueItem::UserInput(text)) => {
                     if let Some(command) = chat_commands::ChatCommand::parse(&text) {
                         run_chat_command(&state, command).await;
                         continue;
@@ -178,9 +239,11 @@ pub fn run_companion_worker(
                         .await
                         .pending_user_messages
                         .push(text);
-                    try_ai_turn(&state).await;
+                    suspended = !try_ai_turn(&state, TurnKind::Player).await;
+                    flush_at = None;
+                    next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
-                QueueItem::GameEvent(event) => {
+                Wake::Item(QueueItem::GameEvent(event)) => {
                     let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
                     let dropped_reports = state.ai.conversation.lock().await.push_report(line);
                     if dropped_reports > 0 {
@@ -192,9 +255,48 @@ pub fn run_companion_worker(
                         "{GAME_EVENT_PREFIX}{} [{}] {}",
                         event.date, event.category, event.text
                     ));
+                    flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
+                }
+                Wake::Flush => {
+                    flush_at = None;
+                    if state.timed_turns_enabled() && !suspended && has_active_configuration(&state) {
+                        suspended = !try_ai_turn(&state, TurnKind::Periodic).await;
+                        next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                    }
+                }
+                Wake::Check => {
+                    next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                    if state.timed_turns_enabled()
+                        && !suspended
+                        && has_active_configuration(&state)
+                        && state.ai.game_is_running().await == Some(true)
+                    {
+                        flush_at = None;
+                        suspended = !try_ai_turn(&state, TurnKind::Periodic).await;
+                    }
                 }
             }
         }
+    }
+}
+
+fn has_active_configuration(state: &AppState) -> bool {
+    matches!(state.ai.configurations.active(), Ok(Some(_)))
+}
+
+/// Checks the game connection once at startup, reports the result, and if the
+/// game responds gives the AI an orientation turn.
+pub async fn check_game_at_startup(state: AppState) {
+    match state.ai.startup_summary().await {
+        Ok(summary) => {
+            state.notify(summary);
+            if has_active_configuration(&state) {
+                let _ = state.queue_tx.try_send(QueueItem::Orient);
+            }
+        }
+        Err(error) => state.notify(format!(
+            "The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"
+        )),
     }
 }
 
@@ -231,22 +333,36 @@ async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatC
     }
 }
 
-async fn try_ai_turn(state: &AppState) {
+#[derive(Clone, Copy, PartialEq)]
+enum TurnKind {
+    /// Answers a chat message the player just sent.
+    Player,
+    /// Re-sends the player's pending messages after a failure.
+    Retry,
+    /// An automatic turn with no player message.
+    Periodic,
+}
+
+/// Runs AI turns until the player's pending messages are answered. Returns
+/// false if the AI request failed.
+async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
     let configuration = match state.ai.configurations.active() {
         Ok(Some(configuration)) => configuration,
         Ok(None) => {
-            state.notify("Select an AI configuration before sending a chat message.");
-            return;
+            if kind != TurnKind::Periodic {
+                state.notify("Select an AI configuration before sending a chat message.");
+            }
+            return kind == TurnKind::Periodic;
         }
         Err(error) => {
             state.notify(error);
-            return;
+            return false;
         }
     };
     let mut conversation = state.ai.conversation.lock().await;
-    if conversation.pending_user_messages.is_empty() {
+    if kind != TurnKind::Periodic && conversation.pending_user_messages.is_empty() {
         state.notify("There is no failed AI request to retry.");
-        return;
+        return true;
     }
     loop {
         let prompt = conversation.build_prompt(&configuration.system_text);
@@ -258,17 +374,21 @@ async fn try_ai_turn(state: &AppState) {
         }
         match state.ai.complete(&configuration, &prompt).await {
             Ok(answer) => {
+                let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&answer);
                 conversation.complete(prompt, answer.clone());
-                state.notify(format!("Companion: {answer}"));
-                if conversation.pending_user_messages.is_empty() {
-                    return;
+                if !uneventful {
+                    let prefix = if kind == TurnKind::Periodic { UNSOLICITED_PREFIX } else { "Companion: " };
+                    state.notify(format!("{prefix}{answer}"));
+                }
+                if kind == TurnKind::Periodic || conversation.pending_user_messages.is_empty() {
+                    return true;
                 }
             }
             Err(error) => {
                 state.notify(format!(
-                    "AI request failed. Your chat and collected reports are retained; correct the configuration or retry. {error}"
+                    "AI request failed. Your chat and collected reports are retained; automatic checks are paused until you send a message or retry. {error}"
                 ));
-                return;
+                return false;
             }
         }
     }
@@ -727,6 +847,81 @@ mod tests {
     }
 
     const EVENT_BODY: &str = r#"{"id":42,"date":"254-07-05:1061","type":"CANCEL_JOB","category":"jobs","text":"Make ash cancelled."}"#;
+
+    fn sample_event() -> QueueItem {
+        QueueItem::GameEvent(GameEvent {
+            id: None,
+            date: "254-07-05:1061".to_owned(),
+            report_type: None,
+            category: "arrivals".to_owned(),
+            text: "A caravan arrived.".to_owned(),
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure() {
+        let (state, queue_rx) = AppState::new();
+        state
+            .ai
+            .configurations
+            .create(
+                "test config".to_owned(),
+                genai::adapter::AdapterKind::OpenAI,
+                "test-model".to_owned(),
+                "https://api.openai.com/v1/".to_owned(),
+                crate::ai::DEFAULT_SYSTEM_TEXT.to_owned(),
+            )
+            .unwrap();
+        let mut notifications = state.notifications_tx.subscribe();
+        state.timed_turns.store(true, std::sync::atomic::Ordering::Relaxed);
+        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        state.queue_tx.send(sample_event()).await.unwrap();
+
+        assert!(notifications.recv().await.unwrap().starts_with(GAME_EVENT_PREFIX));
+        let started = Instant::now();
+        let failure = notifications.recv().await.unwrap();
+        assert!(failure.contains("AI request failed"), "{failure}");
+        assert_eq!(started.elapsed(), EVENT_FLUSH_DELAY);
+
+        // Automatic turns stay paused after the failure, however long we wait.
+        let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
+        assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
+        assert_eq!(state.ai.conversation.lock().await.pending_reports.len(), 1);
+        worker.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timed_turns_are_off_by_default() {
+        let (state, queue_rx) = AppState::new();
+        state
+            .ai
+            .configurations
+            .create(
+                "test config".to_owned(),
+                genai::adapter::AdapterKind::OpenAI,
+                "test-model".to_owned(),
+                "https://api.openai.com/v1/".to_owned(),
+                crate::ai::DEFAULT_SYSTEM_TEXT.to_owned(),
+            )
+            .unwrap();
+        let mut notifications = state.notifications_tx.subscribe();
+        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        state.queue_tx.send(sample_event()).await.unwrap();
+        assert!(notifications.recv().await.unwrap().starts_with(GAME_EVENT_PREFIX));
+        let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
+        assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
+        worker.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn periodic_checks_stay_silent_without_an_ai_configuration() {
+        let (state, queue_rx) = AppState::new();
+        let mut notifications = state.notifications_tx.subscribe();
+        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
+        assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
+        worker.abort();
+    }
 
     async fn post_plugin_event(state: AppState, body: &'static str) -> axum::response::Response {
         crate::web::router(state)

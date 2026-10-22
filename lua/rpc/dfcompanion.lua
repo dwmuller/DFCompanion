@@ -217,6 +217,20 @@ function game_date()
     return format_date(df.global.cur_year, df.global.cur_year_tick)
 end
 
+-- The current site's name: "Native Name, \"English Name\"", or "" if no site.
+function fortress_name()
+    local site = dfhack.world.getCurrentSite()
+    if not site then
+        return ''
+    end
+    local native = dfhack.translation.translateName(site.name, false)
+    local english = dfhack.translation.translateName(site.name, true)
+    if native == '' or native == english then
+        return english
+    end
+    return native .. ', "' .. english .. '"'
+end
+
 -- Parses "YYYY-MM-DD" or "YYYY-MM-DD:T" into a tick count since year 0.
 -- A date without ticks covers the whole day: it maps to the start of the day
 -- for a lower bound and to the end of the day for an upper bound.

@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
     let (state, queue_rx) = AppState::load().map_err(std::io::Error::other)?;
     let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+    tokio::spawn(dfcompanion::check_game_at_startup(state.clone()));
 
     let grpc_listener = TcpListener::bind(grpc_address).await?;
     let http_listener = TcpListener::bind(http_address).await?;
