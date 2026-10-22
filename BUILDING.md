@@ -82,7 +82,7 @@ After a Debug build:
 .\build\cargo\debug\dfcompanion.exe
 ```
 
-The HTTP UI and Lua event endpoint listen on `127.0.0.1:3000`; gRPC listens on `127.0.0.1:50051`. The service generates a fresh bearer token on startup and displays the DFHack command containing it on the web page.
+The HTTP UI and Lua event endpoint listen on `127.0.0.1:3000`; gRPC listens on `127.0.0.1:50051`.
 
 ## VS Code
 

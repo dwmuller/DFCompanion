@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package dfcompanion.v1;
 
-import "google/protobuf/timestamp.proto";
-
 message SimulationTimestamp {
   int32 year = 1;
   int32 month = 2;
@@ -12,8 +10,9 @@ message SimulationTimestamp {
 }
 
 message SimulationEvent {
+  reserved 2;
+  reserved "real_world_time_utc";
   string category = 1;
-  google.protobuf.Timestamp real_world_time_utc = 2;
   SimulationTimestamp game_world_time = 3;
   string description = 4;
 }

@@ -18,7 +18,7 @@ use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
-    utc_now, AppState, QueueItem, AI_RETRY_CATEGORY, USER_INPUT_CATEGORY,
+    AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
@@ -71,25 +71,14 @@ struct ApiKeyForm {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PluginEvent {
+    id: Option<i64>,
+    date: String,
+    #[serde(rename = "type")]
+    report_type: Option<String>,
     category: String,
-    real_world_time_utc: SimulationTimestampUtc,
-    game_world_time: SimulationTimestamp,
-    description: String,
-}
-
-#[derive(Deserialize)]
-struct SimulationTimestamp {
-    year: i32,
-    month: i32,
-    day: i32,
-    tick: i32,
-}
-
-#[derive(Deserialize)]
-struct SimulationTimestampUtc {
-    seconds: i64,
-    nanos: i32,
+    text: String,
 }
 
 #[derive(Serialize)]
@@ -150,95 +139,23 @@ async fn plugin_event(
         );
     }
 
-    let Some(expected_token) = state.plugin_token.as_deref() else {
-        return plugin_event_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable",
-            "Plugin event authentication is not configured.",
-        );
+    let event = GameEvent {
+        id: event.id,
+        date: event.date,
+        report_type: event.report_type,
+        category: event.category.trim().to_owned(),
+        text: event.text.trim().to_owned(),
     };
-
-    let authorized = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|token| token == expected_token);
-    if !authorized {
-        return plugin_event_response(
-            StatusCode::UNAUTHORIZED,
-            "rejected",
-            "Missing or invalid plugin token.",
-        );
+    if let Err(message) = event.validate() {
+        let status_code = if event.text.len() > 8_000 {
+            StatusCode::PAYLOAD_TOO_LARGE
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return plugin_event_response(status_code, "rejected", &message);
     }
 
-    let category = event.category.trim();
-    if category.is_empty() || category.len() > 128 {
-        return plugin_event_response(
-            StatusCode::BAD_REQUEST,
-            "rejected",
-            "Category must contain between 1 and 128 bytes.",
-        );
-    }
-    if matches!(category, USER_INPUT_CATEGORY | AI_RETRY_CATEGORY) {
-        return plugin_event_response(
-            StatusCode::BAD_REQUEST,
-            "rejected",
-            "Category is reserved for Companion chat controls.",
-        );
-    }
-    let description = event.description.trim();
-    if description.is_empty() {
-        return plugin_event_response(
-            StatusCode::BAD_REQUEST,
-            "rejected",
-            "Event description is required.",
-        );
-    }
-    if description.len() > 8_000 {
-        return plugin_event_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "rejected",
-            "Event description exceeds the 8000-byte limit.",
-        );
-    }
-
-    let real_world_time_utc = prost_types::Timestamp {
-        seconds: event.real_world_time_utc.seconds,
-        nanos: event.real_world_time_utc.nanos,
-    };
-    if !crate::validate_timestamp(&real_world_time_utc) {
-        return plugin_event_response(
-            StatusCode::BAD_REQUEST,
-            "rejected",
-            "UTC timestamp is out of range.",
-        );
-    }
-    let game_world_time = crate::api::SimulationTimestamp {
-        year: event.game_world_time.year,
-        month: event.game_world_time.month,
-        day: event.game_world_time.day,
-        tick: event.game_world_time.tick,
-    };
-    if game_world_time.year < 0
-        || game_world_time.month < 0
-        || game_world_time.day < 0
-        || game_world_time.tick < 0
-    {
-        return plugin_event_response(
-            StatusCode::BAD_REQUEST,
-            "rejected",
-            "Game-world timestamp fields must be non-negative.",
-        );
-    }
-
-    let item = QueueItem {
-        category: category.to_owned(),
-        real_world_time_utc,
-        game_world_time: Some(game_world_time),
-        text: description.to_owned(),
-    };
-
-    match state.queue_tx.try_send(item) {
+    match state.queue_tx.try_send(QueueItem::GameEvent(event)) {
         Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let message = format!(
@@ -267,14 +184,8 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
         .into_response()
 }
 
-async fn index(State(state): State<AppState>) -> impl IntoResponse {
-    let command = state
-        .plugin_token
-        .as_deref()
-        .map(|token| format!("dfcompanion {token}"))
-        .unwrap_or_else(|| "DFHack command unavailable.".to_owned());
-    let page = include_str!("../static/index.html").replace("{{DFHACK_COMMAND}}", &command);
-    ([(header::CACHE_CONTROL, "no-store")], Html(page))
+async fn index() -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Html(include_str!("../static/index.html")))
 }
 
 async fn configurations_page() -> impl IntoResponse {
@@ -559,14 +470,22 @@ async fn stylesheet() -> impl IntoResponse {
     )
 }
 
+/// Game-event echoes get their own SSE event type so the page can hide them.
+fn notification_event(message: String) -> Event {
+    match message.strip_prefix(GAME_EVENT_PREFIX) {
+        Some(text) => Event::default().event("game_event").data(text),
+        None => Event::default().data(message),
+    }
+}
+
 async fn events(
     State(state): State<AppState>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let (backlog, live) = state.history.subscribe();
-    let backlog = tokio_stream::iter(backlog.into_iter().map(|message| Ok(Event::default().data(message))));
+    let backlog = tokio_stream::iter(backlog.into_iter().map(|message| Ok(notification_event(message))));
     let live = BroadcastStream::new(live).map(|notification| {
         Ok(match notification {
-            Ok(message) => Event::default().data(message),
+            Ok(message) => notification_event(message),
             Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(count)) => {
                 Event::default().event("warning").data(format!(
                     "{count} UI notifications were missed while the browser was disconnected."
@@ -599,25 +518,7 @@ async fn chat(
             .into_response();
     }
 
-    let timestamp = match utc_now() {
-        Ok(timestamp) => timestamp,
-        Err(error) => {
-            eprintln!("could not construct UTC timestamp for chat input: {error}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not timestamp the message.",
-            )
-                .into_response();
-        }
-    };
-    let item = QueueItem {
-        category: USER_INPUT_CATEGORY.to_owned(),
-        real_world_time_utc: timestamp,
-        game_world_time: None,
-        text: message.to_owned(),
-    };
-
-    match state.queue_tx.try_send(item) {
+    match state.queue_tx.try_send(QueueItem::UserInput(message.to_owned())) {
         Ok(()) => {
             state.notify(format!("You: {message}"));
             (StatusCode::OK, "Message queued.").into_response()
@@ -645,23 +546,7 @@ async fn retry(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    let item = QueueItem {
-        category: AI_RETRY_CATEGORY.to_owned(),
-        real_world_time_utc: match utc_now() {
-            Ok(timestamp) => timestamp,
-            Err(error) => {
-                eprintln!("could not timestamp AI retry request: {error}");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Could not timestamp the retry request.",
-                )
-                    .into_response();
-            }
-        },
-        game_world_time: None,
-        text: String::new(),
-    };
-    match state.queue_tx.try_send(item) {
+    match state.queue_tx.try_send(QueueItem::AiRetry) {
         Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => (
             StatusCode::SERVICE_UNAVAILABLE,

@@ -539,7 +539,7 @@ fn version_mismatch_warning(
 }
 
 /// Checks a "YYYY-MM-DD" or "YYYY-MM-DD:T" game date.
-fn validate_game_date(value: &str) -> Result<(), String> {
+pub(crate) fn validate_game_date(value: &str) -> Result<(), String> {
     let error = || format!("\"{value}\" is not a game date; expected YYYY-MM-DD or YYYY-MM-DD:T (month 1-12, day 1-28).");
     let (date, ticks) = match value.split_once(':') {
         Some((date, ticks)) => (date, Some(ticks)),

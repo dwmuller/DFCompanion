@@ -16,11 +16,11 @@ The current Lua event prototype has been tested with Dwarf Fortress 53.16 and DF
 5. Select the configuration on the main page. Review the selected service's privacy policy and data-use terms before chatting.
 6. Ask a question in the web app's Chat box. Reports received since the previous AI answer are sent along with your question.
 
-The generated token changes every time DFCompanion starts. Copy the new command from the web page after restarting the service. Do not share the token: it authorizes local Lua event submissions.
+DFCompanion and DFHack accept connections from localhost only; there is no shared secret.
 
 ## Using the DFHack script
 
-When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Announcements and other reports are labeled separately. DFHack reports occur more often than visible announcements, so the script may send many events. Forwarding is synchronous.
+When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Only announcements are forwarded, in the same format as the `get_recent_reports` tool (game date, type, category, text). Forwarding is synchronous. If sending fails, the script pauses the game and raises an alert badge and a dismissible popup; fix or restart DFCompanion and unpause (or run `disable dfcompanion`). The script stays enabled, and the game pauses again if the problem persists.
 
 - `disable dfcompanion` stops forwarding reports.
 - `enable dfcompanion` re-enables it during the current DFHack session.
@@ -63,7 +63,7 @@ Treat these suggestions as perishable: the provider's current catalog and your o
 ## Current limitations
 
 - AI calls occur only after player chat or a retry; fortress reports do not independently trigger requests.
-- Input is limited to an estimated 16,000 tokens by dropping oldest pending reports first, then older conversation turns; output is capped at 512 tokens.
+- Input is limited to an estimated 16,000 tokens by dropping oldest pending reports first, then older conversation turns; output is capped at 4,096 tokens.
 - `REPORT` is the only forwarded gameplay event type so far. The usefulness and coverage of other events have not been evaluated.
 - Conversation history and pending reports are held in memory only; they are not restored after restarting the Companion.
 - Enablement state is in memory; the Lua script does not persist state to the Dwarf Fortress save.

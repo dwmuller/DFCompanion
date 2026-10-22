@@ -17,6 +17,14 @@ body {
   white-space: pre-wrap;
 }
 
+.game-event {
+  color: #666;
+}
+
+.hide-game-events .game-event {
+  display: none;
+}
+
 textarea {
   box-sizing: border-box;
   min-height: 5rem;

@@ -267,6 +267,19 @@ local function category_of(type_name)
     return 'other'
 end
 
+-- A report in the format shared by get_recent_reports and forwarded events:
+-- {id, date, type, category, text}.
+function report_entry(r)
+    local type_name = df.announcement_type[r.type] or tostring(r.type)
+    return {
+        id = r.id,
+        date = format_date(r.year, r.time),
+        type = type_name,
+        category = category_of(type_name),
+        text = text(r.text),
+    }
+end
+
 -- Announcements, oldest first, as JSON: {total_matching, reports = [{id, date,
 -- type, category, text}]}. Arguments: limit, from, to, category (strings; ""
 -- means unbounded/any). Returns the newest `limit` announcements within the
@@ -287,19 +300,13 @@ function recent_reports(limit, from, to, category)
         local r = reports[i]
         if r.flags.announcement then
             local when = r.year * 403200 + r.time
-            local type_name = df.announcement_type[r.type] or tostring(r.type)
-            local r_category = category_of(type_name)
-            if (not low or when >= low) and (not high or when <= high)
-                and (not category or r_category == category) then
-                total = total + 1
-                if #picked < limit then
-                    table.insert(picked, {
-                        id = r.id,
-                        date = format_date(r.year, r.time),
-                        type = type_name,
-                        category = r_category,
-                        text = text(r.text),
-                    })
+            if (not low or when >= low) and (not high or when <= high) then
+                local entry = report_entry(r)
+                if not category or entry.category == category then
+                    total = total + 1
+                    if #picked < limit then
+                        table.insert(picked, entry)
+                    end
                 end
             end
         end
@@ -329,7 +336,7 @@ function search_items(search, item_type, offset, limit)
         if not (flags.trader or flags.garbage_collect or flags.removed
                 or dfhack.items.getHolderUnit(item)) then
             local type_name = df.item_type[item:getType()]
-            local name = dfhack.items.getDescription(item, 0):gsub(' %[%d+%]$', '')
+            local name = text(dfhack.items.getDescription(item, 0)):gsub(' %[%d+%]$', '')
             if (item_type == '' or type_name == item_type)
                 and (search == '' or name:lower():find(search, 1, true)
                     or type_name:lower():find(search, 1, true)) then

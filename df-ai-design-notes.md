@@ -25,11 +25,10 @@ Raw DFHack representations should be normalized before presentation to an AI. Th
 ## Structured representation
 The plugin-to-Companion interface will use gRPC over HTTP/2 with project-owned protobuf messages and `protoc`-generated code. The Rust build provisions a host compiler through Cargo's `protoc-bin-vendored` dependency. The gRPC server runs in the same process as the Companion worker; the DFHack plugin is its client. The Companion may separately use `dfhack-remote` for queries against DFHack's remote API; that is distinct from the custom plugin-to-Companion interface. Keep normalized observations easy to inspect, log, persist, and process.
 
-Each simulation event contains a category, a UTC real-world timestamp, a game-world timestamp, and descriptive text. The real timestamp uses protobuf `google.protobuf.Timestamp` for sub-second precision. Game time is represented by year, month, day, and tick from DFHack's World module; year plus tick is sufficient for complete ordering. Numeric priority is omitted initially; if needed later, priority can be associated with categories.
+Each simulation event contains a category, a game-world timestamp, and descriptive text. Game time is represented by year, month, day, and tick-in-day from DFHack's World module, formatted as a `YYYY-MM-DD:T` string (see Game timestamps). Numeric priority is omitted initially; if needed later, priority can be associated with categories.
 
     SimulationEvent {
       category,
-      real_world_time_utc,
       game_world_time: { year, month, day, tick },
       description
     }
@@ -41,10 +40,13 @@ Each snapshot must include a schema/version identifier and the simulation time a
 Pausing the game under event-queue pressure remains a requirement, but its call direction and mechanism are not part of the confirmed plugin-to-Companion procedures yet. Determine whether to use DFHack's existing remote API or add an explicit plugin command/callback.
 
 ## Lua transport feasibility prototype
-As a low-cost alternative to immediately building a native plugin, test whether a DFHack Lua script can submit events to the existing HTTP service. The installed DFHack 53.16-r2 Lua environment includes a JSON module and a TCP socket wrapper, so the prototype sends JSON over HTTP/1.1 to `127.0.0.1:3000/api/plugin/events` without protobuf code generation. The service generates a fresh 256-bit bearer token at startup and displays a copyable DFHack command containing it on the local web page; the script receives the token as an argument. It supports DFHack's standard enable/disable lifecycle and keeps its enabled state only in memory. When enabled, it subscribes to eventful's `REPORT` event and forwards report text converted from CP437 to UTF-8, using separate categories for announcements and other reports. Since DFHack warns this event is more frequent than announcements, event volume and synchronous HTTP latency need in-game evaluation. This is an experiment, not yet a decision to replace the planned gRPC interface.
+As a low-cost alternative to immediately building a native plugin, test whether a DFHack Lua script can submit events to the existing HTTP service. The installed DFHack 53.16-r2 Lua environment includes a JSON module and a TCP socket wrapper, so the prototype sends JSON over HTTP/1.1 to `127.0.0.1:3000/api/plugin/events` without protobuf code generation. There is no authentication, matching DFHack's own localhost-only exposure. It supports DFHack's standard enable/disable lifecycle and keeps its enabled state only in memory. When enabled, it subscribes to eventful's `REPORT` event and forwards announcements in the get_recent_reports format (game date `YYYY-MM-DD:T`, type, category, text converted from CP437 to UTF-8). A send failure pauses the game and raises an alert badge plus a dismissible popup, without disabling the script. Z coordinates in all tools follow the game UI (raw z + region_z - 100). Since DFHack warns this event is more frequent than announcements, event volume and synchronous HTTP latency need in-game evaluation. This is an experiment, not yet a decision to replace the planned gRPC interface.
 
 ## Game timestamps
-The plugin supplies each event's real-world timestamp in UTC using protobuf `google.protobuf.Timestamp`, which includes seconds and nanoseconds. It obtains simulation time from DFHack's World module as year, month, day, and tick. Year plus tick is the canonical game-time ordering; month and day are retained as readable calendar fields.
+The game date is written `YYYY-MM-DD[:T]` (year, month 1-12, day 1-28, and T = ticks into the day, 0-1199), the same string used by the tools and by forwarded events. Because ticks are relative to the day, the string sorts chronologically when its fields are compared numerically (year, month, day, then tick). Events carry no real-world timestamp. The Lua module derives the date from `dfhack.world.ReadCurrentYear`, `ReadCurrentTick` (ticks since the start of the year, so month = tick / 33600 + 1, day = (tick % 33600) / 1200 + 1, and ticks into the day = tick % 1200).
+
+## Text encoding
+DFHack's Lua API hands back strings in Dwarf Fortress's CP437 encoding, and the documentation does not always say so. The Lua module therefore passes every string taken from the game (report text, unit and squad names, professions, job names, position titles, item descriptions) through `dfhack.df2utf` before returning it, so all JSON sent to the service is UTF-8. Any new text read from the game must do the same. Strings that come from Lua tables of ASCII identifiers, such as enum names, need no conversion.
 
 ## Wake, defer, ignore
 A deferred event should normally become context the next time the AI runs, regardless of what causes that invocation. Thus a later wake event should bring pending deferred observations along with it, just as a new player chat message would.
@@ -131,6 +133,7 @@ The AI should receive introductory orientation explaining that DFCompanion is a 
 - Decide where user-replaced AI orientation text belongs (machine-wide settings versus fortress/site-specific state) before implementing customization.
 - Select snapshot storage format and identify exactly which Companion state is global versus site-scoped.
 - Consider shared-secret authentication for local gRPC calls before using the plugin RPC in a normal gameplay environment.
+- Revisit the game time representation. Consider a machine-readable form of year plus ticks since the start of that year, and/or a fixed-width, zero-padded string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as plain strings. The current `YYYY-MM-DD[:T]` string has variable-width parts.
 
 ## Early proof-of-concept milestone
 Verify plugin-event delivery through a protobuf gRPC call into the bounded queue, verify that web chat enters the same queue under `user_input`, and test provider requests through the provider-neutral AI interface.

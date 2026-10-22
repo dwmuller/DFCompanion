@@ -16,6 +16,27 @@ eventStream.onmessage = (event) => {
   notifications.scrollTop = notifications.scrollHeight;
 };
 
+eventStream.addEventListener("game_event", (event) => {
+  const item = document.createElement("li");
+  item.className = "game-event";
+  item.textContent = `Game event: ${event.data}`;
+  notifications.appendChild(item);
+  notifications.scrollTop = notifications.scrollHeight;
+});
+
+// Game events are hidden by default; the choice is remembered.
+const showGameEvents = document.getElementById("show-game-events");
+function applyGameEventVisibility() {
+  notifications.classList.toggle("hide-game-events", !showGameEvents.checked);
+  notifications.scrollTop = notifications.scrollHeight;
+}
+showGameEvents.checked = localStorage.getItem("showGameEvents") === "true";
+showGameEvents.addEventListener("change", () => {
+  localStorage.setItem("showGameEvents", showGameEvents.checked);
+  applyGameEventVisibility();
+});
+applyGameEventVisibility();
+
 eventStream.addEventListener("warning", (event) => {
   const item = document.createElement("li");
   item.textContent = event.data;

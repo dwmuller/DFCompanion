@@ -1,8 +1,6 @@
 use std::collections::VecDeque;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use prost_types::Timestamp;
-use rand::RngCore;
+use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 
 pub mod ai;
@@ -19,15 +17,47 @@ pub mod rpc;
 pub mod web;
 
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
-pub const USER_INPUT_CATEGORY: &str = "user_input";
-pub const AI_RETRY_CATEGORY: &str = "ai_retry";
+/// Marks UI notifications that echo game events, so the browser can hide them.
+pub const GAME_EVENT_PREFIX: &str = "Game event: ";
+
+/// A game event in the format of the `get_recent_reports` tool.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GameEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    /// Game date, `YYYY-MM-DD:T`.
+    pub date: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub report_type: Option<String>,
+    pub category: String,
+    pub text: String,
+}
+
+impl GameEvent {
+    /// Checks the fields a sender controls.
+    pub fn validate(&self) -> Result<(), String> {
+        let category = self.category.trim();
+        if category.is_empty() || category.len() > 128 {
+            return Err("Category must contain between 1 and 128 bytes.".to_owned());
+        }
+        if self.report_type.as_ref().is_some_and(|t| t.len() > 128) {
+            return Err("Type must not exceed 128 bytes.".to_owned());
+        }
+        if self.text.trim().is_empty() {
+            return Err("Event text is required.".to_owned());
+        }
+        if self.text.len() > 8_000 {
+            return Err("Event text exceeds the 8000-byte limit.".to_owned());
+        }
+        game_state::validate_game_date(&self.date).map_err(|error| format!("Invalid date: {error}"))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct QueueItem {
-    pub category: String,
-    pub real_world_time_utc: Timestamp,
-    pub game_world_time: Option<api::SimulationTimestamp>,
-    pub text: String,
+pub enum QueueItem {
+    UserInput(String),
+    AiRetry,
+    GameEvent(GameEvent),
 }
 
 const NOTIFICATION_HISTORY_LIMIT: usize = 500;
@@ -88,7 +118,6 @@ pub struct AppState {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<String>,
     pub history: NotificationHistory,
-    pub plugin_token: Option<String>,
     pub ai: std::sync::Arc<ai::AiRuntime>,
 }
 
@@ -115,16 +144,10 @@ impl AppState {
                 queue_tx,
                 notifications_tx,
                 history,
-                plugin_token: None,
                 ai,
             },
             queue_rx,
         )
-    }
-
-    pub fn with_plugin_token(mut self, token: String) -> Self {
-        self.plugin_token = Some(token);
-        self
     }
 
     pub fn notify(&self, message: impl Into<String>) {
@@ -133,32 +156,18 @@ impl AppState {
     }
 }
 
-pub fn generate_plugin_token() -> Result<String, rand::Error> {
-    let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.try_fill_bytes(&mut bytes)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
-pub fn utc_now() -> Result<Timestamp, Box<dyn std::error::Error + Send + Sync>> {
-    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH)?;
-    Ok(Timestamp {
-        seconds: i64::try_from(elapsed.as_secs())?,
-        nanos: i32::try_from(elapsed.subsec_nanos())?,
-    })
-}
-
 pub fn run_companion_worker(
     mut queue_rx: mpsc::Receiver<QueueItem>,
     state: AppState,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     async move {
         while let Some(item) = queue_rx.recv().await {
-            match item.category.as_str() {
-                AI_RETRY_CATEGORY => {
+            match item {
+                QueueItem::AiRetry => {
                     try_ai_turn(&state).await;
                 }
-                USER_INPUT_CATEGORY => {
-                    if let Some(command) = chat_commands::ChatCommand::parse(&item.text) {
+                QueueItem::UserInput(text) => {
+                    if let Some(command) = chat_commands::ChatCommand::parse(&text) {
                         run_chat_command(&state, command).await;
                         continue;
                     }
@@ -168,37 +177,21 @@ pub fn run_companion_worker(
                         .lock()
                         .await
                         .pending_user_messages
-                        .push(item.text);
+                        .push(text);
                     try_ai_turn(&state).await;
                 }
-                _ => {
-                    let dropped_reports = state.ai.conversation.lock().await.push_report(format!(
-                        "{} at game time {}-{}-{} tick {}: {}",
-                        item.category,
-                        item.game_world_time
-                            .as_ref()
-                            .map(|time| time.year)
-                            .unwrap_or_default(),
-                        item.game_world_time
-                            .as_ref()
-                            .map(|time| time.month)
-                            .unwrap_or_default(),
-                        item.game_world_time
-                            .as_ref()
-                            .map(|time| time.day)
-                            .unwrap_or_default(),
-                        item.game_world_time
-                            .as_ref()
-                            .map(|time| time.tick)
-                            .unwrap_or_default(),
-                        item.text
-                    ));
+                QueueItem::GameEvent(event) => {
+                    let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
+                    let dropped_reports = state.ai.conversation.lock().await.push_report(line);
                     if dropped_reports > 0 {
                         state.notify(format!(
                             "{dropped_reports} oldest pending report(s) were discarded to keep the AI context within its input limit."
                         ));
                     }
-                    state.notify(format!("DFHack report [{}]: {}", item.category, item.text));
+                    state.notify(format!(
+                        "{GAME_EVENT_PREFIX}{} [{}] {}",
+                        event.date, event.category, event.text
+                    ));
                 }
             }
         }
@@ -281,14 +274,6 @@ async fn try_ai_turn(state: &AppState) {
     }
 }
 
-pub fn validate_timestamp(timestamp: &Timestamp) -> bool {
-    const MIN_TIMESTAMP_SECONDS: i64 = -62_135_596_800;
-    const MAX_TIMESTAMP_SECONDS: i64 = 253_402_300_799;
-
-    (MIN_TIMESTAMP_SECONDS..=MAX_TIMESTAMP_SECONDS).contains(&timestamp.seconds)
-        && (0..1_000_000_000).contains(&timestamp.nanos)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,15 +318,11 @@ mod tests {
         let response = client
             .submit_simulation_event(SimulationEvent {
                 category: "unit_death".to_owned(),
-                real_world_time_utc: Some(Timestamp {
-                    seconds: 1_800_000_000,
-                    nanos: 123_000_000,
-                }),
                 game_world_time: Some(SimulationTimestamp {
                     year: 252,
                     month: 4,
                     day: 7,
-                    tick: 1_234,
+                    tick: 1_134,
                 }),
                 description: "A dwarf was found dead.".to_owned(),
             })
@@ -354,31 +335,27 @@ mod tests {
             EventSubmissionStatus::Accepted
         );
 
-        let queued = queue_rx.recv().await.unwrap();
+        let QueueItem::GameEvent(queued) = queue_rx.recv().await.unwrap() else {
+            panic!("expected a game event");
+        };
         assert_eq!(queued.category, "unit_death");
         assert_eq!(queued.text, "A dwarf was found dead.");
-        assert_eq!(queued.real_world_time_utc.seconds, 1_800_000_000);
-        assert_eq!(queued.real_world_time_utc.nanos, 123_000_000);
-        assert_eq!(queued.game_world_time.unwrap().tick, 1_234);
+        assert_eq!(queued.date, "252-04-07:1134");
 
-        let reserved_category_error = client
+        let invalid_error = client
             .submit_simulation_event(SimulationEvent {
-                category: USER_INPUT_CATEGORY.to_owned(),
-                real_world_time_utc: Some(Timestamp {
-                    seconds: 1_800_000_000,
-                    nanos: 0,
-                }),
+                category: "unit_death".to_owned(),
                 game_world_time: Some(SimulationTimestamp {
                     year: 252,
-                    month: 4,
+                    month: 13,
                     day: 7,
-                    tick: 1_235,
+                    tick: 1_135,
                 }),
-                description: "must not trigger an AI request".to_owned(),
+                description: "invalid month".to_owned(),
             })
             .await
             .unwrap_err();
-        assert_eq!(reserved_category_error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(invalid_error.code(), tonic::Code::InvalidArgument);
         assert!(queue_rx.try_recv().is_err());
 
         server_task.abort();
@@ -389,18 +366,7 @@ mod tests {
         let (state, _queue_rx) = AppState::new();
         let mut notifications = state.notifications_tx.subscribe();
         for _ in 0..EVENT_QUEUE_CAPACITY {
-            state
-                .queue_tx
-                .try_send(QueueItem {
-                    category: "test".to_owned(),
-                    real_world_time_utc: Timestamp {
-                        seconds: 1_800_000_000,
-                        nanos: 0,
-                    },
-                    game_world_time: None,
-                    text: "filling queue".to_owned(),
-                })
-                .unwrap();
+            state.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
         let (address, server_task) = start_test_grpc_server(state.clone()).await;
         let mut client = CompanionClient::connect(format!("http://{address}"))
@@ -410,15 +376,11 @@ mod tests {
         let response = client
             .submit_simulation_event(SimulationEvent {
                 category: "unit_death".to_owned(),
-                real_world_time_utc: Some(Timestamp {
-                    seconds: 1_800_000_000,
-                    nanos: 0,
-                }),
                 game_world_time: Some(SimulationTimestamp {
                     year: 252,
                     month: 4,
                     day: 7,
-                    tick: 1_234,
+                    tick: 1_134,
                 }),
                 description: "queue overflow test".to_owned(),
             })
@@ -441,7 +403,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn web_chat_input_is_enqueued_with_user_category() {
+    async fn web_chat_input_is_enqueued_as_user_input() {
         let (state, mut queue_rx) = AppState::new();
         let response = crate::web::router(state)
             .oneshot(
@@ -458,10 +420,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let item = queue_rx.recv().await.unwrap();
-        assert_eq!(item.category, USER_INPUT_CATEGORY);
-        assert_eq!(item.text, "hello Companion");
-        assert!(validate_timestamp(&item.real_world_time_utc));
+        assert_eq!(
+            queue_rx.recv().await.unwrap(),
+            QueueItem::UserInput("hello Companion".to_owned())
+        );
     }
 
     #[tokio::test]
@@ -472,12 +434,7 @@ mod tests {
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
         for text in ["/call no_such_tool a=1", "/bogus"] {
             queue_tx
-                .send(QueueItem {
-                    category: USER_INPUT_CATEGORY.to_owned(),
-                    real_world_time_utc: utc_now().unwrap(),
-                    game_world_time: None,
-                    text: text.to_owned(),
-                })
+                .send(QueueItem::UserInput(text.to_owned()))
                 .await
                 .unwrap();
         }
@@ -735,27 +692,17 @@ mod tests {
         let mut notifications = state.notifications_tx.subscribe();
         state
             .queue_tx
-            .try_send(QueueItem {
-                category: "dfhack_report".to_owned(),
-                real_world_time_utc: Timestamp {
-                    seconds: 1_800_000_000,
-                    nanos: 0,
-                },
-                game_world_time: None,
+            .try_send(QueueItem::GameEvent(GameEvent {
+                id: None,
+                date: "254-07-05:1061".to_owned(),
+                report_type: None,
+                category: "arrivals".to_owned(),
                 text: "A caravan arrived.".to_owned(),
-            })
+            }))
             .unwrap();
         state
             .queue_tx
-            .try_send(QueueItem {
-                category: USER_INPUT_CATEGORY.to_owned(),
-                real_world_time_utc: Timestamp {
-                    seconds: 1_800_000_000,
-                    nanos: 0,
-                },
-                game_world_time: None,
-                text: "What happened?".to_owned(),
-            })
+            .try_send(QueueItem::UserInput("What happened?".to_owned()))
             .unwrap();
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
 
@@ -763,7 +710,7 @@ mod tests {
             .recv()
             .await
             .unwrap()
-            .contains("DFHack report"));
+            .starts_with(GAME_EVENT_PREFIX));
         assert!(notifications
             .recv()
             .await
@@ -779,11 +726,27 @@ mod tests {
         worker.abort();
     }
 
+    const EVENT_BODY: &str = r#"{"id":42,"date":"254-07-05:1061","type":"CANCEL_JOB","category":"jobs","text":"Make ash cancelled."}"#;
+
+    async fn post_plugin_event(state: AppState, body: &'static str) -> axum::response::Response {
+        crate::web::router(state)
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/plugin/events")
+                    .header(header::HOST, "127.0.0.1:3000")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
-    async fn main_page_displays_the_plugin_command_and_prevents_token_caching() {
-        let token = "ab".repeat(32);
+    async fn main_page_prevents_caching_and_offers_the_event_toggle() {
         let (state, _) = AppState::new();
-        let response = crate::web::router(state.with_plugin_token(token.clone()))
+        let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
                     .uri("/")
@@ -803,112 +766,60 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains(&format!("dfcompanion {token}")));
-        assert!(html.contains("disable dfcompanion"));
-        assert!(html.contains("Copy DFHack command"));
-    }
-
-    #[test]
-    fn generated_plugin_tokens_are_256_bit_hex_strings() {
-        let token = generate_plugin_token().unwrap();
-
-        assert_eq!(token.len(), 64);
-        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(html.contains("enable dfcompanion"));
+        assert!(html.contains("show-game-events"));
     }
 
     #[tokio::test]
-    async fn lua_http_event_is_authenticated_and_enqueued() {
+    async fn lua_http_event_is_enqueued() {
         let (state, mut queue_rx) = AppState::new();
-        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
+        let response = post_plugin_event(state, EVENT_BODY).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            queue_rx.recv().await.unwrap(),
+            QueueItem::GameEvent(GameEvent {
+                id: Some(42),
+                date: "254-07-05:1061".to_owned(),
+                report_type: Some("CANCEL_JOB".to_owned()),
+                category: "jobs".to_owned(),
+                text: "Make ash cancelled.".to_owned(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn lua_http_event_rejects_browser_requests() {
+        let (state, mut queue_rx) = AppState::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
                     .uri("/api/plugin/events")
                     .header(header::HOST, "127.0.0.1:3000")
-                    .header(header::AUTHORIZATION, "Bearer test-token-that-is-at-least-32-bytes")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"category":"manual_test","real_world_time_utc":{"seconds":1800000000,"nanos":0},"game_world_time":{"year":252,"month":3,"day":7,"tick":1234},"description":"Lua HTTP test event."}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let queued = queue_rx.recv().await.unwrap();
-        assert_eq!(queued.category, "manual_test");
-        assert_eq!(queued.text, "Lua HTTP test event.");
-        assert_eq!(queued.real_world_time_utc.seconds, 1_800_000_000);
-        assert_eq!(queued.game_world_time.unwrap().tick, 1_234);
-    }
-
-    #[tokio::test]
-    async fn lua_http_event_rejects_browser_and_unauthenticated_requests() {
-        let (state, mut queue_rx) = AppState::new();
-        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
-        let router = crate::web::router(state);
-        let body = r#"{"category":"manual_test","real_world_time_utc":{"seconds":1800000000,"nanos":0},"game_world_time":{"year":252,"month":3,"day":7,"tick":1234},"description":"must not enqueue"}"#;
-
-        let browser_response = router
-            .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/plugin/events")
-                    .header(header::HOST, "127.0.0.1:3000")
                     .header(header::ORIGIN, "http://127.0.0.1:3000")
-                    .header(
-                        header::AUTHORIZATION,
-                        "Bearer test-token-that-is-at-least-32-bytes",
-                    )
                     .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body))
+                    .body(Body::from(EVENT_BODY))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(browser_response.status(), StatusCode::FORBIDDEN);
 
-        let unauthenticated_response = router
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/plugin/events")
-                    .header(header::HOST, "127.0.0.1:3000")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(queue_rx.try_recv().is_err());
     }
 
     #[tokio::test]
-    async fn lua_http_event_cannot_submit_chat_or_retry_control_categories() {
+    async fn lua_http_event_rejects_invalid_events() {
         let (state, mut queue_rx) = AppState::new();
-        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
-        for category in [USER_INPUT_CATEGORY, AI_RETRY_CATEGORY] {
-            let response = crate::web::router(state.clone())
-                .oneshot(
-                    HttpRequest::builder()
-                        .method("POST")
-                        .uri("/api/plugin/events")
-                        .header(header::HOST, "127.0.0.1:3000")
-                        .header(header::AUTHORIZATION, "Bearer test-token-that-is-at-least-32-bytes")
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(format!(
-                            r#"{{"category":"{category}","real_world_time_utc":{{"seconds":1800000000,"nanos":0}},"game_world_time":{{"year":252,"month":3,"day":7,"tick":1234}},"description":"must not trigger AI"}}"#
-                        )))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        for body in [
+            r#"{"date":"nope","category":"jobs","text":"bad date"}"#,
+            r#"{"date":"254-07-05:1061","category":"","text":"no category"}"#,
+            r#"{"date":"254-07-05:1061","category":"jobs","text":"  "}"#,
+            r#"{"date":"254-07-05:1061","category":"jobs","text":"x","real_world_time_utc":1}"#,
+        ] {
+            let response = post_plugin_event(state.clone(), body).await;
+            assert!(response.status().is_client_error(), "{body}");
         }
         assert!(queue_rx.try_recv().is_err());
     }
@@ -916,42 +827,15 @@ mod tests {
     #[tokio::test]
     async fn lua_http_event_reports_full_queue_without_accepting_event() {
         let (state, queue_rx) = AppState::new();
-        let state = state.with_plugin_token("test-token-that-is-at-least-32-bytes".to_owned());
         for _ in 0..EVENT_QUEUE_CAPACITY {
-            state
-                .queue_tx
-                .try_send(QueueItem {
-                    category: "test".to_owned(),
-                    real_world_time_utc: Timestamp {
-                        seconds: 1_800_000_000,
-                        nanos: 0,
-                    },
-                    game_world_time: None,
-                    text: "filling queue".to_owned(),
-                })
-                .unwrap();
+            state.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
 
-        let response = crate::web::router(state)
-            .oneshot(
-                HttpRequest::builder()
-                    .method("POST")
-                    .uri("/api/plugin/events")
-                    .header(header::HOST, "127.0.0.1:3000")
-                    .header(header::AUTHORIZATION, "Bearer test-token-that-is-at-least-32-bytes")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        r#"{"category":"manual_test","real_world_time_utc":{"seconds":1800000000,"nanos":0},"game_world_time":{"year":252,"month":3,"day":7,"tick":1234},"description":"queue full test"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = post_plugin_event(state, EVENT_BODY).await;
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(queue_rx.len(), EVENT_QUEUE_CAPACITY);
     }
-
     async fn start_test_grpc_server(
         state: AppState,
     ) -> (

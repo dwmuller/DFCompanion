@@ -11,9 +11,9 @@
     <h1>DFCompanion</h1>
     <p>DFHack reports are collected locally and sent to the selected AI configuration with your next chat message. Review the configured service's privacy and data-use terms before using AI features.</p>
     <h2>Connect DFHack</h2>
-    <p>Copy this command into the DFHack console to enable the Lua script and send a connection-test event. Use <code>disable dfcompanion</code> to disable it; use <code>enable dfcompanion</code> to re-enable it during this DFHack session.</p>
+    <p>Enter this command in the DFHack console to enable the Lua script and send a connection-test event. Use <code>disable dfcompanion</code> to disable it. If DFCompanion cannot be reached, the script pauses the game and shows an alert; fix or restart DFCompanion and unpause.</p>
     <p class="copy-command">
-      <code id="dfhack-command">{{DFHACK_COMMAND}}</code>
+      <code id="dfhack-command">enable dfcompanion</code>
       <button id="copy-dfhack-command" type="button" aria-label="Copy DFHack command" title="Copy command">
         <svg aria-hidden="true" viewBox="0 0 24 24">
           <path d="M8 4V2h12v14h-2M4 6h12v16H4z"></path>
@@ -22,7 +22,11 @@
       <span id="copy-status" role="status" aria-live="polite"></span>
     </p>
     <h2>Conversation and notifications</h2>
-    <ol id="notifications" aria-live="polite"></ol>
+    <p>
+      <input type="checkbox" id="show-game-events">
+      <label for="show-game-events">Show game events (they are already shown in the game)</label>
+    </p>
+    <ol id="notifications" aria-live="polite" class="hide-game-events"></ol>
     <h2>Chat</h2>
     <form id="chat-form">
       <label for="message">Message</label>

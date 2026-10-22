@@ -4,15 +4,18 @@
 local json = require('json')
 local luasocket = require('plugins.luasocket')
 local eventful = require('plugins.eventful')
+local rpc = require('rpc.dfcompanion')
 
 local COMPANION_HOST = '127.0.0.1'
 local COMPANION_PORT = 3000
 local RESPONSE_TIMEOUT_SECONDS = 3
 local STATE_KEY = 'dfcompanion'
+-- Prefix of this script's own announcements, so they are never forwarded.
+local MESSAGE_PREFIX = 'DFCompanion:'
 
 enabled = enabled or false
 
-local function http_post(token, body)
+local function http_post(body)
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
     local ok, status_code, decoded = pcall(function()
         client:setTimeout(RESPONSE_TIMEOUT_SECONDS, 0)
@@ -21,7 +24,6 @@ local function http_post(token, body)
         local request = table.concat({
             'POST /api/plugin/events HTTP/1.1',
             'Host: 127.0.0.1:3000',
-            'Authorization: Bearer ' .. token,
             'Content-Type: application/json',
             'Content-Length: ' .. #body,
             'Connection: close',
@@ -81,41 +83,19 @@ local function http_post(token, body)
     return status_code, decoded
 end
 
-local function submit_event(token, category, description)
-    if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
-        qerror('DFCompanion requires a loaded fortress site.')
-    end
-
-    local event = {
-        category = category,
-        real_world_time_utc = {
-            seconds = os.time(),
-            nanos = 0,
-        },
-        game_world_time = {
-            year = dfhack.world.ReadCurrentYear(),
-            month = dfhack.world.ReadCurrentMonth() + 1, -- 0-based in DFHack; tools report 1-based
-            day = dfhack.world.ReadCurrentDay(),
-            tick = dfhack.world.ReadCurrentTick() % 1200, -- ticks into the day, not the year
-        },
-        description = description,
-    }
-
-    local ok, status_code, result = pcall(http_post, token, json.encode(event, {pretty = false}))
+-- Sends one event; raises an error describing the failure if DFCompanion does
+-- not accept it.
+local function submit_event(event)
+    local ok, status_code, result = pcall(http_post, json.encode(event, {pretty = false}))
     if not ok then
-        qerror('Could not submit event to DFCompanion: ' .. tostring(status_code))
+        error('Could not submit an event to DFCompanion: ' .. tostring(status_code), 0)
     end
     if not result or type(result.status) ~= 'string' then
-        qerror('DFCompanion returned an invalid response (HTTP ' .. tostring(status_code) .. ').')
+        error('DFCompanion returned an invalid response (HTTP ' .. tostring(status_code) .. ').', 0)
     end
-    if result.status == 'accepted' then
-        return
-    elseif result.status == 'queue_full' then
-        dfhack.world.SetPauseState(true)
-        qerror(result.message)
-    else
-        qerror('DFCompanion rejected the event (HTTP ' .. tostring(status_code) .. '): ' ..
-            tostring(result.message))
+    if result.status ~= 'accepted' then
+        error('DFCompanion did not accept an event (HTTP ' .. tostring(status_code) .. '): ' ..
+            tostring(result.message), 0)
     end
 end
 
@@ -126,38 +106,53 @@ local function disable()
     print('DFCompanion Lua script disabled.')
 end
 
+-- Pauses the game and notifies the player with a one-line alert badge plus a
+-- dismissible popup. Unpausing is enough to carry on. Forwarding stays
+-- enabled: if the problem persists, the next report pauses the game again.
+local function report_failure(err)
+    -- Drop the "Could not submit" wrapper, source file prefixes and C++ exception
+    -- boilerplate so the popup shows just the cause.
+    local detail = tostring(err):gsub('^Could not submit an event to DFCompanion:%s*', '')
+        :gsub('[^%s]*%.lua:%d+:%s*', ''):gsub('^.-C%+%+ exception:%s*', '')
+    dfhack.world.SetPauseState(true)
+    dfhack.gui.showAnnouncement(MESSAGE_PREFIX .. ' problem sending events; game paused.',
+        COLOR_LIGHTRED, true)
+    -- Popup text is parsed for [tokens]; double brackets to show them literally.
+    local popup_detail = detail:gsub('%[', '[['):gsub('%]', ']]')
+    dfhack.gui.showPopupAnnouncement(
+        'DFCompanion could not send an event, so the game is paused.[B]' ..
+        popup_detail .. '[B]Start or fix the DFCompanion service and unpause, ' ..
+        'or run "disable dfcompanion" to stop forwarding events.')
+    dfhack.printerr(MESSAGE_PREFIX .. ' ' .. tostring(err))
+end
+
 local function on_report(report_id)
+    if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
+        return
+    end
     local report = df.report.find(report_id)
-    if not report or not report.text or report.text == '' then
+    if not report or not report.flags.announcement or not report.text or report.text == ''
+        or report.text:sub(1, #MESSAGE_PREFIX) == MESSAGE_PREFIX then
         return
     end
 
-    local category = report.flags.announcement and 'dfhack_announcement' or 'dfhack_report'
-    local description = dfhack.df2utf(report.text)
-    if description == '' then
-        return
-    end
-
-    local ok, err = pcall(submit_event, plugin_token, category, description)
+    local ok, err = pcall(submit_event, rpc.report_entry(report))
     if not ok then
-        disable()
-        dfhack.printerr('DFCompanion stopped forwarding reports: ' .. tostring(err))
+        report_failure(err)
     end
 end
 
-local function enable(token)
-    if token then
-        if #token ~= 64 or not token:match('^%x+$') then
-            qerror('The DFCompanion token must be 64 hexadecimal characters. Copy the current command from the DFCompanion web page.')
-        end
-        plugin_token = token
-    elseif not plugin_token then
-        qerror('No DFCompanion token is available. Copy and run the current command from the DFCompanion web page.')
+local function enable()
+    if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
+        qerror('DFCompanion requires a loaded fortress site.')
     end
 
     if not enabled then
-        submit_event(plugin_token, 'manual_test',
-            'DFHack Lua connection test; DFCompanion is enabled and forwarding reports.')
+        submit_event({
+            date = rpc.game_date(),
+            category = 'test',
+            text = 'DFHack Lua connection test; DFCompanion is enabled and forwarding announcements.',
+        })
         eventful.enableEvent(eventful.eventType.REPORT, 1)
         eventful.onReport[STATE_KEY] = on_report
         enabled = true
@@ -191,10 +186,8 @@ elseif args[1] == 'status' then
     print(('DFCompanion Lua script is %s.'):format(enabled and 'enabled' or 'disabled'))
 elseif args[1] == 'disable' then
     disable()
-elseif args[1] == 'enable' then
-    enable(args[2])
-elseif #args == 1 then
-    enable(args[1])
+elseif args[1] == 'enable' or #args == 0 then
+    enable()
 else
-    qerror('Usage: dfcompanion <token> | dfcompanion status | enable dfcompanion | disable dfcompanion')
+    qerror('Usage: dfcompanion | dfcompanion status | enable dfcompanion | disable dfcompanion')
 end
