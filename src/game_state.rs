@@ -348,6 +348,7 @@ impl GameState {
         limit: usize,
         from: Option<&str>,
         to: Option<&str>,
+        category: Option<&str>,
     ) -> Result<Value, String> {
         if !(1..=MAX_REPORTS).contains(&limit) {
             return Err(format!("The report limit must be between 1 and {MAX_REPORTS}."));
@@ -366,6 +367,7 @@ impl GameState {
                         limit.to_string(),
                         from.unwrap_or_default().to_owned(),
                         to.unwrap_or_default().to_owned(),
+                        category.unwrap_or_default().to_owned(),
                     ],
                 })
             })?

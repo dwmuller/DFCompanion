@@ -216,11 +216,46 @@ local function parse_date(s, is_upper)
     return is_upper and base + 1199 or base
 end
 
+-- Coarse announcement categories. The first rule whose pattern matches the
+-- announcement_type name wins; anything unmatched is "other".
+local CATEGORY_RULES = {
+    {'death', {'DEATH', 'SLAIN', 'KILL', 'MISSING'}},
+    {'combat', {'AMBUSH', 'SIEGE', 'INVASION', 'ATTACK', 'COMBAT', 'HUNTING', 'STEALS', 'MEGABEAST', 'FORGOTTEN_BEAST', 'TITAN', 'NIGHT_CREATURE', 'DEMON'}},
+    {'mood', {'MOOD', 'BERSERK', 'TANTRUM', 'MELANCHOLY', 'STRESS', 'INSANE'}},
+    {'arrivals', {'MIGRANT', 'GUEST', 'LIAISON', 'CARAVAN', 'MERCHANT', 'ARRIVAL', 'VISITOR', 'DIPLOMAT'}},
+    {'jobs', {'CANCEL', 'SUSPENDED', 'QUOTA', 'MASTERPIECE', 'ARTIFACT', 'JOB'}},
+    {'mining', {'STRUCK', 'FEATURE_DISCOVERY', 'DIG_', 'CAVE_IN', 'CAVEIN', 'FLOOD'}},
+    {'population', {'BIRTH', 'GROWS_UP', 'CITIZEN', 'PROFESSION', 'RECRUIT', 'POSITION', 'ELECTION', 'GUILD', 'NOBLE', 'MANDATE', 'REACHED_PEAK'}},
+    {'environment', {'WEATHER', 'SEASON', 'EVAPORATE', 'MIST'}},
+}
+local CATEGORY_NAMES = {other = true}
+for _, rule in ipairs(CATEGORY_RULES) do
+    CATEGORY_NAMES[rule[1]] = true
+end
+
+local function category_of(type_name)
+    for _, rule in ipairs(CATEGORY_RULES) do
+        for _, pattern in ipairs(rule[2]) do
+            if type_name:find(pattern, 1, true) then
+                return rule[1]
+            end
+        end
+    end
+    return 'other'
+end
+
 -- Announcements, oldest first, as JSON: {total_matching, reports = [{id, date,
--- text}]}. Arguments: limit, from, to (strings; "" means unbounded). Returns
--- the newest `limit` announcements within the inclusive from/to range.
-function recent_reports(limit, from, to)
+-- type, category, text}]}. Arguments: limit, from, to, category (strings; ""
+-- means unbounded/any). Returns the newest `limit` announcements within the
+-- inclusive from/to range and, if given, the category.
+function recent_reports(limit, from, to, category)
     limit = tonumber(limit)
+    if category == '' then
+        category = nil
+    end
+    if category and not CATEGORY_NAMES[category] then
+        error('Unknown category "' .. category .. '".')
+    end
     local low = (from and from ~= '') and parse_date(from, false) or nil
     local high = (to and to ~= '') and parse_date(to, true) or nil
     local reports = df.global.world.status.reports
@@ -229,12 +264,17 @@ function recent_reports(limit, from, to)
         local r = reports[i]
         if r.flags.announcement then
             local when = r.year * 403200 + r.time
-            if (not low or when >= low) and (not high or when <= high) then
+            local type_name = df.announcement_type[r.type] or tostring(r.type)
+            local r_category = category_of(type_name)
+            if (not low or when >= low) and (not high or when <= high)
+                and (not category or r_category == category) then
                 total = total + 1
                 if #picked < limit then
                     table.insert(picked, {
                         id = r.id,
                         date = format_date(r.year, r.time),
+                        type = type_name,
+                        category = r_category,
                         text = text(r.text),
                     })
                 end

@@ -211,6 +211,11 @@ async fn ai_tools_end_to_end() {
     assert_eq!(none["total_matching"], 0, "{none}");
     let bad = call("get_recent_reports", serde_json::json!({"from": "nope"})).await;
     assert!(bad.get("error").is_some(), "{bad}");
+    let deaths = call("get_recent_reports", serde_json::json!({"category": "death", "limit": 50})).await;
+    assert!(deaths.get("error").is_none(), "{deaths}");
+    assert!(deaths["reports"].as_array().unwrap().iter().all(|r| r["category"] == "death"), "{deaths}");
+    let bad = call("get_recent_reports", serde_json::json!({"category": "nope"})).await;
+    assert!(bad.get("error").is_some(), "{bad}");
 }
 
 fn whole_map_request() -> BlockRequest {

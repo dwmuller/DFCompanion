@@ -120,6 +120,7 @@ struct ReportsArgs {
     limit: usize,
     from: Option<String>,
     to: Option<String>,
+    category: Option<String>,
 }
 
 fn default_report_limit() -> usize {
@@ -185,10 +186,20 @@ fn registry() -> &'static [ToolSpec] {
                     "to": {
                         "type": "string",
                         "description": "Only return reports at or before this game date (inclusive)."
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["death", "combat", "mood", "arrivals", "jobs", "mining", "population", "environment", "other"],
+                        "description": "Only return reports of this category: death (citizen/pet deaths), combat (ambushes, sieges, attacks, thefts), mood (strange moods, berserk, stress), arrivals (migrants, caravans, visitors), jobs (cancelled jobs, quotas, masterworks, artifacts), mining (ore and gem strikes, discoveries), population (births, military and noble changes), environment (weather, seasons)."
                     }
                 }),
                 |game, args: ReportsArgs| {
-                    game.recent_reports(args.limit, args.from.as_deref(), args.to.as_deref())
+                    game.recent_reports(
+                        args.limit,
+                        args.from.as_deref(),
+                        args.to.as_deref(),
+                        args.category.as_deref(),
+                    )
                 },
             ),
         ]
