@@ -197,7 +197,14 @@ async fn ai_tools_end_to_end() {
     if let Some(id) = first_id {
         let details = call("get_unit_details", serde_json::json!({"unit_id": id})).await;
         assert!(details.get("error").is_none(), "{details}");
+        // The first id comes from the residents list when there are residents.
+        let mind = call("get_unit_mind", serde_json::json!({"unit_id": id})).await;
+        assert!(mind.get("error").is_none(), "{mind}");
+        assert!(mind["mood"].is_string() && mind["recent_thoughts"].is_array(), "{mind}");
+        assert!(mind["unmet_needs"].is_array(), "{mind}");
     }
+    let no_mind = call("get_unit_mind", serde_json::json!({"unit_id": 999_999_999})).await;
+    assert!(no_mind.get("error").is_some(), "{no_mind}");
     let unknown = call("get_unit_details", serde_json::json!({"unit_id": 999_999_999})).await;
     assert!(unknown.get("error").is_some(), "{unknown}");
     let reports = call("get_recent_reports", serde_json::json!({"limit": 5})).await;

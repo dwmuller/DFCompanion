@@ -343,6 +343,99 @@ local function is_stock(item)
         or dfhack.items.getHolderUnit(item))
 end
 
+-- Need fulfillment bands by focus_level, from DFHack's allneeds script.
+local FOCUS_BANDS = {
+    {300, 'unfettered'}, {200, 'level-headed'}, {100, 'untroubled'},
+    {-999, 'not distracted'}, {-9999, 'unfocused'}, {-99999, 'distracted'},
+}
+local UNMET_FOCUS = -999
+local MAX_THOUGHT_GROUPS = 20
+
+local function focus_band(focus_level)
+    for _, band in ipairs(FOCUS_BANDS) do
+        if focus_level >= band[1] then return band[2] end
+    end
+    return 'badly distracted'
+end
+
+-- A citizen's or resident's mental state as JSON: mood, stress, recent
+-- thoughts (emotions grouped by thought type, newest first) and unmet needs.
+-- On failure returns {error = ...}.
+function unit_mind(unit_id)
+    local unit = df.unit.find(tonumber(unit_id))
+    if not unit or U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
+        return json.encode({error = 'No living resident with ID ' .. tostring(unit_id) ..
+            '. Use a unit ID from list_residents.'})
+    end
+    local soul = unit.status.current_soul
+    if not soul then
+        return json.encode({error = 'This unit has no personality data.'})
+    end
+    local personality = soul.personality
+    local category = U.getStressCategory(unit)
+
+    local groups, order = {}, {}
+    local emotions = personality.emotions
+    for i = #emotions - 1, 0, -1 do
+        local emotion = emotions[i]
+        local thought = df.unit_thought_type[emotion.thought]
+        if thought and thought ~= 'None' then
+            local feeling = (df.emotion_type[emotion.type] or '?'):lower()
+            local subject
+            if thought == 'NeedsUnfulfilled' then
+                subject = df.need_type[emotion.subthought]
+            end
+            local key = thought .. '|' .. feeling .. '|' .. tostring(subject)
+            local group = groups[key]
+            if not group then
+                group = {thought = words(thought), emotion = feeling ~= 'anything' and feeling or nil, count = 0,
+                    need = subject and words(subject) or nil}
+                if emotion.year >= 0 then
+                    group.latest = format_date(emotion.year, emotion.year_tick)
+                end
+                groups[key] = group
+                table.insert(order, group)
+            end
+            group.count = group.count + 1
+        end
+    end
+    local thoughts = {}
+    for i = 1, math.min(#order, MAX_THOUGHT_GROUPS) do
+        thoughts[i] = order[i]
+    end
+
+    local unmet, met = {}, 0
+    for _, need in ipairs(personality.needs) do
+        if need.focus_level < UNMET_FOCUS then
+            local entry = {need = words(df.need_type[need.id] or tostring(need.id)),
+                focus_level = need.focus_level, state = focus_band(need.focus_level),
+                importance = need.need_level}
+            if need.deity_id >= 0 then
+                local figure = df.historical_figure.find(need.deity_id)
+                entry.deity = figure and text(dfhack.translation.translateName(
+                    dfhack.units.getVisibleName(figure), false)) or nil
+            end
+            table.insert(unmet, entry)
+        else
+            met = met + 1
+        end
+    end
+    table.sort(unmet, function(a, b) return a.focus_level < b.focus_level end)
+
+    return json.encode({
+        id = unit.id,
+        name = name_of(unit),
+        mood = STRESS_NAMES[category],
+        stress = personality.stress,
+        long_term_stress = personality.longterm_stress,
+        recent_thoughts = thoughts,
+        thought_groups_total = #order,
+        unmet_needs = unmet,
+        met_need_count = met,
+        notes = 'Lower stress is better (negative is calm). Thoughts are grouped by kind with a count and the date of the newest one. Needs are unmet when focus_level is below ' .. UNMET_FOCUS .. '.',
+    }, {pretty = false})
+end
+
 -- Item groups matching `search` (substring of the item description or type
 -- name) and `item_type` (e.g. "WOOD", "DRINK"; "" = any), as JSON. Items are
 -- grouped by type and description; groups are sorted by total quantity.

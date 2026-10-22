@@ -185,6 +185,18 @@ fn registry() -> &'static [ToolSpec] {
             )
             .required(&["unit_id"]),
             tool(
+                "get_unit_mind",
+                "Explain a resident's mood: the stress level and mood name, their recent thoughts (grouped by kind with counts and the date of the newest, e.g. \"saw dead body\", \"bedroom quality\", \"thirsty\", and unfulfilled needs), and their unmet needs (what they want: e.g. pray or meditate, eat good meal, socialize, with how unfocused it makes them, and the deity for worship needs). Use it to answer why a dwarf is unhappy. Only living citizens and residents; take the unit ID from list_residents. Thought text is derived from the game's thought types, not the game's exact wording. This is read-only.",
+                json!({
+                    "unit_id": {
+                        "type": "integer",
+                        "description": "The unit ID of a resident."
+                    }
+                }),
+                |game, args: UnitDetailsArgs| game.unit_mind(args.unit_id),
+            )
+            .required(&["unit_id"]),
+            tool(
                 "get_food_drink_summary",
                 "Summarize the fortress's food and drink stocks: total, available (not forbidden or rotten), forbidden and rotten units; a rough estimate of days of supply at the current population; the drink varieties (e.g. wine, rum) and the most plentiful food kinds; and food by category (prepared meals, meat, fish, dairy and eggs). Counts match the game's status header; edible raw plants are reported separately. The result states its consumption assumptions. Use search_items for details about a specific item or its location. This is read-only.",
                 json!({}),

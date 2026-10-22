@@ -384,6 +384,27 @@ impl GameState {
             .map_err(|error| format!("Could not parse the game reports: {error}"))
     }
 
+    /// Returns a resident's mood, stress, recent thoughts and unmet needs (see
+    /// `unit_mind` in the Lua module).
+    pub fn unit_mind(&self, unit_id: i32) -> Result<Value, String> {
+        let reply = self
+            .with_client("Could not read the unit's mind (is the DFCompanion Lua module installed?)", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "unit_mind".to_owned(),
+                    arguments: vec![unit_id.to_string()],
+                })
+            })?
+            .reply
+            .value;
+        let value: Value = serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the unit's mind: {error}"))?;
+        match value.get("error").and_then(Value::as_str) {
+            Some(message) => Err(message.to_owned()),
+            None => Ok(value),
+        }
+    }
+
     /// Returns food and drink stocks with rough days of supply (see
     /// `food_drink_summary` in the Lua module).
     pub fn food_drink_summary(&self) -> Result<Value, String> {
