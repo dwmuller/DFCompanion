@@ -422,6 +422,81 @@ impl GameState {
             .map_err(|error| format!("Could not parse the food and drink summary: {error}"))
     }
 
+    /// Calls a Lua function in the DFCompanion module with string arguments and
+    /// parses its JSON reply, turning an `error` field into `Err`.
+    fn call_lua_json(&self, what: &str, function: &str, arguments: Vec<String>) -> Result<Value, String> {
+        let reply = self
+            .with_client(
+                &format!("Could not {what} (is the DFCompanion Lua module installed?)"),
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: function.to_owned(),
+                        arguments: arguments.clone(),
+                    })
+                },
+            )?
+            .reply
+            .value;
+        let value: Value = serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the {what} reply: {error}"))?;
+        match value.get("error").and_then(Value::as_str) {
+            Some(message) => Err(message.to_owned()),
+            None => Ok(value),
+        }
+    }
+
+    /// Housing summary with one paged list (see `housing` in the Lua module).
+    pub fn housing(&self, list: &str, z: Option<i64>, offset: usize, limit: usize) -> Result<Value, String> {
+        check_page(limit)?;
+        self.call_lua_json(
+            "describe housing",
+            "housing",
+            vec![list.to_owned(), z.map(|z| z.to_string()).unwrap_or_default(), offset.to_string(), limit.to_string()],
+        )
+    }
+
+    /// A page of non-bedroom zones (see `list_zones` in the Lua module).
+    pub fn list_zones(&self, zone_type: Option<&str>, offset: usize, limit: usize) -> Result<Value, String> {
+        check_page(limit)?;
+        self.call_lua_json(
+            "list zones",
+            "list_zones",
+            vec![zone_type.unwrap_or_default().to_owned(), offset.to_string(), limit.to_string()],
+        )
+    }
+
+    /// Named locations such as temples and hospitals.
+    pub fn list_locations(&self) -> Result<Value, String> {
+        self.call_lua_json("list locations", "list_locations", Vec::new())
+    }
+
+    /// A page of workshops and furnaces (see `list_workshops` in the Lua module).
+    pub fn list_workshops(
+        &self,
+        name: Option<&str>,
+        only_with_jobs: bool,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        check_page(limit)?;
+        self.call_lua_json(
+            "list workshops",
+            "list_workshops",
+            vec![
+                name.unwrap_or_default().to_owned(),
+                only_with_jobs.to_string(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
+        )
+    }
+
+    /// Counts of the other building kinds.
+    pub fn building_counts(&self) -> Result<Value, String> {
+        self.call_lua_json("count buildings", "building_counts", Vec::new())
+    }
+
     /// Returns a page of item groups (see `search_items` in the Lua module).
     pub fn search_items(
         &self,
@@ -485,6 +560,14 @@ impl GameState {
 
 /// Builds one page of `rows`, dropping trailing rows until the reply fits the
 /// size limit.
+fn check_page(limit: usize) -> Result<(), String> {
+    if (1..=MAX_ITEM_PAGE_SIZE).contains(&limit) {
+        Ok(())
+    } else {
+        Err(format!("The page size must be between 1 and {MAX_ITEM_PAGE_SIZE}."))
+    }
+}
+
 fn page_result(
     group: CreatureGroup,
     rows: &[Value],

@@ -15,7 +15,7 @@ use crate::game_state::{
     CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_ITEM_PAGE_SIZE, MAX_REPORTS,
 };
 
-pub const MAX_TOOL_CALLS_PER_TURN: usize = 15;
+pub const MAX_TOOL_CALLS_PER_TURN: usize = 20;
 
 const MAX_CREATURE_OFFSET: usize = 5_000;
 const DEFAULT_CREATURE_LIMIT: usize = 25;
@@ -117,6 +117,57 @@ struct UnitDetailsArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct HousingArgs {
+    list: Option<String>,
+    z: Option<i64>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListZonesArgs {
+    #[serde(rename = "type")]
+    zone_type: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListWorkshopsArgs {
+    name: Option<String>,
+    #[serde(default)]
+    only_with_jobs: bool,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
+/// Adds the shared `offset` and `limit` paging properties to a schema's properties.
+fn with_paging(mut properties: Value) -> Value {
+    properties["offset"] = json!({
+        "type": "integer",
+        "minimum": 0,
+        "maximum": MAX_CREATURE_OFFSET,
+        "description": "Zero-based index of the first row to return."
+    });
+    properties["limit"] = json!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": MAX_ITEM_PAGE_SIZE,
+        "description": "Maximum number of rows to return. Defaults to 25."
+    });
+    properties
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SearchItemsArgs {
     #[serde(default)]
     offset: usize,
@@ -201,6 +252,64 @@ fn registry() -> &'static [ToolSpec] {
                 "Summarize the fortress's food and drink stocks: total, available (not forbidden or rotten), forbidden and rotten units; a rough estimate of days of supply at the current population; the drink varieties (e.g. wine, rum) and the most plentiful food kinds; and food by category (prepared meals, meat, fish, dairy and eggs). Counts match the game's status header; edible raw plants are reported separately. The result states its consumption assumptions. Use search_items for details about a specific item or its location. This is read-only.",
                 json!({}),
                 |game, _: NoArgs| game.food_drink_summary(),
+            ),
+            tool(
+                "get_housing",
+                "Describe the fortress's sleeping arrangements: a summary (beds, bedroom zones and how many have an owner, citizens without an owned bedroom, free beds) with per-floor counts of beds, free beds and bedroom zones (z matches the game's UI), plus one paged list chosen by `list`: free_beds (finished beds not in an owned bedroom, with position and whether they are in a dormitory, an unassigned bedroom, or no zone) or unhoused (citizens and residents without an owned bedroom, with position). `z` restricts the list to one floor. Request another page with the returned next_offset when needed. Use it to find which floor needs beds or whether idle beds could be assigned. This is read-only.",
+                with_paging(json!({
+                    "list": {
+                        "type": "string",
+                        "enum": ["free_beds", "unhoused"],
+                        "description": "Which list to return. Defaults to free_beds."
+                    },
+                    "z": {
+                        "type": "integer",
+                        "description": "Only list beds or citizens on this z level (as shown in the game's UI)."
+                    }
+                })),
+                |game, args: HousingArgs| {
+                    game.housing(args.list.as_deref().unwrap_or("free_beds"), args.z, args.offset, args.limit)
+                },
+            ),
+            tool(
+                "list_zones",
+                "List the fortress's zones other than bedrooms (those are in get_housing): dining halls, dormitories, meeting halls, barracks, offices, pens, tombs, dumps and so on, each with id, name, the location it belongs to, area in tiles, centre position (z matches the game's UI) and the assigned owner or animal count. Also returns zone_types with the count and total area for every zone type including bedrooms. Use `type` to look at one kind. Request another page with the returned next_offset when needed. This is read-only.",
+                with_paging(json!({
+                    "type": {
+                        "type": "string",
+                        "description": "Only include zones whose type contains this text, e.g. \"meeting\", \"dormitory\", \"tomb\"."
+                    }
+                })),
+                |game, args: ListZonesArgs| game.list_zones(args.zone_type.as_deref(), args.offset, args.limit),
+            ),
+            tool(
+                "list_locations",
+                "List the fortress's named locations (temples, hospitals, guildhalls, taverns, libraries) with their type, name, and the number and total area of the zones that make them up. A location with no zones cannot function yet, so this answers \"is there a working hospital or temple?\". This is read-only.",
+                json!({}),
+                |game, _: NoArgs| game.list_locations(),
+            ),
+            tool(
+                "list_workshops",
+                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, whether construction is finished, the number of queued jobs, and the names of the first few jobs (e.g. a strange mood's creation job). Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
+                with_paging(json!({
+                    "name": {
+                        "type": "string",
+                        "description": "Only include workshops whose name contains this text (case-insensitive), e.g. \"still\", \"smelter\"."
+                    },
+                    "only_with_jobs": {
+                        "type": "boolean",
+                        "description": "Only include workshops with queued jobs."
+                    }
+                })),
+                |game, args: ListWorkshopsArgs| {
+                    game.list_workshops(args.name.as_deref(), args.only_with_jobs, args.offset, args.limit)
+                },
+            ),
+            tool(
+                "get_building_counts",
+                "Count the fortress's other buildings by kind, built and under construction: beds, tables, chairs, doors, wells, stockpiles, farm plots, statues, traps and so on. Workshops and furnaces are in list_workshops; zones in list_zones and list_locations. This is read-only.",
+                json!({}),
+                |game, _: NoArgs| game.building_counts(),
             ),
             tool(
                 "search_items",

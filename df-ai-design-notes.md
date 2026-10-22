@@ -123,12 +123,17 @@ Implement the following work in this order:
    - `get_unit_mind`: why a resident feels as they do: mood, stress values, recent thoughts grouped by kind (from the unit's emotion list, with the date of the newest), and unmet needs with their focus level, importance and, for worship, the deity. Thought names come from the game's thought types rather than its displayed wording; needs below a focus level of -999 count as unmet, using the bands from DFHack's `allneeds` script.
    - `search_items`: fortress-wide item counts grouped by type and description.
    - `get_food_drink_summary`: food and drink totals matching the game header, drink varieties, and a rough days-of-supply estimate that states its consumption assumptions (one drink per citizen per 20 days and one meal per 41 days).
+   - `get_housing`: beds, bedroom zones and owners, per-floor bed and bedroom counts, and a paged list of either free beds (with dormitory/unassigned/no-zone setting) or citizens without an owned bedroom, optionally for one z level.
+   - `list_zones`: paged non-bedroom zones with area, position, location and owner, filterable by type, plus counts by zone type.
+   - `list_locations`: named locations (temples, hospitals, guildhalls, taverns) with the number and area of their zones; a location without zones cannot function.
+   - `list_workshops`: paged workshops and furnaces with position, state and queued jobs, filterable by name or by having jobs.
+   - `get_building_counts`: the other building kinds, built and under construction. Stockpiles and farm plots are only counted here until they get their own tools.
    - `get_recent_reports`: announcements read from `world.status.reports` by the Lua module, optionally filtered by `category`, inclusive `from`/`to` game dates, and report ids. Every report has an increasing `id` and results carry `latest_id`. `since_id`/`until_id` select `since_id < id <= until_id`, returning the oldest matches when `since_id` is given so that callers can page forward and audit for gaps.
 
    Conventions:
 
    - Game dates are written `YYYY-MM-DD[:T]` (month 1-12, day 1-28, T = ticks into the day, 0-1199); a date without ticks covers the whole day.
-   - Replies are size-bounded (list pages are limited to 50 creatures and 12 KiB), and each AI turn is limited to 15 tool calls; a time-based rate limit may replace this once asynchronous event batching exists.
+   - Replies are size-bounded (list pages are limited to 50 creatures and 12 KiB), and each AI turn is limited to 20 tool calls; a time-based rate limit may replace this once asynchronous event batching exists.
    - Prefer on-demand queries over sending large snapshots on every turn. Normalize results into factual, size-bounded responses; use plugin-provided procedures only where needed.
    - The model must never receive direct access to the DFHack remote interface: only explicit, application-owned, read-only intermediary tools may invoke an allowlisted set of operations and return curated or aggregated results.
    - Make unavailable or stale game state explicit to the AI.
@@ -143,7 +148,7 @@ Implement the following work in this order:
    - `get_unit_details` answers only for known creatures and reports hidden IDs as nonexistent. Tools fail rather than fall back to the unfiltered list if the Lua module is missing.
    - Mood names come from `getStressCategory` (0 miserable through 6 ecstatic). Names use the in-game language, as the GUI does.
 
-   Still to do: continue this priority with defined locations/zones and stock and stockpile inventories, and add high-level fortress-health indicators visible in the game's status header, such as happiness-level counts, after confirming which values DFHack exposes and their semantics.
+   Still to do: continue this priority with stock and stockpile inventories, and add high-level fortress-health indicators visible in the game's status header, such as happiness-level counts, after confirming which values DFHack exposes and their semantics. high-level fortress-health indicators visible in the game's status header, such as happiness-level counts, after confirming which values DFHack exposes and their semantics.
 2. **Timed and pressure-based event batches.** Add a code-configurable idle timeout of a few seconds and flush accumulated events after that much time without new events; also flush sooner when the shared input queue is more than half full. Offer each flushed batch to the AI, with instructions and a defined response protocol that permit abstaining when there is nothing useful to tell the player. Preserve immediate player-chat behavior and include pending event context with that turn.
 3. **Site-state saving.** Use DFHack's site save/load hooks and Persistence module to store and restore versioned Companion state with the corresponding game data. Include only site-specific context needed to resume; keep AI provider/model/endpoint settings and API keys out of game saves. Provider settings remain local to each machine and credentials remain in the OS vault. Define which conversational context to persist, serialization/version migration, practical payload bounds, and user-facing notice that saved conversational context may travel with synchronized game files before implementing.
 

@@ -251,6 +251,27 @@ async fn ai_tools_end_to_end() {
         "{stocks} {drinks}"
     );
     assert!(stocks["food"]["available"].as_u64().unwrap() <= stocks["food"]["total"].as_u64().unwrap(), "{stocks}");
+    let housing = call("get_housing", serde_json::json!({"limit": 5})).await;
+    assert!(housing.get("error").is_none(), "{housing}");
+    let summary = &housing["summary"];
+    assert!(summary["free_bed_count"].as_u64().unwrap() <= summary["beds"].as_u64().unwrap(), "{housing}");
+    assert_eq!(housing["total_matching"], summary["free_bed_count"], "{housing}");
+    assert!(housing["free_beds"].as_array().unwrap().len() <= 5 && summary["by_floor"].is_array(), "{housing}");
+    let unhoused = call("get_housing", serde_json::json!({"list": "unhoused", "limit": 5})).await;
+    assert_eq!(unhoused["total_matching"], unhoused["summary"]["unhoused_count"], "{unhoused}");
+    let bad_list = call("get_housing", serde_json::json!({"list": "nope"})).await;
+    assert!(bad_list.get("error").is_some(), "{bad_list}");
+    let zones = call("list_zones", serde_json::json!({"limit": 3})).await;
+    assert!(zones["zone_types"].is_array() && zones["zones"].is_array(), "{zones}");
+    assert!(zones["zones"].as_array().unwrap().iter().all(|z| z["type"] != "bedroom"), "{zones}");
+    let locations = call("list_locations", serde_json::json!({})).await;
+    assert!(locations["locations"].is_array(), "{locations}");
+    let workshops = call("list_workshops", serde_json::json!({"limit": 50})).await;
+    assert!(workshops["workshops"].as_array().unwrap().iter().all(|w| w["position"]["x"].is_i64() && w["job_count"].is_u64()), "{workshops}");
+    let busy = call("list_workshops", serde_json::json!({"only_with_jobs": true, "limit": 50})).await;
+    assert!(busy["workshops"].as_array().unwrap().iter().all(|w| w["job_count"].as_u64().unwrap() > 0), "{busy}");
+    let counts = call("get_building_counts", serde_json::json!({})).await;
+    assert!(counts["buildings"].is_array(), "{counts}");
 }
 
 fn whole_map_request() -> BlockRequest {
