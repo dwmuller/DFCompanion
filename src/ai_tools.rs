@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::game_state::{CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_REPORTS};
 
-pub const MAX_TOOL_CALLS_PER_TURN: usize = 3;
+pub const MAX_TOOL_CALLS_PER_TURN: usize = 15;
 
 const MAX_CREATURE_OFFSET: usize = 5_000;
 const DEFAULT_CREATURE_LIMIT: usize = 25;
@@ -118,6 +118,8 @@ struct UnitDetailsArgs {
 struct ReportsArgs {
     #[serde(default = "default_report_limit")]
     limit: usize,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 fn default_report_limit() -> usize {
@@ -130,7 +132,7 @@ fn registry() -> &'static [ToolSpec] {
         vec![
             tool(
                 "get_fortress_overview",
-                "Get a snapshot of the current game: world and save names, whether the game is paused, the current game date (year, month 1-12, day 1-28), the map size and viewed position, and how many creatures the player knows of in each group (residents, pets and livestock, other creatures, dead or missing). Start here for general questions about the fortress. This is read-only.",
+                "Get a snapshot of the current game: world and save names, whether the game is paused, the current game date and time (YYYY-MM-DD:T, month 1-12, day 1-28, T = ticks into the day, 0-1199), the map size and viewed position, and how many creatures the player knows of in each group (residents, pets and livestock, other creatures, dead or missing). Start here for general questions about the fortress. This is read-only.",
                 json!({}),
                 |game, _: NoArgs| game.fortress_overview(),
             ),
@@ -168,16 +170,26 @@ fn registry() -> &'static [ToolSpec] {
             .required(&["unit_id"]),
             tool(
                 "get_recent_reports",
-                "Get the most recent in-game announcements and event reports (combat, moods, arrivals, and so on), oldest first. This is read-only.",
+                "Get in-game announcements (combat, moods, arrivals, and so on) with their game dates, oldest first. Returns the newest `limit` announcements, optionally restricted to a game-date range. Dates are written YYYY-MM-DD or YYYY-MM-DD:T, where T is the tick within the day (0-1199); a date without ticks covers the whole day. This is read-only.",
                 json!({
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": MAX_REPORTS,
-                        "description": "Number of most recent reports to return. Defaults to 10."
+                        "description": "Maximum number of reports to return (the newest ones in range). Defaults to 10."
+                    },
+                    "from": {
+                        "type": "string",
+                        "description": "Only return reports at or after this game date (inclusive), e.g. 254-06-01 or 254-06-01:600."
+                    },
+                    "to": {
+                        "type": "string",
+                        "description": "Only return reports at or before this game date (inclusive)."
                     }
                 }),
-                |game, args: ReportsArgs| game.recent_reports(args.limit),
+                |game, args: ReportsArgs| {
+                    game.recent_reports(args.limit, args.from.as_deref(), args.to.as_deref())
+                },
             ),
         ]
     })

@@ -246,7 +246,7 @@ impl GameState {
         KnownCreatures::parse(&reply.concat())
     }
 
-    fn game_date(&self) -> Result<Value, String> {
+    fn game_date(&self) -> Result<String, String> {
         let reply = self
             .with_client("Could not retrieve the game date", |client| {
                 client.core().run_lua(CoreRunLuaRequest {
@@ -257,8 +257,7 @@ impl GameState {
             })?
             .reply
             .value;
-        serde_json::from_str(&reply.concat())
-            .map_err(|error| format!("Could not parse the game date: {error}"))
+        Ok(reply.concat())
     }
 
     /// Returns a high-level snapshot: world, save, pause state, view, and the
@@ -280,7 +279,8 @@ impl GameState {
             })?
             .reply;
         let creatures = self.known_creatures()?;
-        let game_date = self.game_date()?;                let counts = CreatureGroup::ALL
+        let game_date = self.game_date()?;
+        let counts = CreatureGroup::ALL
             .into_iter()
             .map(|group| (group.label(), creatures.rows(group).len()))
             .collect::<BTreeMap<_, _>>();
@@ -321,31 +321,39 @@ impl GameState {
         Ok(details)
     }
 
-    /// Returns the most recent game reports (announcements), newest last.
-    pub fn recent_reports(&self, limit: usize) -> Result<Value, String> {
+    /// Returns the newest `limit` announcements, oldest first, optionally
+    /// restricted to the inclusive game-date range `from`..`to`
+    /// ("YYYY-MM-DD" or "YYYY-MM-DD:T").
+    pub fn recent_reports(
+        &self,
+        limit: usize,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<Value, String> {
         if !(1..=MAX_REPORTS).contains(&limit) {
             return Err(format!("The report limit must be between 1 and {MAX_REPORTS}."));
         }
-        let reports = self
-            .with_client("Could not retrieve game reports", |client| {
-                client.remote_fortress_reader().get_reports()
+        for (name, value) in [("from", from), ("to", to)] {
+            if let Some(value) = value.filter(|v| !v.is_empty()) {
+                validate_game_date(value).map_err(|error| format!("Invalid {name}: {error}"))?;
+            }
+        }
+        let reply = self
+            .with_client("Could not retrieve game reports (is the DFCompanion Lua module installed?)", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "recent_reports".to_owned(),
+                    arguments: vec![
+                        limit.to_string(),
+                        from.unwrap_or_default().to_owned(),
+                        to.unwrap_or_default().to_owned(),
+                    ],
+                })
             })?
             .reply
-            .reports;
-        let skip = reports.len().saturating_sub(limit);
-        let recent = reports
-            .into_iter()
-            .skip(skip)
-            .map(|report| {
-                json!({
-                    "text": report.text.unwrap_or_default().chars().take(300).collect::<String>(),
-                    "year": report.year,
-                    "tick_in_year": report.time,
-                    "announcement": report.announcement,
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({"returned": recent.len(), "reports": recent}))
+            .value;
+        serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the game reports: {error}"))
     }
 
     /// Returns a page of the known creatures in one group of the game's
@@ -470,9 +478,45 @@ fn version_mismatch_warning(
     })
 }
 
+/// Checks a "YYYY-MM-DD" or "YYYY-MM-DD:T" game date.
+fn validate_game_date(value: &str) -> Result<(), String> {
+    let error = || format!("\"{value}\" is not a game date; expected YYYY-MM-DD or YYYY-MM-DD:T (month 1-12, day 1-28).");
+    let (date, ticks) = match value.split_once(':') {
+        Some((date, ticks)) => (date, Some(ticks)),
+        None => (value, None),
+    };
+    let parts = date
+        .split('-')
+        .map(|p| (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).then(|| p.parse::<u32>().ok()).flatten())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(error)?;
+    let [_, month, day] = parts[..] else {
+        return Err(error());
+    };
+    if !(1..=12).contains(&month) || !(1..=28).contains(&day) {
+        return Err(error());
+    }
+    if let Some(ticks) = ticks {
+        if ticks.parse::<u32>().map_or(true, |t| t >= 1200) || !ticks.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(error());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_dates_are_validated() {
+        for ok in ["254-07-05", "254-7-5:0", "1-12-28:1199"] {
+            assert!(validate_game_date(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "254-13-01", "254-01-29", "254-01", "254-01-01:1200", "254-01-01:x", "a-b-c", "-1-01-01"] {
+            assert!(validate_game_date(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn version_preflight_warns_when_either_version_differs() {

@@ -173,14 +173,68 @@ function known_creatures()
     return json.encode(result, {pretty = false})
 end
 
--- The current game date, in the same year/month/day form as death dates.
+local function format_date(year, tick_in_year)
+    return string.format('%03d-%02d-%02d:%d', year, tick_in_year // 33600 + 1,
+        tick_in_year % 33600 // 1200 + 1, tick_in_year % 1200)
+end
+
+-- The current game date as "YYYY-MM-DD:T" (T = ticks into the day, 0-1199).
 function game_date()
-    local tick = df.global.cur_year_tick
-    return json.encode({
-        year = df.global.cur_year,
-        month = tick // 33600 + 1,
-        day = tick % 33600 // 1200 + 1,
-    }, {pretty = false})
+    return format_date(df.global.cur_year, df.global.cur_year_tick)
+end
+
+-- Parses "YYYY-MM-DD" or "YYYY-MM-DD:T" into a tick count since year 0.
+-- A date without ticks covers the whole day: it maps to the start of the day
+-- for a lower bound and to the end of the day for an upper bound.
+local function parse_date(s, is_upper)
+    local y, m, d, t = tostring(s):match('^(%d+)-(%d+)-(%d+):(%d+)$')
+    if not y then
+        y, m, d = tostring(s):match('^(%d+)-(%d+)-(%d+)$')
+    end
+    if not y then
+        error('Invalid game date "' .. tostring(s) .. '"; expected YYYY-MM-DD or YYYY-MM-DD:T.')
+    end
+    y, m, d = tonumber(y), tonumber(m), tonumber(d)
+    if m < 1 or m > 12 or d < 1 or d > 28 then
+        error('Invalid game date "' .. s .. '": month must be 1-12 and day 1-28.')
+    end
+    local base = y * 403200 + (m - 1) * 33600 + (d - 1) * 1200
+    if t then
+        return base + tonumber(t)
+    end
+    return is_upper and base + 1199 or base
+end
+
+-- Announcements, oldest first, as JSON: {total_matching, reports = [{id, date,
+-- text}]}. Arguments: limit, from, to (strings; "" means unbounded). Returns
+-- the newest `limit` announcements within the inclusive from/to range.
+function recent_reports(limit, from, to)
+    limit = tonumber(limit)
+    local low = (from and from ~= '') and parse_date(from, false) or nil
+    local high = (to and to ~= '') and parse_date(to, true) or nil
+    local reports = df.global.world.status.reports
+    local picked, total = {}, 0
+    for i = #reports - 1, 0, -1 do
+        local r = reports[i]
+        if r.flags.announcement then
+            local when = r.year * 403200 + r.time
+            if (not low or when >= low) and (not high or when <= high) then
+                total = total + 1
+                if #picked < limit then
+                    table.insert(picked, {
+                        id = r.id,
+                        date = format_date(r.year, r.time),
+                        text = text(r.text),
+                    })
+                end
+            end
+        end
+    end
+    local ordered = {}
+    for i = #picked, 1, -1 do
+        table.insert(ordered, picked[i])
+    end
+    return json.encode({total_matching = total, reports = ordered}, {pretty = false})
 end
 
 return _ENV

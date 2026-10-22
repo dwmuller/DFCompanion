@@ -94,7 +94,7 @@ local function submit_event(token, category, description)
         },
         game_world_time = {
             year = dfhack.world.ReadCurrentYear(),
-            month = dfhack.world.ReadCurrentMonth(),
+            month = dfhack.world.ReadCurrentMonth() + 1, -- 0-based in DFHack; tools report 1-based
             day = dfhack.world.ReadCurrentDay(),
             tick = dfhack.world.ReadCurrentTick(),
         },

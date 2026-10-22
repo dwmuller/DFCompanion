@@ -202,6 +202,15 @@ async fn ai_tools_end_to_end() {
     assert!(unknown.get("error").is_some(), "{unknown}");
     let reports = call("get_recent_reports", serde_json::json!({"limit": 5})).await;
     assert!(reports.get("error").is_none(), "{reports}");
+    assert!(!reports["reports"].as_array().unwrap().is_empty(), "{reports}");
+    let date = overview["game_date"].as_str().expect("game_date string");
+    let today = &date[..date.rfind(':').unwrap()];
+    let ranged = call("get_recent_reports", serde_json::json!({"from": "000-01-01", "to": today})).await;
+    assert!(ranged.get("error").is_none(), "{ranged}");
+    let none = call("get_recent_reports", serde_json::json!({"from": "9999-01-01"})).await;
+    assert_eq!(none["total_matching"], 0, "{none}");
+    let bad = call("get_recent_reports", serde_json::json!({"from": "nope"})).await;
+    assert!(bad.get("error").is_some(), "{bad}");
 }
 
 fn whole_map_request() -> BlockRequest {
