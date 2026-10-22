@@ -216,6 +216,11 @@ async fn ai_tools_end_to_end() {
     assert!(deaths["reports"].as_array().unwrap().iter().all(|r| r["category"] == "death"), "{deaths}");
     let bad = call("get_recent_reports", serde_json::json!({"category": "nope"})).await;
     assert!(bad.get("error").is_some(), "{bad}");
+    let items = call("search_items", serde_json::json!({"item_type": "WOOD", "limit": 5})).await;
+    assert!(items.get("error").is_none(), "{items}");
+    assert!(items["total_matching"].as_u64().unwrap() > 0, "{items}");
+    let bad = call("search_items", serde_json::json!({"item_type": "NOPE"})).await;
+    assert!(bad.get("error").is_some(), "{bad}");
 }
 
 fn whole_map_request() -> BlockRequest {

@@ -11,7 +11,9 @@ use genai::chat::{Tool, ToolCall, ToolName};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
-use crate::game_state::{CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_REPORTS};
+use crate::game_state::{
+    CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_ITEM_PAGE_SIZE, MAX_REPORTS,
+};
 
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 15;
 
@@ -115,6 +117,17 @@ struct UnitDetailsArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SearchItemsArgs {
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+    search: Option<String>,
+    item_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReportsArgs {
     #[serde(default = "default_report_limit")]
     limit: usize,
@@ -139,7 +152,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             list_tool(
                 "list_residents",
-                "List the fortress's residents, like the Residents tab of the game's Creatures screen: citizens and other long-term residents with name, profession, current job, mood, squad, noble positions, age, and position. Use a unit ID with get_unit_details. Request another page with the returned next_offset when needed. Only creatures the player knows of are included. This is read-only.",
+                "List the fortress's residents, like the Residents tab of the game's Creatures screen: citizens and other long-term residents with name, profession, status (what they are doing right now: current job, else an activity such as prayer or play, else \"idle\"), job, activity, sleeping and idle flags (present only when true for sleeping/idle), mood, squad, noble positions, age, and position. The result includes idle_count, the number of idle residents among those matching. Use a unit ID with get_unit_details. Request another page with the returned next_offset when needed. Only creatures the player knows of are included. This is read-only.",
                 CreatureGroup::Residents,
             ),
             list_tool(
@@ -169,6 +182,43 @@ fn registry() -> &'static [ToolSpec] {
                 |game, args: UnitDetailsArgs| game.unit_details(args.unit_id),
             )
             .required(&["unit_id"]),
+            tool(
+                "search_items",
+                "Find and count the fortress's items (stockpiled, stored in containers, or lying around; not items carried by creatures), grouped by type and description, largest quantity first: e.g. logs, drinks, food, bars, boulders, furniture. Each group shows its total quantity, how much is forbidden or rotten, and up to three sample positions (z levels match the game's UI). Also returns quantity_by_type for everything matched. Use `search` for words like \"wine\" or \"cobaltite\" and `item_type` to look at one kind of item (e.g. WOOD, DRINK, FOOD, BAR, BOULDER, CLOTH). Request another page with the returned next_offset when needed. This is read-only.",
+                json!({
+                    "search": {
+                        "type": "string",
+                        "description": "Only include items whose description or item type contains this text (case-insensitive)."
+                    },
+                    "item_type": {
+                        "type": "string",
+                        "description": "Only include items of this DF item type, e.g. WOOD, DRINK, FOOD, MEAT, PLANT, BAR, BOULDER, BLOCKS, CLOTH, WEAPON, ARMOR."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_CREATURE_OFFSET,
+                        "description": "Zero-based index of the first matching group to return."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_ITEM_PAGE_SIZE,
+                        "description": "Maximum number of groups to return. Defaults to 25."
+                    }
+                }),
+                |game, args: SearchItemsArgs| {
+                    if args.offset > MAX_CREATURE_OFFSET {
+                        return Err("offset exceeds the maximum supported list index.".to_owned());
+                    }
+                    game.search_items(
+                        args.search.as_deref(),
+                        args.item_type.as_deref(),
+                        args.offset,
+                        args.limit,
+                    )
+                },
+            ),
             tool(
                 "get_recent_reports",
                 "Get in-game announcements (combat, moods, arrivals, and so on) with their game dates, oldest first. Returns the newest `limit` announcements, optionally restricted to a game-date range. Dates are written YYYY-MM-DD or YYYY-MM-DD:T, where T is the tick within the day (0-1199); a date without ticks covers the whole day. This is read-only.",

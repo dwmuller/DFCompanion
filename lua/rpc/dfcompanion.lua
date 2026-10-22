@@ -71,10 +71,33 @@ local function unit_name_by_id(id)
     return unit and name_of(unit) or nil
 end
 
+local function words(name)
+    return (name:gsub('(%l)(%u)', '%1 %2'):lower())
+end
+
+-- What the unit is doing: its current job, else its social activity
+-- (prayer, play, conversation...), else idle.
+local function add_status(row, unit)
+    local job = unit.job.current_job
+    local job_name = job and text(dfhack.job.getName(job)) or nil
+    local activity
+    local social = U.getMainSocialActivity(unit)
+    if social then
+        local event = #social.events > 0 and social.events[#social.events - 1]
+        local name = event and df.activity_event_type[event:getType()]
+            or df.activity_entry_type[social.type]
+        activity = name and words(name)
+    end
+    row.job = job_name
+    row.activity = activity
+    row.sleeping = (job and job.job_type == df.job_type.Sleep) or nil
+    row.idle = (not job and not activity) or nil
+    row.status = job_name or activity or 'idle'
+end
+
 local function resident_row(unit)
     local row = base_row(unit)
-    local job = unit.job.current_job
-    row.job = job and text(dfhack.job.getName(job)) or nil
+    add_status(row, unit)
     row.mood = STRESS_NAMES[U.getStressCategory(unit)]
     local squad = unit.military.squad_id >= 0 and df.squad.find(unit.military.squad_id)
     row.squad = squad and text(dfhack.translation.translateName(squad.name, true)) or nil
@@ -286,6 +309,73 @@ function recent_reports(limit, from, to, category)
         table.insert(ordered, picked[i])
     end
     return json.encode({total_matching = total, reports = ordered}, {pretty = false})
+end
+
+-- Item groups matching `search` (substring of the item description or type
+-- name) and `item_type` (e.g. "WOOD", "DRINK"; "" = any), as JSON. Items are
+-- grouped by type and description; groups are sorted by total quantity.
+-- Items carried by units and merchants' goods are left out. Arguments are
+-- strings; offset and limit are numbers in string form.
+function search_items(search, item_type, offset, limit)
+    offset, limit = tonumber(offset), tonumber(limit)
+    search = (search or ''):lower()
+    item_type = (item_type or ''):upper()
+    if item_type ~= '' and df.item_type[item_type] == nil then
+        return json.encode({error = 'Unknown item type "' .. item_type .. '"; use a DF item type such as WOOD, DRINK, FOOD, BAR or BOULDER.'})
+    end
+    local groups, order, type_counts, entries = {}, {}, {}, 0
+    for _, item in ipairs(df.global.world.items.other.IN_PLAY) do
+        local flags = item.flags
+        if not (flags.trader or flags.garbage_collect or flags.removed
+                or dfhack.items.getHolderUnit(item)) then
+            local type_name = df.item_type[item:getType()]
+            local name = dfhack.items.getDescription(item, 0):gsub(' %[%d+%]$', '')
+            if (item_type == '' or type_name == item_type)
+                and (search == '' or name:lower():find(search, 1, true)
+                    or type_name:lower():find(search, 1, true)) then
+                local key = type_name .. '|' .. name
+                local group = groups[key]
+                if not group then
+                    group = {name = name, item_type = type_name:lower(), quantity = 0,
+                        forbidden = 0, rotten = 0, locations = {}}
+                    groups[key] = group
+                    table.insert(order, group)
+                end
+                local count = item:getStackSize()
+                group.quantity = group.quantity + count
+                if flags.forbid then group.forbidden = group.forbidden + count end
+                if flags.rotten then group.rotten = group.rotten + count end
+                type_counts[type_name:lower()] = (type_counts[type_name:lower()] or 0) + count
+                entries = entries + 1
+                local x, y, z = dfhack.items.getPosition(item)
+                if x and #group.locations < 3 then
+                    local loc = {x = x, y = y, z = ui_z(z)}
+                    local dup = false
+                    for _, seen in ipairs(group.locations) do
+                        dup = dup or (seen.x == loc.x and seen.y == loc.y and seen.z == loc.z)
+                    end
+                    if not dup then table.insert(group.locations, loc) end
+                end
+            end
+        end
+    end
+    table.sort(order, function(a, b)
+        if a.quantity ~= b.quantity then return a.quantity > b.quantity end
+        return a.name < b.name
+    end)
+    local page = {}
+    for i = offset + 1, math.min(#order, offset + limit) do
+        local group = order[i]
+        if group.forbidden == 0 then group.forbidden = nil end
+        if group.rotten == 0 then group.rotten = nil end
+        table.insert(page, group)
+    end
+    local result = {total_matching = #order, item_stacks = entries,
+        quantity_by_type = type_counts, offset = offset, returned = #page, items = page}
+    if offset + #page < #order then
+        result.next_offset = offset + #page
+    end
+    return json.encode(result, {pretty = false})
 end
 
 return _ENV

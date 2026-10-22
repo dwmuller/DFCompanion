@@ -22,6 +22,7 @@ const TESTED_DWARF_FORTRESS_VERSION: &str = "53.16";
 const TESTED_DFHACK_VERSION: &str = "53.16-r2";
 pub const MAX_CREATURE_PAGE_SIZE: usize = 50;
 pub const MAX_REPORTS: usize = 50;
+pub const MAX_ITEM_PAGE_SIZE: usize = 50;
 const MAX_CREATURE_REPLY_BYTES: usize = 12 * 1024;
 const LUA_MODULE: &str = "rpc.dfcompanion";
 
@@ -377,6 +378,40 @@ impl GameState {
             .map_err(|error| format!("Could not parse the game reports: {error}"))
     }
 
+    /// Returns a page of item groups (see `search_items` in the Lua module).
+    pub fn search_items(
+        &self,
+        search: Option<&str>,
+        item_type: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        if !(1..=MAX_ITEM_PAGE_SIZE).contains(&limit) {
+            return Err(format!("The page size must be between 1 and {MAX_ITEM_PAGE_SIZE}."));
+        }
+        let reply = self
+            .with_client("Could not search items (is the DFCompanion Lua module installed?)", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "search_items".to_owned(),
+                    arguments: vec![
+                        search.unwrap_or_default().to_owned(),
+                        item_type.unwrap_or_default().to_owned(),
+                        offset.to_string(),
+                        limit.to_string(),
+                    ],
+                })
+            })?
+            .reply
+            .value;
+        let value: Value = serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the item search: {error}"))?;
+        match value.get("error").and_then(Value::as_str) {
+            Some(message) => Err(message.to_owned()),
+            None => Ok(value),
+        }
+    }
+
     /// Returns a page of the known creatures in one group of the game's
     /// Creatures screen, optionally restricted to rows whose name, race, or
     /// profession contains `search` (case-insensitive).
@@ -414,6 +449,7 @@ fn page_result(
 ) -> Result<Value, String> {
     let total = rows.len();
     let counts_by_race = count_by_race(rows);
+    let idle_count = rows.iter().filter(|row| row["idle"] == json!(true)).count();
     let mut page = rows
         .iter()
         .skip(offset)
@@ -430,6 +466,9 @@ fn page_result(
             "returned": page.len(),
             "creatures": &page,
         });
+        if group == CreatureGroup::Residents {
+            result["idle_count"] = json!(idle_count);
+        }
         if next_offset < total {
             result["next_offset"] = json!(next_offset);
         }
