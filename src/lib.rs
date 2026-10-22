@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost_types::Timestamp;
@@ -29,10 +30,64 @@ pub struct QueueItem {
     pub text: String,
 }
 
+const NOTIFICATION_HISTORY_LIMIT: usize = 500;
+
+/// Keeps recent UI notifications so a page that reloads (for example after
+/// visiting the configuration page) can replay the conversation.
+#[derive(Clone)]
+pub struct NotificationHistory {
+    inner: std::sync::Arc<std::sync::Mutex<VecDeque<String>>>,
+    live_tx: broadcast::Sender<String>,
+}
+
+impl NotificationHistory {
+    /// Records everything sent on `notifications_tx`. Without a Tokio runtime
+    /// nothing is recorded.
+    fn record(notifications_tx: &broadcast::Sender<String>) -> Self {
+        let history = Self {
+            inner: Default::default(),
+            live_tx: broadcast::channel(128).0,
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let mut rx = notifications_tx.subscribe();
+            let recorder = history.clone();
+            runtime.spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(message) => recorder.push(message),
+                        Err(broadcast::error::RecvError::Lagged(count)) => recorder.push(format!(
+                            "{count} notifications were missed."
+                        )),
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+        history
+    }
+
+    fn push(&self, message: String) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.len() == NOTIFICATION_HISTORY_LIMIT {
+            inner.pop_front();
+        }
+        inner.push_back(message.clone());
+        // Sent under the lock so subscribers never see a gap or a duplicate.
+        let _ = self.live_tx.send(message);
+    }
+
+    /// The recorded messages and a receiver for every message after them.
+    pub fn subscribe(&self) -> (Vec<String>, broadcast::Receiver<String>) {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        (inner.iter().cloned().collect(), self.live_tx.subscribe())
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<String>,
+    pub history: NotificationHistory,
     pub plugin_token: Option<String>,
     pub ai: std::sync::Arc<ai::AiRuntime>,
 }
@@ -53,11 +108,13 @@ impl AppState {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
         let ai = std::sync::Arc::new(ai::AiRuntime::new(configurations, notifications_tx.clone()));
+        let history = NotificationHistory::record(&notifications_tx);
 
         (
             Self {
                 queue_tx,
                 notifications_tx,
+                history,
                 plugin_token: None,
                 ai,
             },
@@ -235,6 +292,23 @@ pub fn validate_timestamp(timestamp: &Timestamp) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn notification_history_replays_then_streams_live() {
+        let (state, _queue_rx) = AppState::new();
+        state.notify("first");
+        state.notify("second");
+        for _ in 0..50 {
+            if state.history.subscribe().0.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let (backlog, mut live) = state.history.subscribe();
+        assert_eq!(backlog, ["first", "second"]);
+        state.notify("third");
+        assert_eq!(live.recv().await.unwrap(), "third");
+    }
     use api::{
         companion_client::CompanionClient, companion_server::CompanionServer,
         EventSubmissionStatus, SimulationEvent, SimulationTimestamp,

@@ -562,7 +562,9 @@ async fn stylesheet() -> impl IntoResponse {
 async fn events(
     State(state): State<AppState>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(state.notifications_tx.subscribe()).map(|notification| {
+    let (backlog, live) = state.history.subscribe();
+    let backlog = tokio_stream::iter(backlog.into_iter().map(|message| Ok(Event::default().data(message))));
+    let live = BroadcastStream::new(live).map(|notification| {
         Ok(match notification {
             Ok(message) => Event::default().data(message),
             Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(count)) => {
@@ -573,7 +575,7 @@ async fn events(
         })
     });
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(backlog.chain(live)).keep_alive(KeepAlive::default())
 }
 
 async fn chat(

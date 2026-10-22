@@ -6,6 +6,9 @@ const interactionMethodLabels = {
   Anthropic: "Anthropic",
 };
 
+// The server replays the recorded conversation on every (re)connection.
+eventStream.onopen = () => notifications.replaceChildren();
+
 eventStream.onmessage = (event) => {
   const item = document.createElement("li");
   item.textContent = event.data;

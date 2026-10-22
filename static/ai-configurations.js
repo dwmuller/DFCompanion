@@ -159,6 +159,7 @@ async function loadConfigurations() {
         ? "The selected configuration will be used for chat."
         : "No configuration is selected. Choose one before chatting."
       : "No configurations yet. Create one below.";
+    return result.configurations;
   } catch (error) {
     status.textContent = `Could not load configurations: ${error.message}`;
   }
@@ -282,9 +283,15 @@ form.addEventListener("submit", async (event) => {
         body: JSON.stringify(payload),
       },
     );
-    resetForm();
+    const configurations = await loadConfigurations();
+    const saved = id && configurations?.find((configuration) => configuration.id === id);
+    if (saved) {
+      // Keep showing the saved values rather than resetting the form.
+      editConfiguration(saved);
+    } else {
+      resetForm();
+    }
     formStatus.textContent = "Configuration saved.";
-    await loadConfigurations();
   } catch (error) {
     formStatus.textContent = `Could not save configuration: ${error.message}`;
   }
