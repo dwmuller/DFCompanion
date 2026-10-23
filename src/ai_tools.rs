@@ -139,6 +139,17 @@ struct ListZonesArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ListStockpilesArgs {
+    category: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListWorkshopsArgs {
     name: Option<String>,
     #[serde(default)]
@@ -281,6 +292,23 @@ fn registry() -> &'static [ToolSpec] {
                     }
                 })),
                 |game, args: ListZonesArgs| game.list_zones(args.zone_type.as_deref(), args.offset, args.limit),
+            ),
+            tool(
+                "list_stockpiles",
+                "List the fortress's stockpiles, each with id, name, corner positions (z matches the game's UI), size in tiles, how many tiles are in use (percent_tiles_in_use), number of item stacks and total quantity, the categories it accepts (food, wood, stone, bars_blocks, furniture, finished_goods, ...), and its largest groups of contents. Use it to see whether food, wood or other supplies are stored where they are needed, and which piles are full or empty. Use `category` to see only piles that accept one category and `name` to match a pile's name. Request another page with the returned next_offset when needed. This is read-only.",
+                with_paging(json!({
+                    "category": {
+                        "type": "string",
+                        "description": "Only include stockpiles accepting this category, e.g. \"food\", \"wood\", \"bars_blocks\", \"furniture\", \"weapons\"."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Only include stockpiles whose name contains this text (case-insensitive)."
+                    }
+                })),
+                |game, args: ListStockpilesArgs| {
+                    game.list_stockpiles(args.category.as_deref(), args.name.as_deref(), args.offset, args.limit)
+                },
             ),
             tool(
                 "list_locations",

@@ -954,6 +954,78 @@ function building_counts()
         notes = 'Workshops and furnaces are in list_workshops; zones in list_zones and list_locations.'})
 end
 
+local MAX_STOCKPILE_CONTENT_GROUPS = 5
+
+-- Stockpiles: where they are, what they accept, and how full they are, with
+-- the largest groups of items they hold. `category` keeps only stockpiles that
+-- accept that category (e.g. food, wood, bars_blocks); `name` matches the name.
+function list_stockpiles(category, name, offset, limit)
+    category = category ~= '' and category:lower() or nil
+    name = name ~= '' and name:lower() or nil
+    local rows = {}
+    local empty_count = 0
+    for _, pile in ipairs(df.global.world.buildings.other.STOCKPILE) do
+        local accepts = {}
+        for key, on in pairs(pile.settings.flags) do
+            if on and type(key) == 'string' then
+                table.insert(accepts, key)
+            end
+        end
+        table.sort(accepts)
+        local pile_name = dfhack.buildings.getName(pile)
+        local accepted = not category
+        for _, key in ipairs(accepts) do
+            if key == category then
+                accepted = true
+            end
+        end
+        if accepted and (not name or pile_name:lower():find(name, 1, true)) then
+            local tiles = zone_area(pile)
+            local occupied, quantity, stacks = {}, 0, 0
+            local groups, order = {}, {}
+            for _, item in ipairs(dfhack.buildings.getStockpileContents(pile)) do
+                stacks = stacks + 1
+                local count = item:getStackSize()
+                quantity = quantity + count
+                occupied[item.pos.x .. ',' .. item.pos.y] = true
+                local description = dfhack.items.getDescription(item, 0)
+                if not groups[description] then
+                    groups[description] = 0
+                    table.insert(order, description)
+                end
+                groups[description] = groups[description] + count
+            end
+            table.sort(order, function(a, b) return groups[a] > groups[b] end)
+            local contents = {}
+            for index = 1, math.min(#order, MAX_STOCKPILE_CONTENT_GROUPS) do
+                table.insert(contents, {item = order[index], quantity = groups[order[index]]})
+            end
+            local used = 0
+            for _ in pairs(occupied) do used = used + 1 end
+            if stacks == 0 then
+                empty_count = empty_count + 1
+            end
+            table.insert(rows, {
+                id = pile.id,
+                name = pile_name,
+                x1 = pile.x1, y1 = pile.y1, x2 = pile.x2, y2 = pile.y2, z = ui_z(pile.z),
+                tiles = tiles,
+                tiles_in_use = used,
+                percent_tiles_in_use = tiles > 0 and math.floor(100 * used / tiles) or 0,
+                stacks = stacks,
+                total_quantity = quantity,
+                accepts = accepts,
+                largest_contents = contents,
+                more_item_kinds = math.max(0, #order - MAX_STOCKPILE_CONTENT_GROUPS),
+            })
+        end
+    end
+    return reply(paged({
+        empty_in_selection = empty_count,
+        notes = 'tiles_in_use counts tiles holding at least one item; bins, barrels and other containers hold more than one item per tile, so a pile can be full at less than 100%. accepts lists the categories enabled (not every sub-filter).',
+    }, 'stockpiles', rows, offset, limit))
+end
+
 local STRANGE_MOODS = {[0] = 'Fey', 'Secretive', 'Possessed', 'Macabre', 'Fell'}
 local TICKS_PER_DAY = 1200
 

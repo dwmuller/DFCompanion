@@ -516,6 +516,27 @@ impl GameState {
         )
     }
 
+    /// Stockpiles with position, accepted categories, fullness and contents.
+    pub fn list_stockpiles(
+        &self,
+        category: Option<&str>,
+        name: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        check_page(limit)?;
+        self.call_lua_json(
+            "list stockpiles",
+            "list_stockpiles",
+            vec![
+                category.unwrap_or_default().to_owned(),
+                name.unwrap_or_default().to_owned(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
+        )
+    }
+
     /// Named locations such as temples and hospitals.
     pub fn list_locations(&self) -> Result<Value, String> {
         self.call_lua_json("list locations", "list_locations", Vec::new())
