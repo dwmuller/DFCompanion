@@ -530,6 +530,11 @@ impl GameState {
         self.call_lua_json("count buildings", "building_counts", Vec::new())
     }
 
+    /// Which DFHack automation helpers (autofarm, tailor, autotraining...) are on.
+    pub fn dfhack_automation(&self) -> Result<Value, String> {
+        self.call_lua_json("read DFHack automation status", "dfhack_automation", Vec::new())
+    }
+
     /// Citizens in a strange mood: demands, deliveries, workshop and time left.
     pub fn strange_moods(&self) -> Result<Value, String> {
         self.call_lua_json("list strange moods", "strange_moods", Vec::new())

@@ -312,6 +312,12 @@ fn registry() -> &'static [ToolSpec] {
                 |game, _: NoArgs| game.building_counts(),
             ),
             tool(
+                "get_dfhack_automation",
+                "List which of DFHack's automation and gameplay helpers are currently switched on (autofarm, autotraining, tailor, autolabor, autobutcher, autochop and so on; bugfix helpers are omitted), with a short description of each, plus the names of those that are available but off. Use it to explain activity you see: e.g. with autotraining on, dwarves change between military and civilian professions as they enter and leave training; autofarm changes farm plot crops; tailor orders clothing. This is read-only.",
+                json!({}),
+                |game, _: NoArgs| game.dfhack_automation(),
+            ),
+            tool(
                 "get_strange_moods",
                 "List citizens currently in a strange mood (fey, secretive, possessed, macabre, fell), like DFHack's showmood: each one's skill, claimed workshop and its position, every demanded item with how many are needed and delivered so far (all_demands_met), and the ticks and days left before the dwarf goes insane (1200 ticks per day). A dwarf who fails to finish goes berserk or melancholy, so unmet demands and a low days_left are urgent. This is read-only.",
                 json!({}),
