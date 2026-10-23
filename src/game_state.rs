@@ -516,6 +516,16 @@ impl GameState {
         )
     }
 
+    /// Squads with members, defined uniforms and what each member carries.
+    pub fn list_squads(&self, name: Option<&str>, offset: usize, limit: usize) -> Result<Value, String> {
+        check_page(limit)?;
+        self.call_lua_json(
+            "list squads",
+            "list_squads",
+            vec![name.unwrap_or_default().to_owned(), offset.to_string(), limit.to_string()],
+        )
+    }
+
     /// Stockpiles with position, accepted categories, fullness and contents.
     pub fn list_stockpiles(
         &self,

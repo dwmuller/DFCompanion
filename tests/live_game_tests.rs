@@ -273,6 +273,8 @@ async fn ai_tools_end_to_end() {
     let counts = call("get_building_counts", serde_json::json!({})).await;
     assert!(counts["buildings"].is_array(), "{counts}");
     let moods = call("get_strange_moods", serde_json::json!({})).await;
+    let squads = call("list_squads", serde_json::json!({"limit": 2})).await;
+    assert!(squads["squads"].is_array(), "{squads}");
     let piles = call("list_stockpiles", serde_json::json!({"limit": 5})).await;
     assert!(piles["stockpiles"].is_array(), "{piles}");
     assert!(moods["moods"].is_array(), "{moods}");

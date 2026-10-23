@@ -139,6 +139,20 @@ struct ListZonesArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ListSquadsArgs {
+    name: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_squad_limit")]
+    limit: usize,
+}
+
+fn default_squad_limit() -> usize {
+    5
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListStockpilesArgs {
     category: Option<String>,
     name: Option<String>,
@@ -292,6 +306,17 @@ fn registry() -> &'static [ToolSpec] {
                     }
                 })),
                 |game, args: ListZonesArgs| game.list_zones(args.zone_type.as_deref(), args.offset, args.limit),
+            ),
+            tool(
+                "list_squads",
+                "List the fortress's military squads: name, current routine (e.g. Constant training, Ready), member count, vacant positions, standing orders, and for each member their unit id, name and profession, position (z matches the game's UI), whether the squad defines a uniform for them, the uniform slots wanted (body, head, pants, gloves, shoes, shield, weapon) with what is missing_from_uniform, the weapons they carry, a count of carried items by type and how many show wear. A member without a defined uniform just wears civilian clothing, so \"is the militia armed?\" is answered by missing_from_uniform and weapons. Use `name` to pick one squad. Request another page with the returned next_offset when needed. This is read-only.",
+                with_paging(json!({
+                    "name": {
+                        "type": "string",
+                        "description": "Only include squads whose name contains this text (case-insensitive)."
+                    }
+                })),
+                |game, args: ListSquadsArgs| game.list_squads(args.name.as_deref(), args.offset, args.limit),
             ),
             tool(
                 "list_stockpiles",
