@@ -296,8 +296,25 @@ impl GameState {
             .value
             .concat();
         let name = if name.is_empty() { "(no fortress loaded)".to_owned() } else { name };
+        let script_enabled = self
+            .with_client("Could not check whether the DFCompanion script is enabled", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "script_enabled".to_owned(),
+                    arguments: Vec::new(),
+                })
+            })?
+            .reply
+            .value
+            .concat()
+            == "true";
+        let events = if script_enabled {
+            "The DFCompanion script is enabled and forwarding game events."
+        } else {
+            "The DFCompanion script is not enabled, so game events will not be forwarded; enter `enable dfcompanion` in the DFHack console. Tools still work."
+        };
         Ok(format!(
-            "Connected to Dwarf Fortress. Fortress: {name}. Date: {date}. Game is {}.",
+            "Connected to Dwarf Fortress. Fortress: {name}. Date: {date}. Game is {}. {events}",
             if paused { "paused" } else { "running" }
         ))
     }

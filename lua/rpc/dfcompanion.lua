@@ -1076,4 +1076,11 @@ function dfhack_automation()
     return reply(result)
 end
 
+-- Whether the dfcompanion script (which forwards game events) is enabled.
+function script_enabled()
+    local output = dfhack.run_command_silent('enable')
+    local state = output:match('dfcompanion:%s+(%S+)')
+    return tostring(state == 'on')
+end
+
 return _ENV
