@@ -1081,11 +1081,9 @@ end
 -- supposed to wear, and what each is actually carrying.
 function list_squads(name, offset, limit)
     name = name and name ~= '' and name:lower()
-    local fort = df.historical_entity.find(df.global.plotinfo.group_id)
     local rows = {}
-    for _, squad_id in ipairs(fort and fort.squads or {}) do
-        local squad = df.squad.find(squad_id)
-        if squad then
+    for _, squad in ipairs(df.global.world.squads.all or {}) do
+        if (squad.entity_id == df.global.plotinfo.group_id) then
             local label = 
                 text(dfhack.translation.translateName(squad.name, true)
                 ..(squad.alias ~= '' and ' ('..squad.alias..')' or ''))
