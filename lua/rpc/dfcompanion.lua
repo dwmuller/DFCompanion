@@ -1063,7 +1063,7 @@ local function squad_member_row(position, index)
     return {
         position_number = index,
         unit_id = unit.id,
-        name = U.getReadableName(unit),
+        name = text(U.getReadableName(unit)),
         position = position_of(unit),
         uniform_specified = next(wanted) ~= nil,
         uniform_slots_wanted = wanted,
@@ -1080,14 +1080,15 @@ end
 -- Squads of the fortress with their members, the uniform each member is
 -- supposed to wear, and what each is actually carrying.
 function list_squads(name, offset, limit)
-    name = name ~= '' and name:lower() or nil
+    name = name and name ~= '' and name:lower()
     local fort = df.historical_entity.find(df.global.plotinfo.group_id)
     local rows = {}
     for _, squad_id in ipairs(fort and fort.squads or {}) do
         local squad = df.squad.find(squad_id)
         if squad then
-            local label = squad.alias ~= '' and squad.alias
-                or dfhack.translation.translateName(squad.name, true)
+            local label = 
+                text(dfhack.translation.translateName(squad.name, true)
+                ..(squad.alias ~= '' and ' ('..squad.alias..')' or ''))
             if not name or label:lower():find(name, 1, true) then
                 local members, vacant = {}, 0
                 local uniformed = 0
