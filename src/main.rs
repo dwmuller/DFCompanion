@@ -26,7 +26,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let grpc_server = Server::builder()
         .add_service(CompanionServer::new(grpc_service))
         .serve_with_incoming(grpc_incoming);
-    let http_server = axum::serve(http_listener, web::router(state));
+    let mut app = web::router(state);
+    if std::env::args().any(|arg| arg == "--trace-http") {
+        app = web::with_request_tracing(app);
+    }
+    let http_server = axum::serve(http_listener, app);
 
     println!("DFCompanion gRPC listening on http://{grpc_address}");
     println!("DFCompanion web UI listening on http://{http_address}");

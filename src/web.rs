@@ -87,6 +87,20 @@ struct PluginEventResult {
     message: String,
 }
 
+/// Logs every HTTP request and response to stdout. Enabled by `--trace-http`.
+pub fn with_request_tracing(router: Router) -> Router {
+    use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
+    use tracing::Level;
+
+    tracing_subscriber::fmt().with_writer(std::io::stdout).compact().init();
+    router.layer(
+        TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_request(DefaultOnRequest::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+    )
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
