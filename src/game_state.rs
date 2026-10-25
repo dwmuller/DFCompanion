@@ -11,7 +11,7 @@
 //! Creatures screen. Queries fail rather than fall back to the unfiltered unit
 //! list when that module is unavailable.
 
-use dfhack_remote::{Client, CoreRunLuaRequest, UnitDefinition};
+use dfhack_remote::{Client, CoreRunLuaRequest};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -25,6 +25,20 @@ pub const MAX_REPORTS: usize = 50;
 pub const MAX_ITEM_PAGE_SIZE: usize = 50;
 const MAX_CREATURE_REPLY_BYTES: usize = 12 * 1024;
 const LUA_MODULE: &str = "rpc.dfcompanion";
+pub const MAX_DETAIL_UNITS: usize = 10;
+pub const DETAIL_PARTS: [&str; 4] = ["skills", "attributes", "health", "mind"];
+pub const SKILL_CLASSES: [&str; 10] = [
+    "normal",
+    "medical",
+    "personal",
+    "social",
+    "cultural",
+    "military_weapon",
+    "military_unarmed",
+    "military_attack",
+    "military_defense",
+    "military_misc",
+];
 
 /// The groups of the game's Creatures screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +128,22 @@ fn tidy_row(row: &Value) -> Value {
         }
     }
     row
+}
+
+/// The Lua JSON encoder writes an empty list as an empty object; restore the
+/// lists that detail parts can leave empty.
+fn restore_empty_lists(details: &mut Value) {
+    for path in [&["skills"][..], &["mind", "recent_thoughts"], &["mind", "unmet_needs"]] {
+        let mut node = Some(&mut *details);
+        for key in path {
+            node = node.and_then(|n| n.get_mut(*key));
+        }
+        if let Some(node) = node {
+            if node.as_object().is_some_and(|map| map.is_empty()) {
+                *node = json!([]);
+            }
+        }
+    }
 }
 
 fn count_by_race(rows: &[Value]) -> BTreeMap<String, usize> {
@@ -221,16 +251,7 @@ impl GameState {
         Ok(())
     }
 
-    fn unit_list(&self) -> Result<Vec<UnitDefinition>, String> {
-        Ok(self
-            .with_client("Could not retrieve the fortress unit list", |client| {
-                client.remote_fortress_reader().get_unit_list()
-            })?
-            .reply
-            .creature_list)
-    }
-
-    fn known_creatures(&self) -> Result<KnownCreatures, String> {
+    fn known_creatures(&self, details: Option<&Value>) -> Result<KnownCreatures, String> {
         let reply = self
             .with_client(
                 "Could not determine which creatures the player knows of (is the DFCompanion Lua module installed?)",
@@ -238,7 +259,7 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: "known_creatures".to_owned(),
-                        arguments: Vec::new(),
+                        arguments: details.map(|options| vec![options.to_string()]).unwrap_or_default(),
                     })
                 },
             )?
@@ -347,7 +368,7 @@ impl GameState {
                 client.remote_fortress_reader().get_view_info()
             })?
             .reply;
-        let creatures = self.known_creatures()?;
+        let creatures = self.known_creatures(None)?;
         let game_date = self.game_date()?;
         let z_offset = self.z_offset()?;
         let counts = CreatureGroup::ALL
@@ -369,26 +390,65 @@ impl GameState {
         }))
     }
 
-    /// Returns detailed information about one creature the player knows of.
-    /// Creatures the player does not know of are reported as nonexistent.
-    pub fn unit_details(&self, unit_id: i32) -> Result<Value, String> {
-        let creatures = self.known_creatures()?;
-        let (group, row) = creatures
-            .find(i64::from(unit_id))
-            .ok_or_else(|| format!("No known creature with ID {unit_id}."))?;
-        let mut details = tidy_row(row);
-        details["group"] = json!(group.label());
-        if let Some(unit) = self.unit_list()?.iter().find(|unit| unit.id == unit_id) {
-            details["blood_percent"] = json!(unit
-                .blood_max
-                .zip(unit.blood_count)
-                .filter(|(max, _)| *max > 0)
-                .map(|(max, count)| count * 100 / max));
-            details["wound_count"] = json!(unit.wounds.len());
-            details["inventory_item_count"] = json!(unit.inventory.len());
-            details["rider_id"] = json!(unit.rider_id.filter(|id| *id >= 0));
+    /// Returns information about up to `MAX_DETAIL_UNITS` creatures the player
+    /// knows of: everything the lists show plus the requested `include` parts.
+    /// Creatures the player does not know of are listed in `not_found`.
+    pub fn unit_details(
+        &self,
+        unit_ids: &[i32],
+        include: &[String],
+        skill_class: Option<&str>,
+        min_skill_level: Option<i64>,
+    ) -> Result<Value, String> {
+        if !(1..=MAX_DETAIL_UNITS).contains(&unit_ids.len()) {
+            return Err(format!("Give between 1 and {MAX_DETAIL_UNITS} unit IDs."));
         }
-        Ok(details)
+        if let Some(part) = include.iter().find(|p| !DETAIL_PARTS.contains(&p.as_str())) {
+            return Err(format!(
+                "Unknown part \"{part}\"; use any of: {}.",
+                DETAIL_PARTS.join(", ")
+            ));
+        }
+        if let Some(class) = skill_class {
+            if !SKILL_CLASSES.contains(&class) {
+                return Err(format!(
+                    "Unknown skill class \"{class}\"; use one of: {}.",
+                    SKILL_CLASSES.join(", ")
+                ));
+            }
+        }
+        let parts = include
+            .iter()
+            .map(|part| (part.as_str(), true))
+            .collect::<BTreeMap<_, _>>();
+        let options = json!({
+            "ids": unit_ids,
+            "parts": parts,
+            "skill_class": skill_class,
+            "min_skill_level": min_skill_level,
+        });
+        let creatures = self.known_creatures(Some(&options))?;
+        let mut units = Vec::new();
+        let mut not_found = Vec::new();
+        for &id in unit_ids {
+            match creatures.find(i64::from(id)) {
+                Some((group, row)) => {
+                    let mut details = tidy_row(row);
+                    details["group"] = json!(group.label());
+                    restore_empty_lists(&mut details);
+                    units.push(details);
+                }
+                None => not_found.push(id),
+            }
+        }
+        if units.is_empty() {
+            return Err(format!("No known creature with ID {}.", not_found[0]));
+        }
+        let mut result = json!({"units": units});
+        if !not_found.is_empty() {
+            result["not_found"] = json!(not_found);
+        }
+        Ok(result)
     }
 
     /// Returns the newest `limit` announcements, oldest first, optionally
@@ -432,27 +492,6 @@ impl GameState {
             .value;
         serde_json::from_str(&reply.concat())
             .map_err(|error| format!("Could not parse the game reports: {error}"))
-    }
-
-    /// Returns a resident's mood, stress, recent thoughts and unmet needs (see
-    /// `unit_mind` in the Lua module).
-    pub fn unit_mind(&self, unit_id: i32) -> Result<Value, String> {
-        let reply = self
-            .with_client("Could not read the unit's mind (is the DFCompanion Lua module installed?)", |client| {
-                client.core().run_lua(CoreRunLuaRequest {
-                    module: LUA_MODULE.to_owned(),
-                    function: "unit_mind".to_owned(),
-                    arguments: vec![unit_id.to_string()],
-                })
-            })?
-            .reply
-            .value;
-        let value: Value = serde_json::from_str(&reply.concat())
-            .map_err(|error| format!("Could not parse the unit's mind: {error}"))?;
-        match value.get("error").and_then(Value::as_str) {
-            Some(message) => Err(message.to_owned()),
-            None => Ok(value),
-        }
     }
 
     /// Returns food and drink stocks with rough days of supply (see
@@ -637,7 +676,7 @@ impl GameState {
                 "The page size must be between 1 and {MAX_CREATURE_PAGE_SIZE}."
             ));
         }
-        let creatures = self.known_creatures()?;
+        let creatures = self.known_creatures(None)?;
         let search = search.map(str::to_lowercase).filter(|s| !s.is_empty());
         let matching = creatures
             .rows(group)
@@ -794,6 +833,18 @@ mod tests {
         for bad in ["", "254-13-01", "254-01-29", "254-01", "254-01-01:1200", "254-01-01:x", "a-b-c", "-1-01-01"] {
             assert!(validate_game_date(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn empty_detail_lists_are_restored() {
+        let mut details = json!({"skills": {}, "mind": {"recent_thoughts": {}, "unmet_needs": [1]}});
+        restore_empty_lists(&mut details);
+        assert_eq!(details["skills"], json!([]));
+        assert_eq!(details["mind"]["recent_thoughts"], json!([]));
+        assert_eq!(details["mind"]["unmet_needs"], json!([1]));
+        let mut plain = json!({"id": 1});
+        restore_empty_lists(&mut plain);
+        assert_eq!(plain, json!({"id": 1}));
     }
 
     #[test]

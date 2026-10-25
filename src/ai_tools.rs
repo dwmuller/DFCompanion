@@ -112,7 +112,11 @@ fn list_tool(name: &'static str, description: &'static str, group: CreatureGroup
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnitDetailsArgs {
-    unit_id: i32,
+    unit_ids: Vec<i32>,
+    #[serde(default)]
+    include: Vec<String>,
+    skill_class: Option<String>,
+    min_skill_level: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -250,28 +254,39 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_unit_details",
-                "Get details about one creature by ID (from one of the list tools): everything the list shows plus blood level, wound count, and carried item count. Creatures the player does not know of are reported as nonexistent. This is read-only.",
+                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
                 json!({
-                    "unit_id": {
+                    "unit_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "1 to 10 unit IDs."
+                    },
+                    "include": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind"]},
+                        "description": "Detail parts to add. Default: none."
+                    },
+                    "skill_class": {
+                        "type": "string",
+                        "enum": ["normal", "medical", "personal", "social", "cultural", "military_weapon", "military_unarmed", "military_attack", "military_defense", "military_misc"],
+                        "description": "With skills: only skills of this class."
+                    },
+                    "min_skill_level": {
                         "type": "integer",
-                        "description": "The unit ID."
+                        "minimum": 0,
+                        "description": "With skills: only skills at or above this level."
                     }
                 }),
-                |game, args: UnitDetailsArgs| game.unit_details(args.unit_id),
+                |game, args: UnitDetailsArgs| {
+                    game.unit_details(
+                        &args.unit_ids,
+                        &args.include,
+                        args.skill_class.as_deref(),
+                        args.min_skill_level,
+                    )
+                },
             )
-            .required(&["unit_id"]),
-            tool(
-                "get_unit_mind",
-                "Explain a resident's mood: the stress level and mood name, their recent thoughts (grouped by kind with counts and the date of the newest, e.g. \"saw dead body\", \"bedroom quality\", \"thirsty\", and unfulfilled needs), and their unmet needs (what they want: e.g. pray or meditate, eat good meal, socialize, with how unfocused it makes them, and the deity for worship needs). Use it to answer why a dwarf is unhappy. Only living citizens and residents; take the unit ID from list_residents. Thought text is derived from the game's thought types, not the game's exact wording. This is read-only.",
-                json!({
-                    "unit_id": {
-                        "type": "integer",
-                        "description": "The unit ID of a resident."
-                    }
-                }),
-                |game, args: UnitDetailsArgs| game.unit_mind(args.unit_id),
-            )
-            .required(&["unit_id"]),
+            .required(&["unit_ids"]),
             tool(
                 "get_food_drink_summary",
                 "Summarize the fortress's food and drink stocks: total, available (not forbidden or rotten), forbidden and rotten units; a rough estimate of days of supply at the current population; the drink varieties (e.g. wine, rum) and the most plentiful food kinds; and food by category (prepared meals, meat, fish, dairy and eggs). Counts match the game's status header; edible raw plants are reported separately. The result states its consumption assumptions. Use search_items for details about a specific item or its location. This is read-only.",
@@ -661,12 +676,13 @@ mod tests {
         for spec in registry() {
             assert!(list.contains(spec.name));
         }
-        assert!(list.contains("get_unit_details(unit_id)"));
+        assert!(list.contains("get_unit_details(unit_ids, [include], [skill_class], [min_skill_level])"));
         assert!(list.contains("list_residents([offset], [limit], [search])"));
         assert!(list.contains("get_fortress_overview()"));
 
         let text = describe_tool("get_unit_details").unwrap();
-        assert!(text.contains("unit_id (integer, required)"));
+        assert!(text.contains("unit_ids (array, required)"));
+        assert!(text.contains("attributes"));
         let text = describe_tool("list_residents").unwrap();
         assert!(text.contains("limit (integer, optional) [1..50]"));
         assert!(describe_tool("get_fortress_overview").unwrap().contains("Arguments: none"));

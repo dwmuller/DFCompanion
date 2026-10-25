@@ -179,32 +179,173 @@ local function belongs_to_fortress(unit)
         or (U.isOwnCiv(unit) and U.isTame(unit))
 end
 
+-- DFHack's skill classes, as snake_case names: normal (labor skills), medical,
+-- personal, social, cultural, military_weapon, military_unarmed,
+-- military_attack, military_defense, military_misc.
+local function snake(name)
+    return (name:gsub('(%l)(%u)', '%1_%2'):lower())
+end
+
+local function skills_of(unit)
+    local skills = {}
+    local soul = unit.status.current_soul
+    if soul then
+        for _, skill in ipairs(soul.skills) do
+            local attrs = df.job_skill.attrs[skill.id]
+            table.insert(skills, {
+                name = attrs and attrs.caption and attrs.caption:lower()
+                    or words(df.job_skill[skill.id] or tostring(skill.id)),
+                class = snake(df.job_skill_class[attrs and attrs.type or 0] or 'Normal'),
+                level = skill.rating,
+                experience = skill.experience,
+            })
+        end
+    end
+    table.sort(skills, function(a, b)
+        if a.level ~= b.level then return a.level > b.level end
+        return a.name < b.name
+    end)
+    return skills
+end
+
+-- Effective attribute values with the unit's caste median for comparison.
+local function attributes_of(unit)
+    local raw = df.creature_raw.find(unit.race)
+    local caste = raw and raw.caste[unit.caste]
+    local function collect(enum, value_of, ranges)
+        local result = {}
+        for id = enum._first_item, enum._last_item do
+            local entry = {value = value_of(unit, id)}
+            local range = ranges and ranges[id]
+            if range then
+                entry.caste_median = range[3]
+            end
+            result[enum[id]:lower()] = entry
+        end
+        return result
+    end
+    local attributes = {
+        physical = collect(df.physical_attribute_type, U.getPhysicalAttrValue,
+            caste and caste.attributes.phys_att_range),
+    }
+    if unit.status.current_soul then
+        attributes.mental = collect(df.mental_attribute_type, U.getMentalAttrValue,
+            caste and caste.attributes.ment_att_range)
+    end
+    return attributes
+end
+
+-- Injury state. impaired_parts are body parts that lost function, muscle or
+-- structure, or have a severed nerve (a scar or bruise does not count).
+local function health_of(unit)
+    local body = unit.body
+    local missing, impaired = 0, 0
+    local status = body.components.body_part_status
+    for i = 0, #status - 1 do
+        local flags = status[i]
+        if flags.missing then
+            missing = missing + 1
+        elseif flags.organ_loss or flags.muscle_loss or flags.bone_loss
+            or flags.motor_nerve_severed or flags.sensory_nerve_severed then
+            impaired = impaired + 1
+        end
+    end
+    local infected = 0
+    for _, wound in ipairs(body.wounds) do
+        if wound.flags.infection then
+            infected = infected + 1
+        end
+    end
+    return {
+        blood_percent = body.blood_max > 0 and body.blood_count * 100 // body.blood_max or nil,
+        wound_count = #body.wounds,
+        infected_wounds = infected,
+        missing_parts = missing,
+        impaired_parts = impaired,
+        pain = unit.counters.pain,
+        working_limbs = {
+            stand = unit.status2.limbs_stand_count, stand_max = unit.status2.limbs_stand_max,
+            grasp = unit.status2.limbs_grasp_count, grasp_max = unit.status2.limbs_grasp_max,
+        },
+    }
+end
+
+local mind_of -- defined below, with the need and thought tables it uses
+
+-- Adds the detail parts the caller asked for (options.parts is a set of
+-- skills, attributes, health, mind). Skills can be limited to one class and a
+-- minimum level.
+local function add_details(row, unit, options)
+    local parts = options.parts
+    if parts.skills then
+        local skills = {}
+        for _, skill in ipairs(skills_of(unit)) do
+            if (not options.skill_class or skill.class == options.skill_class)
+                and skill.level >= (options.min_skill_level or 0) then
+                table.insert(skills, skill)
+            end
+        end
+        row.skills = skills
+    end
+    if parts.attributes then
+        row.attributes = attributes_of(unit)
+    end
+    if parts.health then
+        row.health = health_of(unit)
+    end
+    if parts.mind then
+        row.mind = mind_of(unit)
+    end
+    row.carried_item_count = #unit.inventory
+    local rider = unit.relationship_ids[df.unit_relationship_type.RiderMount]
+    row.rider_id = rider and rider >= 0 and rider or nil
+end
+
 -- The creatures the player knows of, as JSON:
 -- {residents = [...], pets = [...], other = [...], dead = [...]}
-function known_creatures()
+-- `options` (optional) selects creatures to give details for:
+-- {ids = {...}, parts = {skills = true, ...}, skill_class, min_skill_level}.
+local function known_creatures_data(options)
+    local detail_ids = {}
+    for _, id in ipairs(options and options.ids or {}) do
+        detail_ids[id] = true
+    end
     local active = {}
     for _, unit in ipairs(df.global.world.units.active) do
         active[unit.id] = true
     end
     local result = {residents = {}, pets = {}, other = {}, dead = {}}
     for _, unit in ipairs(df.global.world.units.all) do
+        local group, row
         if U.isDead(unit) then
             if active[unit.id] and (belongs_to_fortress(unit) or is_seen(unit)) then
-                table.insert(result.dead, dead_row(unit, 'deceased'))
+                group, row = result.dead, dead_row(unit, 'deceased')
             end
         elseif not active[unit.id] then
             if U.isOwnCiv(unit) and U.isTame(unit) then
-                table.insert(result.dead, dead_row(unit, 'missing'))
+                group, row = result.dead, dead_row(unit, 'missing')
             end
         elseif U.isCitizen(unit) or U.isResident(unit) then
-            table.insert(result.residents, resident_row(unit))
+            group, row = result.residents, resident_row(unit)
         elseif belongs_to_fortress(unit) then
-            table.insert(result.pets, pet_row(unit))
+            group, row = result.pets, pet_row(unit)
         elseif is_seen(unit) then
-            table.insert(result.other, other_row(unit))
+            group, row = result.other, other_row(unit)
+        end
+        if row then
+            if detail_ids[unit.id] then
+                add_details(row, unit, options)
+            end
+            table.insert(group, row)
         end
     end
-    return json.encode(result, {pretty = false})
+    return result
+end
+
+-- `options_json` is "" for the plain lists, else the options described above.
+function known_creatures(options_json)
+    local options = options_json and options_json ~= '' and json.decode(options_json) or nil
+    return json.encode(known_creatures_data(options), {pretty = false})
 end
 
 local function format_date(year, tick_in_year)
@@ -372,18 +513,16 @@ local function focus_band(focus_level)
     return 'badly distracted'
 end
 
--- A citizen's or resident's mental state as JSON: mood, stress, recent
--- thoughts (emotions grouped by thought type, newest first) and unmet needs.
--- On failure returns {error = ...}.
-function unit_mind(unit_id)
-    local unit = df.unit.find(tonumber(unit_id))
-    if not unit or U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
-        return json.encode({error = 'No living resident with ID ' .. tostring(unit_id) ..
-            '. Use a unit ID from list_residents.'})
+-- A citizen's or resident's mental state: mood, stress, recent thoughts
+-- (emotions grouped by thought type, newest first) and unmet needs. On
+-- failure returns {error = ...}.
+function mind_of(unit)
+    if U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
+        return {error = 'Only living citizens and residents have mind data.'}
     end
     local soul = unit.status.current_soul
     if not soul then
-        return json.encode({error = 'This unit has no personality data.'})
+        return {error = 'This unit has no personality data.'}
     end
     local personality = soul.personality
     local category = U.getStressCategory(unit)
@@ -436,9 +575,7 @@ function unit_mind(unit_id)
     end
     table.sort(unmet, function(a, b) return a.focus_level < b.focus_level end)
 
-    return json.encode({
-        id = unit.id,
-        name = name_of(unit),
+    return {
         mood = STRESS_NAMES[category],
         stress = personality.stress,
         long_term_stress = personality.longterm_stress,
@@ -447,7 +584,7 @@ function unit_mind(unit_id)
         unmet_needs = unmet,
         met_need_count = met,
         notes = 'Lower stress is better (negative is calm). Thoughts are grouped by kind with a count and the date of the newest one. Needs are unmet when focus_level is below ' .. UNMET_FOCUS .. '.',
-    }, {pretty = false})
+           }
 end
 
 -- Item groups matching `search` (substring of the item description or type

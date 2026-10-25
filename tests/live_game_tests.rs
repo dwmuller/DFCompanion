@@ -163,10 +163,13 @@ fn material_and_item_lists() {
 /// Drop any cached copy of the Lua module from an earlier version.
 fn reload_lua_module() {
     let mut client = connect();
-    let _ = client.core().run_command(dfhack_remote::CoreRunCommandRequest {
-        command: "lua".to_owned(),
-        arguments: vec!["package.loaded['rpc.dfcompanion']=nil".to_owned()],
-    });
+    client
+        .core()
+        .run_command(dfhack_remote::CoreRunCommandRequest {
+            command: "lua".to_owned(),
+            arguments: vec!["package.loaded['rpc.dfcompanion']=nil".to_owned()],
+        })
+        .expect("Could not remotely reload the DFCompanion Lua module");
 }
 
 /// Every AI tool, through the same dispatcher the model uses.
@@ -195,17 +198,40 @@ async fn ai_tools_end_to_end() {
         }
     }
     if let Some(id) = first_id {
-        let details = call("get_unit_details", serde_json::json!({"unit_id": id})).await;
-        assert!(details.get("error").is_none(), "{details}");
+        let reply = call(
+            "get_unit_details",
+            serde_json::json!({"unit_ids": [id, 999_999_999], "include": ["skills", "attributes", "health", "mind"]}),
+        )
+        .await;
+        assert!(reply.get("error").is_none(), "{reply}");
+        assert_eq!(reply["not_found"], serde_json::json!([999_999_999]), "{reply}");
+        let details = &reply["units"][0];
+        assert_eq!(details["id"].as_i64(), Some(id), "{details}");
+        assert!(details["skills"].is_array(), "{details}");
+        assert!(details["attributes"]["physical"]["strength"]["value"].is_i64(), "{details}");
+        assert!(details["health"]["wound_count"].is_i64(), "{details}");
+        for skill in details["skills"].as_array().unwrap() {
+            assert!(skill["name"].is_string() && skill["class"].is_string(), "{skill}");
+            assert!(skill["level"].is_i64(), "{skill}");
+            assert!(skill["experience"].is_i64(), "{skill}");
+        }
         // The first id comes from the residents list when there are residents.
-        let mind = call("get_unit_mind", serde_json::json!({"unit_id": id})).await;
-        assert!(mind.get("error").is_none(), "{mind}");
+        let mind = &details["mind"];
         assert!(mind["mood"].is_string() && mind["recent_thoughts"].is_array(), "{mind}");
         assert!(mind["unmet_needs"].is_array(), "{mind}");
+
+        let plain = call("get_unit_details", serde_json::json!({"unit_ids": [id]})).await;
+        assert!(plain["units"][0].get("skills").is_none(), "{plain}");
+        let filtered = call(
+            "get_unit_details",
+            serde_json::json!({"unit_ids": [id], "include": ["skills"], "skill_class": "military_weapon", "min_skill_level": 1}),
+        )
+        .await;
+        for skill in filtered["units"][0]["skills"].as_array().unwrap() {
+            assert_eq!(skill["class"], "military_weapon", "{skill}");
+        }
     }
-    let no_mind = call("get_unit_mind", serde_json::json!({"unit_id": 999_999_999})).await;
-    assert!(no_mind.get("error").is_some(), "{no_mind}");
-    let unknown = call("get_unit_details", serde_json::json!({"unit_id": 999_999_999})).await;
+    let unknown = call("get_unit_details", serde_json::json!({"unit_ids": [999_999_999]})).await;
     assert!(unknown.get("error").is_some(), "{unknown}");
     let reports = call("get_recent_reports", serde_json::json!({"limit": 5})).await;
     assert!(reports.get("error").is_none(), "{reports}");
