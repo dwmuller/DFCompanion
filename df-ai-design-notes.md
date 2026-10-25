@@ -172,3 +172,64 @@ The AI should receive introductory orientation explaining that DFCompanion is a 
 
 ## Early proof-of-concept milestone
 Verify plugin-event delivery through a protobuf gRPC call into the bounded queue, verify that web chat enters the same queue under `user_input`, and test provider requests through the provider-neutral AI interface.
+
+## Comments from AI companions on tools
+This section will be updated frequently to track interesting fresh commentary.
+
+### Git ref fe4e23b
+
+1. Provide observations about the tool set available to you, particularly with respect to answering requests similar to the one you just responded to.
+2. **Companion:**
+
+Fair question — that request was unusually tool-hungry, so here's what held up and what I had to guess at.
+
+**Tools that carried the weight**
+
+    - `find_candidates` is the workhorse: `unassigned_to_squad` + `skill_class: military_weapon` + `min_skill_level` + `healthy` gave me the pool immediately, and `total_matching` quietly answered a second question — "how many dwarves in this fort have skill X at level N?" — which is how I judged who was *spareable*. That's a counting use the tool isn't advertised for, and it's the reason the job was tractable at all.
+    - `skill: "<text>"` filtering by name let me check bench depth trade by trade (gem setting, armoursmith, furnace operator, glassmaking), one call each.
+    - `list_squads` gave me what the vacancy is *for*: uniform slots wanted, `missing_from_uniform`, weapons carried. That's what turned "has axe skill" into a recommendation.
+    - `get_unit_details` with `attributes` gave caste medians alongside values, which is the only reason Tekkud Kônlikot's agility got flagged as a real problem rather than a number.
+
+**Where I was inferring, not observing**
+
+    - **"Spareable" is a proxy.** There is no tool showing which labours a dwarf has enabled or which jobs they're assigned to. `status` is what they're doing *this tick* — Cerol was planting seeds, but that says nothing about whether farming is her designated trade. My coverage argument only holds if skills track work assignments reasonably.
+    - **"Only butcher" means "only living resident with butchery ≥ threshold."** It excludes visitors, and it doesn't tell me what happens if that dwarf is unreachable, sleeping, or in a bad mood.
+    - **Armory counts are unattributed.** `search_items` returns quantities, forbidden/rotten flags and sample positions — but not who has claimed an item. "10 iron spears" is not "10 spears available for issue"; some may already be claimed by the two squads. I stated the count and shouldn't be read as stating availability.
+    - **No tool reports autotraining's or autolabor's configuration** — `get_dfhack_automation` is on/off plus a one-line description. So whether it will yank my nominees into a training squad remains unverified, exactly as I flagged.
+
+**Gaps that hurt this specific request**
+
+    - `min_skill_level` has no maximum counterpart, and no filter for "this is the unit's *only* useful trade." Excluding irreplaceable artisans was manual: Likot Idònul (bone carving 18) only surfaced because her detail block happened to show it.
+    - `find_candidates` returns matched skills, not full skill lists or which skill is highest. So the shortlist can't be ranked on completeness without 10-at-a-time `get_unit_details` calls — that was the bulk of the work.
+    - No cross-reference for "who else could do job X *and* is themselves squadless/free" — I built the bench-coverage picture by chaining two or three separate lookups per trade.
+    - `list_squads` shows the routine's name, not its schedule. A squad "on constant training" and a squad with a real training schedule are indistinguishable from here.
+    - Uniform data obeys the squad, not the dwarf: with no uniform defined (Therapy Squad), the tool reports nothing about what members are actually wearing.
+    - Nothing covers burrows, alerts, or civilian-vs-military labour toggles — the mechanisms the player will actually use to implement any of this.
+
+**Practical note:** it's all read-only, so every recommendation ends with the player clicking. The upside is I can *verify* afterwards — re-running `list_squads` would show who actually landed where and what they're still missing from uniform. That's the one part of the loop the tool set closes cleanly.
+3. **You:**
+Would a Web search capability have been helpful to augment your memory of Dwarf Fortress' mechanics?
+4. **Companion:**
+
+Yes, in narrow bands — and it would have been nearly useless for the parts that actually made that task hard. Worth separating.
+
+**Where it would have genuinely helped**
+
+    - **DFHack automation semantics.** My flagged caveat — "will autotraining pull my nominees back out of The Royal Roads?" — is an answerable question, and the answer lives in DFHack's documentation, not in my head. Same for autolabor and tailor. I described `get_dfhack_automation` as on/off plus a one-line blurb because that's what the tool gives me; the docs would supply the rules.
+    - **Version-specific rules.** My mechanics memory is a sediment of 0.47 and v50+ that I can't cleanly date-stamp. Uniform slot handling, squad schedules, equipment claiming, how "constant training" actually behaves — these shifted between versions.
+    - **Attribute effects.** I asserted that agility 256 against a median of 900 means Tekkud trains slowly and gets hit a lot. Directionally safe, quantitatively hand-waved. Search could firm that up.
+
+**Where it would have been actively risky**
+
+There's no tool that reports the installed DF or DFHack version. So a search would return confidently-stated rules for *some* version, plausibly not yours, and I'd have had no way to check the fit. Confident wrong mechanics are worse than flagged uncertainty.
+
+**One probable error it might have caught**
+
+I said crossbow skill "doesn't fit a shield-and-weapon uniform" and steered Likot Idònul and Cog Lûkerush away on that basis. I believe marksdwarves can carry shields without penalty, which makes my reasoning shakier than I presented it. That's exactly the sort of folk-mechanics claim worth checking rather than asserting.
+
+**Where it wouldn't have helped at all**
+
+Every real blocker was fortress state, not rules: who is spareable, whether those ten iron spears are already claimed, which trades have a second practitioner, what the two squads have actually drawn from the armory. No amount of rules knowledge substitutes for `list_squads` and `search_items`.
+
+And the trust framing is the same as for game reports — web content is reference material to be cited and labeled, not instruction, and not automatically more current than the game in front of you.
+
