@@ -233,6 +233,21 @@ async fn ai_tools_end_to_end() {
     }
     let unknown = call("get_unit_details", serde_json::json!({"unit_ids": [999_999_999]})).await;
     assert!(unknown.get("error").is_some(), "{unknown}");
+    let found = call(
+        "find_candidates",
+        serde_json::json!({"skill_class": "military_weapon", "min_skill_level": 0, "adults_only": true, "healthy": true, "attribute": "strength", "limit": 3}),
+    )
+    .await;
+    assert!(found.get("error").is_none(), "{found}");
+    assert!(found["total_matching"].is_i64() && found["candidates"].is_array(), "{found}");
+    for candidate in found["candidates"].as_array().unwrap() {
+        assert!(candidate["id"].is_i64() && candidate["attribute"]["value"].is_i64(), "{candidate}");
+        assert!(!candidate["matching_skills"].as_array().unwrap().is_empty(), "{candidate}");
+    }
+    let by_name = call("find_candidates", serde_json::json!({"sort_by": "willpower", "limit": 2})).await;
+    assert!(by_name.get("error").is_none(), "{by_name}");
+    let bad = call("find_candidates", serde_json::json!({"attribute": "charisma"})).await;
+    assert!(bad.get("error").is_some(), "{bad}");
     let reports = call("get_recent_reports", serde_json::json!({"limit": 5})).await;
     assert!(reports.get("error").is_none(), "{reports}");
     assert!(!reports["reports"].as_array().unwrap().is_empty(), "{reports}");

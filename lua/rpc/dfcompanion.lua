@@ -348,6 +348,150 @@ function known_creatures(options_json)
     return json.encode(known_creatures_data(options), {pretty = false})
 end
 
+local MAX_CANDIDATES = 25
+
+-- The value of the named attribute (e.g. "strength", "focus"), or nil if the
+-- name is not an attribute.
+local function attribute_value(unit, name)
+    local id = df.physical_attribute_type[name:upper()]
+    if id ~= nil then
+        return U.getPhysicalAttrValue(unit, id)
+    end
+    id = df.mental_attribute_type[name:upper()]
+    if id ~= nil and unit.status.current_soul then
+        return U.getMentalAttrValue(unit, id)
+    end
+end
+
+local function is_attribute_name(name)
+    return df.physical_attribute_type[name:upper()] ~= nil
+        or df.mental_attribute_type[name:upper()] ~= nil
+end
+
+-- Skills of the unit that satisfy the skill filters, best first. With no skill
+-- filter every skill qualifies.
+local function matching_skills(unit, options)
+    local result = {}
+    local wanted = options.skill and options.skill:lower()
+    local minimum = options.min_skill_level or 0
+    for _, skill in ipairs(skills_of(unit)) do
+        if skill.level >= minimum
+            and (not options.skill_class or skill.class == options.skill_class)
+            and (not wanted or skill.name:find(wanted, 1, true)) then
+            table.insert(result, skill)
+        end
+    end
+    return result
+end
+
+-- Living citizens and residents that satisfy all the given filters, as JSON:
+-- {total_matching, candidates = [...]}. Options (all optional, combined with
+-- AND): skill_class, skill (name substring), min_skill_level (with either of
+-- those, at least one skill must match; default 1), unassigned_to_squad,
+-- adults_only, healthy, min_mood (a mood name), profession (substring),
+-- attribute with min_attribute_value, sort_by, limit.
+function find_candidates(options_json)
+    local options = json.decode(options_json)
+    local filtering_skills = options.skill_class or options.skill
+    if filtering_skills and not options.min_skill_level then
+        options.min_skill_level = 1
+    end
+    local sort_by = options.sort_by or (filtering_skills and 'skill') or 'name'
+    local min_mood
+    if options.min_mood then
+        for category = 0, #STRESS_NAMES do
+            if STRESS_NAMES[category] == options.min_mood then
+                min_mood = category
+            end
+        end
+        if not min_mood then
+            return json.encode({error = 'Unknown mood "' .. options.min_mood .. '"; use one of: ' ..
+                'miserable, very unhappy, unhappy, fine, content, happy, ecstatic.'})
+        end
+    end
+    local sort_attribute = sort_by ~= 'skill' and sort_by ~= 'name' and sort_by ~= 'mood' and sort_by or nil
+    for _, name in ipairs({options.attribute or false, sort_attribute or false}) do
+        if name and not is_attribute_name(name) then
+            return json.encode({error = 'Unknown attribute "' .. name ..
+                '". Use a physical or mental attribute name such as strength, agility, toughness, focus or willpower.'})
+        end
+    end
+    if sort_by == 'skill' and not filtering_skills then
+        return json.encode({error = 'sort_by skill needs skill_class or skill.'})
+    end
+    local profession = options.profession and options.profession:lower()
+
+    local found = {}
+    for _, unit in ipairs(df.global.world.units.active) do
+        if not U.isDead(unit) and (U.isCitizen(unit) or U.isResident(unit))
+            and (not options.adults_only or U.isAdult(unit))
+            and (not options.unassigned_to_squad or unit.military.squad_id < 0)
+            and (not min_mood or U.getStressCategory(unit) >= min_mood)
+            and (not profession or text(U.getProfessionName(unit)):lower():find(profession, 1, true)) then
+            local entry = {unit = unit}
+            local ok = true
+            if filtering_skills then
+                entry.skills = matching_skills(unit, options)
+                ok = #entry.skills > 0
+            end
+            if ok and options.attribute then
+                entry.attribute = attribute_value(unit, options.attribute)
+                ok = entry.attribute ~= nil and entry.attribute >= (options.min_attribute_value or 0)
+            end
+            if ok and options.healthy then
+                local health = health_of(unit)
+                local limbs = health.working_limbs
+                ok = health.impaired_parts == 0 and limbs.stand == limbs.stand_max
+                    and limbs.grasp == limbs.grasp_max
+            end
+            if ok then
+                local key
+                if sort_by == 'skill' then
+                    key = entry.skills[1].level * 1000000 + entry.skills[1].experience
+                elseif sort_by == 'mood' then
+                    key = U.getStressCategory(unit)
+                elseif sort_attribute then
+                    key = attribute_value(unit, sort_attribute) or -1
+                end
+                entry.key = key
+                entry.name = name_of(unit)
+                table.insert(found, entry)
+            end
+        end
+    end
+    table.sort(found, function(a, b)
+        if a.key ~= b.key then
+            return (a.key or 0) > (b.key or 0)
+        end
+        return a.name < b.name
+    end)
+
+    local limit = math.min(options.limit or 10, MAX_CANDIDATES)
+    local candidates = {}
+    for i = 1, math.min(limit, #found) do
+        local entry = found[i]
+        local row = resident_row(entry.unit)
+        local candidate = {
+            id = row.id, name = row.name, profession = row.profession, age = row.age,
+            mood = row.mood, squad = row.squad, status = row.status,
+        }
+        if entry.skills then
+            candidate.matching_skills = {table.unpack(entry.skills, 1, 3)}
+        end
+        if options.attribute or sort_attribute then
+            local name = options.attribute or sort_attribute
+            candidate.attribute = {name = name:lower(), value = attribute_value(entry.unit, name)}
+        end
+        local health = health_of(entry.unit)
+        if health.impaired_parts > 0 or health.infected_wounds > 0 then
+            candidate.impaired_parts = health.impaired_parts
+            candidate.infected_wounds = health.infected_wounds
+        end
+        table.insert(candidates, candidate)
+    end
+    return json.encode({total_matching = #found, candidates = candidates}, {pretty = false})
+end
+
 local function format_date(year, tick_in_year)
     return string.format('%03d-%02d-%02d:%d', year, tick_in_year // 33600 + 1,
         tick_in_year % 33600 // 1200 + 1, tick_in_year % 1200)

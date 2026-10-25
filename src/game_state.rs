@@ -12,6 +12,7 @@
 //! list when that module is unavailable.
 
 use dfhack_remote::{Client, CoreRunLuaRequest};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -26,6 +27,25 @@ pub const MAX_ITEM_PAGE_SIZE: usize = 50;
 const MAX_CREATURE_REPLY_BYTES: usize = 12 * 1024;
 const LUA_MODULE: &str = "rpc.dfcompanion";
 pub const MAX_DETAIL_UNITS: usize = 10;
+pub const MAX_CANDIDATES: usize = 25;
+
+/// Filters for `find_candidates`; all are optional and combined with AND.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateQuery {
+    pub skill_class: Option<String>,
+    pub skill: Option<String>,
+    pub min_skill_level: Option<i64>,
+    pub unassigned_to_squad: Option<bool>,
+    pub adults_only: Option<bool>,
+    pub healthy: Option<bool>,
+    pub min_mood: Option<String>,
+    pub profession: Option<String>,
+    pub attribute: Option<String>,
+    pub min_attribute_value: Option<i64>,
+    pub sort_by: Option<String>,
+    pub limit: Option<usize>,
+}
 pub const DETAIL_PARTS: [&str; 4] = ["skills", "attributes", "health", "mind"];
 pub const SKILL_CLASSES: [&str; 10] = [
     "normal",
@@ -533,6 +553,35 @@ impl GameState {
             Some(message) => Err(message.to_owned()),
             None => Ok(value),
         }
+    }
+
+    /// Residents matching all the filters in `query`, best first (see
+    /// `find_candidates` in the Lua module).
+    pub fn find_candidates(&self, query: &CandidateQuery) -> Result<Value, String> {
+        if let Some(class) = query.skill_class.as_deref() {
+            if !SKILL_CLASSES.contains(&class) {
+                return Err(format!(
+                    "Unknown skill class \"{class}\"; use one of: {}.",
+                    SKILL_CLASSES.join(", ")
+                ));
+            }
+        }
+        if query.limit.is_some_and(|limit| !(1..=MAX_CANDIDATES).contains(&limit)) {
+            return Err(format!("limit must be between 1 and {MAX_CANDIDATES}."));
+        }
+        let mut options = serde_json::to_value(query).map_err(|error| error.to_string())?;
+        if let Some(map) = options.as_object_mut() {
+            map.retain(|_, value| !value.is_null());
+        }
+        let mut result = self.call_lua_json(
+            "search for candidates",
+            "find_candidates",
+            vec![options.to_string()],
+        )?;
+        if result["candidates"].as_object().is_some_and(|map| map.is_empty()) {
+            result["candidates"] = json!([]);
+        }
+        Ok(result)
     }
 
     /// Housing summary with one paged list (see `housing` in the Lua module).

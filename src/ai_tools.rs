@@ -12,7 +12,8 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 use crate::game_state::{
-    CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_ITEM_PAGE_SIZE, MAX_REPORTS,
+    CandidateQuery, CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_ITEM_PAGE_SIZE,
+    MAX_REPORTS,
 };
 
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 20;
@@ -287,6 +288,55 @@ fn registry() -> &'static [ToolSpec] {
                 },
             )
             .required(&["unit_ids"]),
+            tool(
+                "find_candidates",
+                "Search the fortress's living residents for those matching ALL the given filters, ranked best first, with compact evidence per match (matching skills, mood, squad, current status). Use it instead of checking residents one by one, e.g. squad candidates: skill_class military_weapon, min_skill_level 1, unassigned_to_squad, adults_only, healthy. Returns total_matching and up to limit candidates. Skill filters need at least one skill to qualify (default min level 1). Use get_unit_details for more on the shortlist. This is read-only.",
+                json!({
+                    "skill_class": {
+                        "type": "string",
+                        "enum": ["normal", "medical", "personal", "social", "cultural", "military_weapon", "military_unarmed", "military_attack", "military_defense", "military_misc"],
+                        "description": "Has a skill of this DFHack class."
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": "Has a skill whose name contains this text, e.g. \"mining\"."
+                    },
+                    "min_skill_level": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Matching skill must be at least this level. Default 1 when a skill filter is used."
+                    },
+                    "unassigned_to_squad": {"type": "boolean", "description": "Only residents not in a squad."},
+                    "adults_only": {"type": "boolean", "description": "Exclude children."},
+                    "healthy": {"type": "boolean", "description": "Only residents with no impaired body parts and all limbs working."},
+                    "min_mood": {
+                        "type": "string",
+                        "enum": ["miserable", "very unhappy", "unhappy", "fine", "content", "happy", "ecstatic"],
+                        "description": "At least this happy."
+                    },
+                    "profession": {"type": "string", "description": "Profession name contains this text."},
+                    "attribute": {
+                        "type": "string",
+                        "description": "Attribute to filter on, e.g. strength, agility, toughness, focus, willpower."
+                    },
+                    "min_attribute_value": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "With attribute: minimum value."
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "skill (best matching skill; default with a skill filter), mood (happiest first), name (default otherwise), or an attribute name (highest first)."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 25,
+                        "description": "Number of candidates to return. Default 10."
+                    }
+                }),
+                |game, args: CandidateQuery| game.find_candidates(&args),
+            ),
             tool(
                 "get_food_drink_summary",
                 "Summarize the fortress's food and drink stocks: total, available (not forbidden or rotten), forbidden and rotten units; a rough estimate of days of supply at the current population; the drink varieties (e.g. wine, rum) and the most plentiful food kinds; and food by category (prepared meals, meat, fish, dairy and eggs). Counts match the game's status header; edible raw plants are reported separately. The result states its consumption assumptions. Use search_items for details about a specific item or its location. This is read-only.",
@@ -655,6 +705,9 @@ mod tests {
             ("list_dead_missing", json!({"offset": -1})),
             ("list_residents", json!({"query": "dwarf"})),
             ("get_unit_details", json!({})),
+            ("find_candidates", json!({"limit": 26})),
+            ("find_candidates", json!({"skill_class": "combat"})),
+            ("find_candidates", json!({"unknown": true})),
             ("get_fortress_overview", json!({"x": 1})),
             ("get_recent_reports", json!({"limit": 0})),
         ] {
