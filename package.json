@@ -1,0 +1,9 @@
+{
+  "name": "dfcompanion-web-vendor",
+  "private": true,
+  "description": "Pins the third-party browser libraries vendored into static/vendor. Run scripts/update-vendor.ps1 after changing versions.",
+  "dependencies": {
+    "dompurify": "3.4.17",
+    "marked": "18.1.1"
+  }
+}

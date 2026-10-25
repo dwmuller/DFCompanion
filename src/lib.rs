@@ -957,12 +957,39 @@ mod tests {
             response.headers().get(header::CACHE_CONTROL).unwrap(),
             "no-store"
         );
+        let csp = response
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("enable dfcompanion"));
         assert!(html.contains("show-game-events"));
+        assert!(html.contains("/assets/marked.min.js") && html.contains("/assets/purify.min.js"));
+        assert!(csp.contains("script-src 'self'") && !csp.contains("img-src"));
+    }
+
+    #[tokio::test]
+    async fn markdown_libraries_are_served() {
+        let (state, _) = AppState::new();
+        for path in ["/assets/marked.min.js", "/assets/purify.min.js"] {
+            let response = crate::web::router(state.clone())
+                .oneshot(
+                    HttpRequest::builder()
+                        .uri(path)
+                        .header(header::HOST, "127.0.0.1:3000")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+        }
     }
 
     #[tokio::test]

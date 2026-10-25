@@ -14,6 +14,8 @@ Install:
 - MSVC linker and Windows SDK, available through Visual Studio Build Tools
 - Dwarf Fortress and DFHack (tested with Dwarf Fortress 53.16 and DFHack 53.16-r2)
 
+Optional: [pnpm](https://pnpm.io/) (for example `winget install pnpm.pnpm`), only to update the vendored web UI libraries; see [Web UI libraries](#web-ui-libraries).
+
 Run commands from a Visual Studio Developer PowerShell or another shell where the MSVC build tools are available.
 
 Cargo provisions a host `protoc` through the `protoc-bin-vendored` build dependency; no global protobuf compiler installation is needed for the Rust build.
@@ -73,6 +75,10 @@ cargo test --test live_game_tests ai_tools_end_to_end -- --ignored --nocapture
 ```
 
 To check whether the game is running first: `Get-Process -Name "Dwarf Fortress"`.
+
+## Web UI libraries
+
+The web UI renders conversation text as Markdown with [marked](https://github.com/markedjs/marked) and sanitizes it with [DOMPurify](https://github.com/cure53/DOMPurify). Their minified builds are committed in `static/vendor/` and compiled into the binary, so building the service does not need Node or pnpm. To change versions, edit `package.json` and run `pnpm install`, then `scripts\update-vendor.ps1`, which installs from the lockfile and copies the builds into `static/vendor/`. Commit the lockfile and the vendored files.
 
 ## Run the service manually
 

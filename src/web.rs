@@ -135,6 +135,8 @@ pub fn router(state: AppState) -> Router {
         .route("/events", get(events))
         .route("/api/timed-turns", get(get_timed_turns).put(set_timed_turns))
         .route("/assets/app.js", get(app_script))
+        .route("/assets/marked.min.js", get(marked_script))
+        .route("/assets/purify.min.js", get(purify_script))
         .route("/assets/ai-configurations.js", get(configuration_script))
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
@@ -478,6 +480,20 @@ async fn app_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         include_str!("../static/app.js"),
+    )
+}
+
+async fn marked_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../static/vendor/marked.min.js"),
+    )
+}
+
+async fn purify_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../static/vendor/purify.min.js"),
     )
 }
 
