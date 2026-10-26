@@ -9,6 +9,7 @@ pub mod ai;
 pub mod ai_config;
 pub mod ai_providers;
 pub mod ai_tools;
+pub mod ai_usage;
 pub mod chat_commands;
 pub mod game_state;
 

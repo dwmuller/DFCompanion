@@ -1,9 +1,10 @@
 use genai::{
-    Client, ModelIden, ServiceTarget, chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse, Usage}, resolver::{AuthData, Endpoint, ServiceTargetResolver},
+    Client, ModelIden, ServiceTarget, chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse}, resolver::{AuthData, Endpoint, ServiceTargetResolver},
 };
 use tokio::sync::Mutex;
 
 use crate::ai_config::{AiConfiguration, ConfigurationRepository};
+use crate::ai_usage::AiTurnUsage;
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
 pub const MAX_OUTPUT_TOKENS: u32 = 4096;
@@ -31,42 +32,6 @@ pub struct ChatMessage {
 pub enum ChatRole {
     User,
     Assistant,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct AiTurnUsage {
-    pub request_count: u32,
-    pub prompt_tokens: Option<i32>,
-    pub completion_tokens: Option<i32>,
-}
-
-impl AiTurnUsage {
-
-    pub fn add(&mut self, other: &Usage) {
-        self.request_count += 1;
-        if let Some(prompt_tokens) = other.prompt_tokens {
-            self.prompt_tokens = Some(self.prompt_tokens.unwrap_or(0) + prompt_tokens);
-        }
-        if let Some(completion_tokens) = other.completion_tokens {
-            self.completion_tokens = Some(self.completion_tokens.unwrap_or(0) + completion_tokens);
-        }
-    }
-    pub fn total_tokens(&self) -> Option<i32> {
-        if self.prompt_tokens.is_none() && self.completion_tokens.is_none() {
-            return None;
-        }
-        Some(self.prompt_tokens.unwrap_or(0) + self.completion_tokens.unwrap_or(0))
-    }
-    pub fn summary(&self) -> String {
-        format!(
-            "This turn: {} API request{}, {} input tokens, {} output tokens, {} total tokens",
-            self.request_count,
-            if self.request_count == 1 { "" } else { "s" },
-            self.prompt_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
-            self.completion_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
-            self.total_tokens().map(|t| t.to_string()).unwrap_or("unreported".to_string()),
-        )
-    }
 }
 
 pub struct AiTurnResult {
@@ -314,6 +279,9 @@ impl AiRuntime {
                 )
             })?;
             usage.add(&response.usage);
+            // Uncomment this line to examine AI usage data returned by genai.
+            //eprintln!("AI request #{} genai reported usage:\n{:#?}", usage.request_count, response.usage);
+
             let tool_calls = response
                 .tool_calls()
                 .into_iter()
