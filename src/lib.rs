@@ -373,12 +373,13 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
             ));
         }
         match state.ai.complete(&configuration, &prompt).await {
-            Ok(answer) => {
-                let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&answer);
-                conversation.complete(prompt, answer.clone());
+            Ok(result) => {
+                let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&result.answer);
+                conversation.complete(prompt, result.answer.clone());
                 if !uneventful {
                     let prefix = if kind == TurnKind::Periodic { UNSOLICITED_PREFIX } else { "Companion: " };
-                    state.notify(format!("{prefix}{answer}"));
+                    state.notify(format!("{prefix}{})", result.answer));
+                    state.notify(result.usage.summary())
                 }
                 if kind == TurnKind::Periodic || conversation.pending_user_messages.is_empty() {
                     return true;

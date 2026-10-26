@@ -1,7 +1,5 @@
 use genai::{
-    chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse},
-    resolver::{AuthData, Endpoint, ServiceTargetResolver},
-    Client, ModelIden, ServiceTarget,
+    Client, ModelIden, ServiceTarget, chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse, Usage}, resolver::{AuthData, Endpoint, ServiceTargetResolver},
 };
 use tokio::sync::Mutex;
 
@@ -33,6 +31,47 @@ pub struct ChatMessage {
 pub enum ChatRole {
     User,
     Assistant,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AiTurnUsage {
+    pub request_count: u32,
+    pub prompt_tokens: Option<i32>,
+    pub completion_tokens: Option<i32>,
+}
+
+impl AiTurnUsage {
+
+    pub fn add(&mut self, other: &Usage) {
+        self.request_count += 1;
+        if let Some(prompt_tokens) = other.prompt_tokens {
+            self.prompt_tokens = Some(self.prompt_tokens.unwrap_or(0) + prompt_tokens);
+        }
+        if let Some(completion_tokens) = other.completion_tokens {
+            self.completion_tokens = Some(self.completion_tokens.unwrap_or(0) + completion_tokens);
+        }
+    }
+    pub fn total_tokens(&self) -> Option<i32> {
+        if self.prompt_tokens.is_none() && self.completion_tokens.is_none() {
+            return None;
+        }
+        Some(self.prompt_tokens.unwrap_or(0) + self.completion_tokens.unwrap_or(0))
+    }
+    pub fn summary(&self) -> String {
+        format!(
+            "This turn: {} API request{}, {} input tokens, {} output tokens, {} total tokens",
+            self.request_count,
+            if self.request_count == 1 { "" } else { "s" },
+            self.prompt_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
+            self.completion_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
+            self.total_tokens().map(|t| t.to_string()).unwrap_or("unreported".to_string()),
+        )
+    }
+}
+
+pub struct AiTurnResult {
+    pub answer: String,
+    pub usage: AiTurnUsage,
 }
 
 #[derive(Default)]
@@ -194,6 +233,8 @@ impl AiRuntime {
     /// Verifies the game link at startup. Returns the status line, or the error.
     pub async fn startup_summary(&self) -> Result<String, String> {
         self.game_state.run(|game| game.startup_summary()).await
+
+
     }
 
     /// Whether the game is running; `None` when it cannot be reached.
@@ -215,7 +256,7 @@ impl AiRuntime {
         &self,
         configuration: &AiConfiguration,
         prompt: &Prompt,
-    ) -> Result<String, String> {
+    ) -> Result<AiTurnResult, String> {
         let key = self.configurations.get_api_key(&configuration.id)?;
         self.complete_with_key(configuration, prompt, &key).await
     }
@@ -225,7 +266,7 @@ impl AiRuntime {
         configuration: &AiConfiguration,
         prompt: &Prompt,
         key: &str,
-    ) -> Result<String, String> {
+    ) -> Result<AiTurnResult, String> {
         let adapter_kind = configuration.interaction_method;
         let endpoint = Endpoint::from_owned(configuration.url.clone());
         let auth = AuthData::from_single(key.to_owned());
@@ -258,6 +299,7 @@ impl AiRuntime {
             .with_store(false);
         let options = ChatOptions::default().with_max_tokens(MAX_OUTPUT_TOKENS);
         let mut budget = crate::ai_tools::ToolBudget::new();
+        let mut usage = AiTurnUsage::default();
         loop {
             let response = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
@@ -271,6 +313,7 @@ impl AiRuntime {
                     configuration.interaction_method
                 )
             })?;
+            usage.add(&response.usage);
             let tool_calls = response
                 .tool_calls()
                 .into_iter()
@@ -278,7 +321,7 @@ impl AiRuntime {
                 .collect::<Vec<_>>();
             if tool_calls.is_empty() {
                 let stop_reason = response.stop_reason.clone();
-                return response
+                let answer = response
                     .into_first_text()
                     .filter(|text| !text.trim().is_empty())
                     .ok_or_else(|| {
@@ -287,7 +330,8 @@ impl AiRuntime {
                             configuration.interaction_method,
                             stop_reason.map_or("unknown".to_owned(), |reason| format!("{reason:?}"))
                         )
-                    });
+                    })?;
+                return Ok(AiTurnResult {answer: answer, usage: usage});
             }
             let assistant_message =
                 response
@@ -573,7 +617,11 @@ mod tests {
             let (path, auth_header, authorization, request_body) = requests.recv().await.unwrap();
             server.abort();
 
-            assert_eq!(result, "pong");
+            assert_eq!(result.answer, "pong");
+            assert_eq!(result.usage.request_count, 1);
+            assert_eq!(result.usage.prompt_tokens, Some(1));
+            assert_eq!(result.usage.completion_tokens, Some(1));
+            assert_eq!(result.usage.total_tokens(), Some(2));
             assert_eq!(path, expected_path);
             assert_eq!(auth_header, expected_auth_header);
             assert!(authorization.contains("test-secret"));
@@ -601,7 +649,7 @@ mod tests {
                     {"type": "tool_use", "id": "call-2", "name": "unknown_b", "input": {}}
                 ],
                 "stop_reason": "tool_use",
-                "usage": {"input_tokens": 1, "output_tokens": 1}
+                "usage": {"input_tokens": 100, "output_tokens": 10}
             }),
             json!({
                 "id": "msg_final",
@@ -610,7 +658,7 @@ mod tests {
                 "model": "test-model",
                 "content": [{"type": "text", "text": "done"}],
                 "stop_reason": "end_turn",
-                "usage": {"input_tokens": 1, "output_tokens": 1}
+                "usage": {"input_tokens": 150, "output_tokens": 20}
             }),
         ])
         .await;
@@ -637,7 +685,11 @@ mod tests {
         let (_, _, _, second_request) = requests.recv().await.unwrap();
         server.abort();
 
-        assert_eq!(result, "done");
+        assert_eq!(result.answer, "done");
+        assert_eq!(result.usage.request_count, 2);
+        assert_eq!(result.usage.prompt_tokens, Some(250));
+        assert_eq!(result.usage.completion_tokens, Some(30));
+        assert_eq!(result.usage.total_tokens(), Some(280));
         let messages = second_request["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3, "{second_request}");
         let results = messages[2]["content"].as_array().unwrap();
@@ -708,7 +760,11 @@ mod tests {
         let (_, _, _, second_request) = requests.recv().await.unwrap();
         server.abort();
 
-        assert_eq!(result, "tool result received");
+        assert_eq!(result.answer, "tool result received");
+        assert_eq!(result.usage.request_count, 2);
+        assert_eq!(result.usage.prompt_tokens, None);
+        assert_eq!(result.usage.completion_tokens, None);
+        assert_eq!(result.usage.total_tokens(), None);
         assert!(second_request
             .to_string()
             .contains("Unknown tool: unknown_test_tool"));
