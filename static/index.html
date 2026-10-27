@@ -3,9 +3,19 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="htmx-config" content='{
+      "responseHandling": [
+        {"code": "204", "swap": false},
+        {"code": "[23]..", "swap": true},
+        {"code": "[45]..", "swap": true, "error": true},
+        {"code": "...", "swap": false}
+      ]
+    }'>
+
     <title>DFCompanion</title>
     <script src="/assets/marked.min.js" defer></script>
     <script src="/assets/purify.min.js" defer></script>
+    <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/app.js" defer></script>
     <link rel="stylesheet" href="/assets/style.css">
   </head>
@@ -34,13 +44,19 @@
     </p>
     <ol id="notifications" aria-live="polite" class="hide-game-events"></ol>
     <h2>Chat</h2>
-    <form id="chat-form">
+    <form id="chat-form"
+        hx-post="/chat"
+        hx-target="#chat-status"
+        hx-disabled-elt="find button">
       <label for="message">Message</label>
       <textarea id="message" name="message" maxlength="8000" required></textarea>
       <button type="submit">Send</button>
-      <span id="chat-status" role="status"></span>
+    <span id="chat-status" role="status"></span>
     </form>
-    <form id="retry-form">
+    <form id="retry-form"
+        hx-post="/retry"
+        hx-target="#retry-status"
+        hx-disabled-elt="find button">
       <button id="retry-button" type="submit">Retry failed AI request</button>
       <span id="retry-status" role="status"></span>
     </form>

@@ -11,6 +11,7 @@ try {
     New-Item -ItemType Directory -Force $vendor | Out-Null
     Copy-Item node_modules\marked\lib\marked.umd.js (Join-Path $vendor 'marked.min.js') -Force
     Copy-Item node_modules\dompurify\dist\purify.min.js (Join-Path $vendor 'purify.min.js') -Force
+    Copy-Item node_modules\htmx.org\dist\htmx.min.js (Join-Path $vendor 'htmx.min.js') -Force
 } finally {
     Pop-Location
 }

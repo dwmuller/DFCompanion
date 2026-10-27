@@ -92,7 +92,10 @@ pub fn with_request_tracing(router: Router) -> Router {
     use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
     use tracing::Level;
 
-    tracing_subscriber::fmt().with_writer(std::io::stdout).compact().init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stdout)
+        .compact()
+        .init();
     router.layer(
         TraceLayer::new_for_http()
             .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
@@ -133,10 +136,14 @@ pub fn router(state: AppState) -> Router {
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
         )
         .route("/events", get(events))
-        .route("/api/timed-turns", get(get_timed_turns).put(set_timed_turns))
+        .route(
+            "/api/timed-turns",
+            get(get_timed_turns).put(set_timed_turns),
+        )
         .route("/assets/app.js", get(app_script))
         .route("/assets/marked.min.js", get(marked_script))
         .route("/assets/purify.min.js", get(purify_script))
+        .route("/assets/htmx.min.js", get(htmx_script))
         .route("/assets/ai-configurations.js", get(configuration_script))
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
@@ -202,7 +209,10 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
 }
 
 async fn index() -> impl IntoResponse {
-    ([(header::CACHE_CONTROL, "no-store")], Html(include_str!("../static/index.html")))
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Html(include_str!("../static/index.html")),
+    )
 }
 
 async fn configurations_page() -> impl IntoResponse {
@@ -497,6 +507,13 @@ async fn purify_script() -> impl IntoResponse {
     )
 }
 
+async fn htmx_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../static/vendor/htmx.min.js"),
+    )
+}
+
 async fn stylesheet() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
@@ -543,7 +560,11 @@ async fn events(
     State(state): State<AppState>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let (backlog, live) = state.history.subscribe();
-    let backlog = tokio_stream::iter(backlog.into_iter().map(|message| Ok(notification_event(message))));
+    let backlog = tokio_stream::iter(
+        backlog
+            .into_iter()
+            .map(|message| Ok(notification_event(message))),
+    );
     let live = BroadcastStream::new(live).map(|notification| {
         Ok(match notification {
             Ok(message) => notification_event(message),
@@ -579,7 +600,10 @@ async fn chat(
             .into_response();
     }
 
-    match state.queue_tx.try_send(QueueItem::UserInput(message.to_owned())) {
+    match state
+        .queue_tx
+        .try_send(QueueItem::UserInput(message.to_owned()))
+    {
         Ok(()) => {
             state.notify(format!("You: {message}"));
             (StatusCode::OK, "Message queued.").into_response()

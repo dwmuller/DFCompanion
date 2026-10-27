@@ -170,24 +170,9 @@ document.getElementById("active-configuration").addEventListener("change", async
   }
 });
 
-document.getElementById("chat-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const status = document.getElementById("chat-status");
-  try {
-    const response = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(new FormData(form)),
-    });
-    const result = await response.text();
-    if (!response.ok) {
-      throw new Error(result);
-    }
-    status.textContent = result;
+document.getElementById("chat-form").addEventListener("htmx:afterRequest", (event) => {
+  if (event.detail.successful) {
     document.getElementById("message").value = "";
-  } catch (error) {
-    status.textContent = `Could not send message: ${error.message}`;
   }
 });
 
@@ -198,20 +183,6 @@ document.getElementById("message").addEventListener("keydown", (event) => {
     if (event.currentTarget.value.trim() !== "") {
       document.getElementById("chat-form").requestSubmit();
     }
-  }
-});
-
-document.getElementById("retry-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const status = document.getElementById("retry-status");
-  try {
-    const response = await fetch("/retry", { method: "POST" });
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-    status.textContent = await response.text();
-  } catch (error) {
-    status.textContent = `Could not retry: ${error.message}`;
   }
 });
 
