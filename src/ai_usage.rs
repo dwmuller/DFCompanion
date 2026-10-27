@@ -11,7 +11,6 @@ pub struct AiTurnUsage {
 }
 
 impl AiTurnUsage {
-
     pub(crate) fn add(&mut self, other: &Usage) {
         self.request_count += 1;
         if let Some(prompt_tokens) = other.prompt_tokens {
@@ -19,14 +18,17 @@ impl AiTurnUsage {
         }
         if let Some(details) = &other.prompt_tokens_details {
             if let Some(cached) = details.cached_tokens {
-                self.cached_prompt_tokens = Some(self.cached_prompt_tokens.unwrap_or(0) + cached as u64);
+                self.cached_prompt_tokens =
+                    Some(self.cached_prompt_tokens.unwrap_or(0) + cached as u64);
             }
             if let Some(cache_creation) = details.cache_creation_tokens {
-                self.cache_creation_tokens = Some(self.cache_creation_tokens.unwrap_or(0) + cache_creation as u64);
+                self.cache_creation_tokens =
+                    Some(self.cache_creation_tokens.unwrap_or(0) + cache_creation as u64);
             }
         }
         if let Some(completion_tokens) = other.completion_tokens {
-            self.completion_tokens = Some(self.completion_tokens.unwrap_or(0) + completion_tokens as u64);
+            self.completion_tokens =
+                Some(self.completion_tokens.unwrap_or(0) + completion_tokens as u64);
         }
         if let Some(total_reported) = other.total_tokens {
             self.total_reported = Some(self.total_reported.unwrap_or(0) + total_reported as u64);
@@ -54,7 +56,5 @@ impl AiTurnUsage {
             self.completion_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
             self.total_tokens().map(|t| t.to_string()).unwrap_or("unreported".to_string()),
         )
-
     }
 }
-

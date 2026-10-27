@@ -1,5 +1,7 @@
 use genai::{
-    Client, ModelIden, ServiceTarget, chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse}, resolver::{AuthData, Endpoint, ServiceTargetResolver},
+    chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse},
+    resolver::{AuthData, Endpoint, ServiceTargetResolver},
+    Client, ModelIden, ServiceTarget,
 };
 use tokio::sync::Mutex;
 
@@ -19,7 +21,10 @@ pub const NO_COMMENT: &str = "NO_COMMENT";
 const PERIODIC_PROMPT: &str = "No player message. This is an automatic periodic check while the game runs. Use the read-only game-state tools if that helps you notice a problem or development the player should know about. Speak to the player only about something important and new; otherwise reply with exactly NO_COMMENT and nothing else.";
 
 pub fn is_no_comment(answer: &str) -> bool {
-    answer.trim().trim_matches(|c: char| !c.is_alphanumeric() && c != '_').eq_ignore_ascii_case(NO_COMMENT)
+    answer
+        .trim()
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+        .eq_ignore_ascii_case(NO_COMMENT)
 }
 
 #[derive(Clone, Debug)]
@@ -198,8 +203,6 @@ impl AiRuntime {
     /// Verifies the game link at startup. Returns the status line, or the error.
     pub async fn startup_summary(&self) -> Result<String, String> {
         self.game_state.run(|game| game.startup_summary()).await
-
-
     }
 
     /// Whether the game is running; `None` when it cannot be reached.
@@ -296,10 +299,14 @@ impl AiRuntime {
                         format!(
                             "{} returned no text response (stop reason: {}).",
                             configuration.interaction_method,
-                            stop_reason.map_or("unknown".to_owned(), |reason| format!("{reason:?}"))
+                            stop_reason
+                                .map_or("unknown".to_owned(), |reason| format!("{reason:?}"))
                         )
                     })?;
-                return Ok(AiTurnResult {answer: answer, usage: usage});
+                return Ok(AiTurnResult {
+                    answer: answer,
+                    usage: usage,
+                });
             }
             let assistant_message =
                 response

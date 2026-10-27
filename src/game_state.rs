@@ -101,8 +101,9 @@ struct KnownCreatures(BTreeMap<&'static str, Vec<Value>>);
 
 impl KnownCreatures {
     fn parse(json_text: &str) -> Result<Self, String> {
-        let mut parsed: Value = serde_json::from_str(json_text)
-            .map_err(|error| format!("The DFCompanion Lua module returned invalid data: {error}"))?;
+        let mut parsed: Value = serde_json::from_str(json_text).map_err(|error| {
+            format!("The DFCompanion Lua module returned invalid data: {error}")
+        })?;
         let mut groups = BTreeMap::new();
         for group in CreatureGroup::ALL {
             // The Lua JSON encoder writes an empty list as an empty object.
@@ -153,7 +154,11 @@ fn tidy_row(row: &Value) -> Value {
 /// The Lua JSON encoder writes an empty list as an empty object; restore the
 /// lists that detail parts can leave empty.
 fn restore_empty_lists(details: &mut Value) {
-    for path in [&["skills"][..], &["mind", "recent_thoughts"], &["mind", "unmet_needs"]] {
+    for path in [
+        &["skills"][..],
+        &["mind", "recent_thoughts"],
+        &["mind", "unmet_needs"],
+    ] {
         let mut node = Some(&mut *details);
         for key in path {
             node = node.and_then(|n| n.get_mut(*key));
@@ -169,7 +174,9 @@ fn restore_empty_lists(details: &mut Value) {
 fn count_by_race(rows: &[Value]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for row in rows {
-        *counts.entry(text_field(row, "race").to_owned()).or_default() += 1;
+        *counts
+            .entry(text_field(row, "race").to_owned())
+            .or_default() += 1;
     }
     counts
 }
@@ -336,15 +343,22 @@ impl GameState {
             .reply
             .value
             .concat();
-        let name = if name.is_empty() { "(no fortress loaded)".to_owned() } else { name };
+        let name = if name.is_empty() {
+            "(no fortress loaded)".to_owned()
+        } else {
+            name
+        };
         let script_enabled = self
-            .with_client("Could not check whether the DFCompanion script is enabled", |client| {
-                client.core().run_lua(CoreRunLuaRequest {
-                    module: LUA_MODULE.to_owned(),
-                    function: "script_enabled".to_owned(),
-                    arguments: Vec::new(),
-                })
-            })?
+            .with_client(
+                "Could not check whether the DFCompanion script is enabled",
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: "script_enabled".to_owned(),
+                        arguments: Vec::new(),
+                    })
+                },
+            )?
             .reply
             .value
             .concat()
@@ -486,7 +500,9 @@ impl GameState {
         until_id: Option<i64>,
     ) -> Result<Value, String> {
         if !(1..=MAX_REPORTS).contains(&limit) {
-            return Err(format!("The report limit must be between 1 and {MAX_REPORTS}."));
+            return Err(format!(
+                "The report limit must be between 1 and {MAX_REPORTS}."
+            ));
         }
         for (name, value) in [("from", from), ("to", to)] {
             if let Some(value) = value.filter(|v| !v.is_empty()) {
@@ -494,20 +510,23 @@ impl GameState {
             }
         }
         let reply = self
-            .with_client("Could not retrieve game reports (is the DFCompanion Lua module installed?)", |client| {
-                client.core().run_lua(CoreRunLuaRequest {
-                    module: LUA_MODULE.to_owned(),
-                    function: "recent_reports".to_owned(),
-                    arguments: vec![
-                        limit.to_string(),
-                        from.unwrap_or_default().to_owned(),
-                        to.unwrap_or_default().to_owned(),
-                        category.unwrap_or_default().to_owned(),
-                        since_id.map(|id| id.to_string()).unwrap_or_default(),
-                        until_id.map(|id| id.to_string()).unwrap_or_default(),
-                    ],
-                })
-            })?
+            .with_client(
+                "Could not retrieve game reports (is the DFCompanion Lua module installed?)",
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: "recent_reports".to_owned(),
+                        arguments: vec![
+                            limit.to_string(),
+                            from.unwrap_or_default().to_owned(),
+                            to.unwrap_or_default().to_owned(),
+                            category.unwrap_or_default().to_owned(),
+                            since_id.map(|id| id.to_string()).unwrap_or_default(),
+                            until_id.map(|id| id.to_string()).unwrap_or_default(),
+                        ],
+                    })
+                },
+            )?
             .reply
             .value;
         serde_json::from_str(&reply.concat())
@@ -518,13 +537,16 @@ impl GameState {
     /// `food_drink_summary` in the Lua module).
     pub fn food_drink_summary(&self) -> Result<Value, String> {
         let reply = self
-            .with_client("Could not summarize food and drink (is the DFCompanion Lua module installed?)", |client| {
-                client.core().run_lua(CoreRunLuaRequest {
-                    module: LUA_MODULE.to_owned(),
-                    function: "food_drink_summary".to_owned(),
-                    arguments: Vec::new(),
-                })
-            })?
+            .with_client(
+                "Could not summarize food and drink (is the DFCompanion Lua module installed?)",
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: "food_drink_summary".to_owned(),
+                        arguments: Vec::new(),
+                    })
+                },
+            )?
             .reply
             .value;
         serde_json::from_str(&reply.concat())
@@ -533,7 +555,12 @@ impl GameState {
 
     /// Calls a Lua function in the DFCompanion module with string arguments and
     /// parses its JSON reply, turning an `error` field into `Err`.
-    fn call_lua_json(&self, what: &str, function: &str, arguments: Vec<String>) -> Result<Value, String> {
+    fn call_lua_json(
+        &self,
+        what: &str,
+        function: &str,
+        arguments: Vec<String>,
+    ) -> Result<Value, String> {
         let reply = self
             .with_client(
                 &format!("Could not {what} (is the DFCompanion Lua module installed?)"),
@@ -566,7 +593,10 @@ impl GameState {
                 ));
             }
         }
-        if query.limit.is_some_and(|limit| !(1..=MAX_CANDIDATES).contains(&limit)) {
+        if query
+            .limit
+            .is_some_and(|limit| !(1..=MAX_CANDIDATES).contains(&limit))
+        {
             return Err(format!("limit must be between 1 and {MAX_CANDIDATES}."));
         }
         let mut options = serde_json::to_value(query).map_err(|error| error.to_string())?;
@@ -578,39 +608,71 @@ impl GameState {
             "find_candidates",
             vec![options.to_string()],
         )?;
-        if result["candidates"].as_object().is_some_and(|map| map.is_empty()) {
+        if result["candidates"]
+            .as_object()
+            .is_some_and(|map| map.is_empty())
+        {
             result["candidates"] = json!([]);
         }
         Ok(result)
     }
 
     /// Housing summary with one paged list (see `housing` in the Lua module).
-    pub fn housing(&self, list: &str, z: Option<i64>, offset: usize, limit: usize) -> Result<Value, String> {
+    pub fn housing(
+        &self,
+        list: &str,
+        z: Option<i64>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
         check_page(limit)?;
         self.call_lua_json(
             "describe housing",
             "housing",
-            vec![list.to_owned(), z.map(|z| z.to_string()).unwrap_or_default(), offset.to_string(), limit.to_string()],
+            vec![
+                list.to_owned(),
+                z.map(|z| z.to_string()).unwrap_or_default(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
         )
     }
 
     /// A page of non-bedroom zones (see `list_zones` in the Lua module).
-    pub fn list_zones(&self, zone_type: Option<&str>, offset: usize, limit: usize) -> Result<Value, String> {
+    pub fn list_zones(
+        &self,
+        zone_type: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
         check_page(limit)?;
         self.call_lua_json(
             "list zones",
             "list_zones",
-            vec![zone_type.unwrap_or_default().to_owned(), offset.to_string(), limit.to_string()],
+            vec![
+                zone_type.unwrap_or_default().to_owned(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
         )
     }
 
     /// Squads with members, defined uniforms and what each member carries.
-    pub fn list_squads(&self, name: Option<&str>, offset: usize, limit: usize) -> Result<Value, String> {
+    pub fn list_squads(
+        &self,
+        name: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
         check_page(limit)?;
         self.call_lua_json(
             "list squads",
             "list_squads",
-            vec![name.unwrap_or_default().to_owned(), offset.to_string(), limit.to_string()],
+            vec![
+                name.unwrap_or_default().to_owned(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
         )
     }
 
@@ -668,7 +730,11 @@ impl GameState {
 
     /// Which DFHack automation helpers (autofarm, tailor, autotraining...) are on.
     pub fn dfhack_automation(&self) -> Result<Value, String> {
-        self.call_lua_json("read DFHack automation status", "dfhack_automation", Vec::new())
+        self.call_lua_json(
+            "read DFHack automation status",
+            "dfhack_automation",
+            Vec::new(),
+        )
     }
 
     /// Citizens in a strange mood: demands, deliveries, workshop and time left.
@@ -685,21 +751,26 @@ impl GameState {
         limit: usize,
     ) -> Result<Value, String> {
         if !(1..=MAX_ITEM_PAGE_SIZE).contains(&limit) {
-            return Err(format!("The page size must be between 1 and {MAX_ITEM_PAGE_SIZE}."));
+            return Err(format!(
+                "The page size must be between 1 and {MAX_ITEM_PAGE_SIZE}."
+            ));
         }
         let reply = self
-            .with_client("Could not search items (is the DFCompanion Lua module installed?)", |client| {
-                client.core().run_lua(CoreRunLuaRequest {
-                    module: LUA_MODULE.to_owned(),
-                    function: "search_items".to_owned(),
-                    arguments: vec![
-                        search.unwrap_or_default().to_owned(),
-                        item_type.unwrap_or_default().to_owned(),
-                        offset.to_string(),
-                        limit.to_string(),
-                    ],
-                })
-            })?
+            .with_client(
+                "Could not search items (is the DFCompanion Lua module installed?)",
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: "search_items".to_owned(),
+                        arguments: vec![
+                            search.unwrap_or_default().to_owned(),
+                            item_type.unwrap_or_default().to_owned(),
+                            offset.to_string(),
+                            limit.to_string(),
+                        ],
+                    })
+                },
+            )?
             .reply
             .value;
         let value: Value = serde_json::from_str(&reply.concat())
@@ -743,7 +814,9 @@ fn check_page(limit: usize) -> Result<(), String> {
     if (1..=MAX_ITEM_PAGE_SIZE).contains(&limit) {
         Ok(())
     } else {
-        Err(format!("The page size must be between 1 and {MAX_ITEM_PAGE_SIZE}."))
+        Err(format!(
+            "The page size must be between 1 and {MAX_ITEM_PAGE_SIZE}."
+        ))
     }
 }
 
@@ -846,14 +919,20 @@ fn version_mismatch_warning(
 
 /// Checks a "YYYY-MM-DD" or "YYYY-MM-DD:T" game date.
 pub(crate) fn validate_game_date(value: &str) -> Result<(), String> {
-    let error = || format!("\"{value}\" is not a game date; expected YYYY-MM-DD or YYYY-MM-DD:T (month 1-12, day 1-28).");
+    let error = || {
+        format!("\"{value}\" is not a game date; expected YYYY-MM-DD or YYYY-MM-DD:T (month 1-12, day 1-28).")
+    };
     let (date, ticks) = match value.split_once(':') {
         Some((date, ticks)) => (date, Some(ticks)),
         None => (value, None),
     };
     let parts = date
         .split('-')
-        .map(|p| (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).then(|| p.parse::<u32>().ok()).flatten())
+        .map(|p| {
+            (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| p.parse::<u32>().ok())
+                .flatten()
+        })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(error)?;
     let [_, month, day] = parts[..] else {
@@ -863,7 +942,9 @@ pub(crate) fn validate_game_date(value: &str) -> Result<(), String> {
         return Err(error());
     }
     if let Some(ticks) = ticks {
-        if ticks.parse::<u32>().map_or(true, |t| t >= 1200) || !ticks.bytes().all(|b| b.is_ascii_digit()) {
+        if ticks.parse::<u32>().map_or(true, |t| t >= 1200)
+            || !ticks.bytes().all(|b| b.is_ascii_digit())
+        {
             return Err(error());
         }
     }
@@ -879,14 +960,24 @@ mod tests {
         for ok in ["254-07-05", "254-7-5:0", "1-12-28:1199"] {
             assert!(validate_game_date(ok).is_ok(), "{ok}");
         }
-        for bad in ["", "254-13-01", "254-01-29", "254-01", "254-01-01:1200", "254-01-01:x", "a-b-c", "-1-01-01"] {
+        for bad in [
+            "",
+            "254-13-01",
+            "254-01-29",
+            "254-01",
+            "254-01-01:1200",
+            "254-01-01:x",
+            "a-b-c",
+            "-1-01-01",
+        ] {
             assert!(validate_game_date(bad).is_err(), "{bad}");
         }
     }
 
     #[test]
     fn empty_detail_lists_are_restored() {
-        let mut details = json!({"skills": {}, "mind": {"recent_thoughts": {}, "unmet_needs": [1]}});
+        let mut details =
+            json!({"skills": {}, "mind": {"recent_thoughts": {}, "unmet_needs": [1]}});
         restore_empty_lists(&mut details);
         assert_eq!(details["skills"], json!([]));
         assert_eq!(details["mind"]["recent_thoughts"], json!([]));

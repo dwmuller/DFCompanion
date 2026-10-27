@@ -547,7 +547,8 @@ fn is_required(spec: &ToolSpec, argument: &str) -> bool {
 /// Concise tool list for the `/tools` command: names with their argument names,
 /// optional arguments in brackets.
 pub fn describe_tools() -> String {
-    let mut text = String::from("Available tools (optional arguments in brackets; /tool <name> for details):");
+    let mut text =
+        String::from("Available tools (optional arguments in brackets; /tool <name> for details):");
     for spec in registry() {
         let arguments = spec.schema["properties"]
             .as_object()
@@ -574,7 +575,10 @@ pub fn describe_tool(name: &str) -> Result<String, String> {
         .find(|spec| spec.name == name)
         .ok_or_else(|| format!("Unknown tool: {name}. Use /tools to list the tools."))?;
     let mut text = format!("{}\n{}", spec.name, spec.description);
-    match spec.schema["properties"].as_object().filter(|p| !p.is_empty()) {
+    match spec.schema["properties"]
+        .as_object()
+        .filter(|p| !p.is_empty())
+    {
         None => text.push_str("\nArguments: none"),
         Some(properties) => {
             text.push_str("\nArguments:");
@@ -582,7 +586,11 @@ pub fn describe_tool(name: &str) -> Result<String, String> {
                 text.push_str(&format!(
                     "\n  {argument} ({}, {})",
                     property["type"].as_str().unwrap_or("any"),
-                    if is_required(spec, argument) { "required" } else { "optional" }
+                    if is_required(spec, argument) {
+                        "required"
+                    } else {
+                        "optional"
+                    }
                 ));
                 match (property.get("minimum"), property.get("maximum")) {
                     (Some(min), Some(max)) => text.push_str(&format!(" [{min}..{max}]")),
@@ -729,7 +737,8 @@ mod tests {
         for spec in registry() {
             assert!(list.contains(spec.name));
         }
-        assert!(list.contains("get_unit_details(unit_ids, [include], [skill_class], [min_skill_level])"));
+        assert!(list
+            .contains("get_unit_details(unit_ids, [include], [skill_class], [min_skill_level])"));
         assert!(list.contains("list_residents([offset], [limit], [search])"));
         assert!(list.contains("get_fortress_overview()"));
 
@@ -738,7 +747,9 @@ mod tests {
         assert!(text.contains("attributes"));
         let text = describe_tool("list_residents").unwrap();
         assert!(text.contains("limit (integer, optional) [1..50]"));
-        assert!(describe_tool("get_fortress_overview").unwrap().contains("Arguments: none"));
+        assert!(describe_tool("get_fortress_overview")
+            .unwrap()
+            .contains("Arguments: none"));
         assert!(describe_tool("nope").is_err());
     }
 

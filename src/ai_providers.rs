@@ -51,7 +51,8 @@ mod tests {
                 && provider.adapter_kind == AdapterKind::OpenAI
         }));
         assert!(providers.iter().any(|provider| {
-            provider.name == "OpenAI: Responses API" && provider.adapter_kind == AdapterKind::OpenAIResp
+            provider.name == "OpenAI: Responses API"
+                && provider.adapter_kind == AdapterKind::OpenAIResp
         }));
     }
 }

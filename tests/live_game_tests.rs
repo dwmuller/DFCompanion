@@ -65,7 +65,10 @@ fn creature_raws() {
     let mut client = connect();
     let result = client.remote_fortress_reader().get_creature_raws();
     if show("GetCreatureRaws", &result) {
-        println!("       {} creature raws", result.unwrap().reply.creature_raws.len());
+        println!(
+            "       {} creature raws",
+            result.unwrap().reply.creature_raws.len()
+        );
     } else {
         panic!("GetCreatureRaws failed");
     }
@@ -94,7 +97,11 @@ fn creature_raws_paged() {
     for (index, error) in &bad {
         println!("creature raw index {index} fails to decode: {error}");
     }
-    assert!(bad.is_empty(), "{} creature raws failed to decode", bad.len());
+    assert!(
+        bad.is_empty(),
+        "{} creature raws failed to decode",
+        bad.len()
+    );
 }
 
 fn partial_raws(
@@ -111,12 +118,7 @@ fn partial_raws(
         .map(|reply| reply.reply.creature_raws.len())
 }
 
-fn bisect(
-    client: &mut dfhack_remote::Client,
-    start: i32,
-    end: i32,
-    bad: &mut Vec<(i32, String)>,
-) {
+fn bisect(client: &mut dfhack_remote::Client, start: i32, end: i32, bad: &mut Vec<(i32, String)>) {
     let Err(error) = partial_raws(client, start, end) else {
         return;
     };
@@ -153,10 +155,22 @@ fn unit_lists() {
 fn material_and_item_lists() {
     let mut client = connect();
     let mut ok = true;
-    ok &= show("GetMaterialList", &client.remote_fortress_reader().get_material_list());
-    ok &= show("GetGrowthList", &client.remote_fortress_reader().get_growth_list());
-    ok &= show("GetItemList", &client.remote_fortress_reader().get_item_list());
-    ok &= show("GetPlantRaws", &client.remote_fortress_reader().get_plant_raws());
+    ok &= show(
+        "GetMaterialList",
+        &client.remote_fortress_reader().get_material_list(),
+    );
+    ok &= show(
+        "GetGrowthList",
+        &client.remote_fortress_reader().get_growth_list(),
+    );
+    ok &= show(
+        "GetItemList",
+        &client.remote_fortress_reader().get_item_list(),
+    );
+    ok &= show(
+        "GetPlantRaws",
+        &client.remote_fortress_reader().get_plant_raws(),
+    );
     assert!(ok, "a list call failed");
 }
 
@@ -190,7 +204,12 @@ async fn ai_tools_end_to_end() {
     let overview = call("get_fortress_overview", serde_json::json!({})).await;
     assert!(overview.get("error").is_none(), "{overview}");
     let mut first_id = None;
-    for tool in ["list_residents", "list_pets_livestock", "list_other_creatures", "list_dead_missing"] {
+    for tool in [
+        "list_residents",
+        "list_pets_livestock",
+        "list_other_creatures",
+        "list_dead_missing",
+    ] {
         let list = call(tool, serde_json::json!({"limit": 5})).await;
         assert!(list.get("error").is_none(), "{list}");
         if first_id.is_none() {
@@ -204,20 +223,33 @@ async fn ai_tools_end_to_end() {
         )
         .await;
         assert!(reply.get("error").is_none(), "{reply}");
-        assert_eq!(reply["not_found"], serde_json::json!([999_999_999]), "{reply}");
+        assert_eq!(
+            reply["not_found"],
+            serde_json::json!([999_999_999]),
+            "{reply}"
+        );
         let details = &reply["units"][0];
         assert_eq!(details["id"].as_i64(), Some(id), "{details}");
         assert!(details["skills"].is_array(), "{details}");
-        assert!(details["attributes"]["physical"]["strength"]["value"].is_i64(), "{details}");
+        assert!(
+            details["attributes"]["physical"]["strength"]["value"].is_i64(),
+            "{details}"
+        );
         assert!(details["health"]["wound_count"].is_i64(), "{details}");
         for skill in details["skills"].as_array().unwrap() {
-            assert!(skill["name"].is_string() && skill["class"].is_string(), "{skill}");
+            assert!(
+                skill["name"].is_string() && skill["class"].is_string(),
+                "{skill}"
+            );
             assert!(skill["level"].is_i64(), "{skill}");
             assert!(skill["experience"].is_i64(), "{skill}");
         }
         // The first id comes from the residents list when there are residents.
         let mind = &details["mind"];
-        assert!(mind["mood"].is_string() && mind["recent_thoughts"].is_array(), "{mind}");
+        assert!(
+            mind["mood"].is_string() && mind["recent_thoughts"].is_array(),
+            "{mind}"
+        );
         assert!(mind["unmet_needs"].is_array(), "{mind}");
 
         let plain = call("get_unit_details", serde_json::json!({"unit_ids": [id]})).await;
@@ -231,7 +263,11 @@ async fn ai_tools_end_to_end() {
             assert_eq!(skill["class"], "military_weapon", "{skill}");
         }
     }
-    let unknown = call("get_unit_details", serde_json::json!({"unit_ids": [999_999_999]})).await;
+    let unknown = call(
+        "get_unit_details",
+        serde_json::json!({"unit_ids": [999_999_999]}),
+    )
+    .await;
     assert!(unknown.get("error").is_some(), "{unknown}");
     let found = call(
         "find_candidates",
@@ -239,45 +275,121 @@ async fn ai_tools_end_to_end() {
     )
     .await;
     assert!(found.get("error").is_none(), "{found}");
-    assert!(found["total_matching"].is_i64() && found["candidates"].is_array(), "{found}");
+    assert!(
+        found["total_matching"].is_i64() && found["candidates"].is_array(),
+        "{found}"
+    );
     for candidate in found["candidates"].as_array().unwrap() {
-        assert!(candidate["id"].is_i64() && candidate["attribute"]["value"].is_i64(), "{candidate}");
-        assert!(!candidate["matching_skills"].as_array().unwrap().is_empty(), "{candidate}");
+        assert!(
+            candidate["id"].is_i64() && candidate["attribute"]["value"].is_i64(),
+            "{candidate}"
+        );
+        assert!(
+            !candidate["matching_skills"].as_array().unwrap().is_empty(),
+            "{candidate}"
+        );
     }
-    let by_name = call("find_candidates", serde_json::json!({"sort_by": "willpower", "limit": 2})).await;
+    let by_name = call(
+        "find_candidates",
+        serde_json::json!({"sort_by": "willpower", "limit": 2}),
+    )
+    .await;
     assert!(by_name.get("error").is_none(), "{by_name}");
-    let bad = call("find_candidates", serde_json::json!({"attribute": "charisma"})).await;
+    let bad = call(
+        "find_candidates",
+        serde_json::json!({"attribute": "charisma"}),
+    )
+    .await;
     assert!(bad.get("error").is_some(), "{bad}");
     let reports = call("get_recent_reports", serde_json::json!({"limit": 5})).await;
     assert!(reports.get("error").is_none(), "{reports}");
-    assert!(!reports["reports"].as_array().unwrap().is_empty(), "{reports}");
+    assert!(
+        !reports["reports"].as_array().unwrap().is_empty(),
+        "{reports}"
+    );
     let date = overview["game_date"].as_str().expect("game_date string");
     let today = &date[..date.rfind(':').unwrap()];
-    let ranged = call("get_recent_reports", serde_json::json!({"from": "000-01-01", "to": today})).await;
+    let ranged = call(
+        "get_recent_reports",
+        serde_json::json!({"from": "000-01-01", "to": today}),
+    )
+    .await;
     assert!(ranged.get("error").is_none(), "{ranged}");
-    let none = call("get_recent_reports", serde_json::json!({"from": "9999-01-01"})).await;
+    let none = call(
+        "get_recent_reports",
+        serde_json::json!({"from": "9999-01-01"}),
+    )
+    .await;
     assert_eq!(none["total_matching"], 0, "{none}");
     let bad = call("get_recent_reports", serde_json::json!({"from": "nope"})).await;
     assert!(bad.get("error").is_some(), "{bad}");
-    let deaths = call("get_recent_reports", serde_json::json!({"category": "death", "limit": 50})).await;
+    let deaths = call(
+        "get_recent_reports",
+        serde_json::json!({"category": "death", "limit": 50}),
+    )
+    .await;
     assert!(deaths.get("error").is_none(), "{deaths}");
-    assert!(deaths["reports"].as_array().unwrap().iter().all(|r| r["category"] == "death"), "{deaths}");
-    let bad = call("get_recent_reports", serde_json::json!({"category": "nope"})).await;
+    assert!(
+        deaths["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["category"] == "death"),
+        "{deaths}"
+    );
+    let bad = call(
+        "get_recent_reports",
+        serde_json::json!({"category": "nope"}),
+    )
+    .await;
     assert!(bad.get("error").is_some(), "{bad}");
     // Paging forward by id: the oldest reports after an id, with no gaps.
     let latest_id = reports["latest_id"].as_i64().expect("latest_id");
-    let newest_id = reports["reports"].as_array().unwrap().last().unwrap()["id"].as_i64().unwrap();
+    let newest_id = reports["reports"].as_array().unwrap().last().unwrap()["id"]
+        .as_i64()
+        .unwrap();
     assert!(latest_id >= newest_id, "{reports}");
-    let nothing_newer = call("get_recent_reports", serde_json::json!({"since_id": latest_id})).await;
+    let nothing_newer = call(
+        "get_recent_reports",
+        serde_json::json!({"since_id": latest_id}),
+    )
+    .await;
     assert_eq!(nothing_newer["total_matching"], 0, "{nothing_newer}");
-    let page = call("get_recent_reports", serde_json::json!({"since_id": newest_id - 200, "limit": 3})).await;
+    let page = call(
+        "get_recent_reports",
+        serde_json::json!({"since_id": newest_id - 200, "limit": 3}),
+    )
+    .await;
     assert!(page.get("error").is_none(), "{page}");
-    let ids: Vec<i64> = page["reports"].as_array().unwrap().iter().map(|r| r["id"].as_i64().unwrap()).collect();
-    assert!(!ids.is_empty() && ids.iter().all(|id| *id > newest_id - 200) && ids.windows(2).all(|w| w[0] < w[1]), "{page}");
-    let bounded = call("get_recent_reports", serde_json::json!({"since_id": newest_id - 200, "until_id": ids[0], "limit": 50})).await;
-    let bounded_ids: Vec<i64> = bounded["reports"].as_array().unwrap().iter().map(|r| r["id"].as_i64().unwrap()).collect();
+    let ids: Vec<i64> = page["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !ids.is_empty()
+            && ids.iter().all(|id| *id > newest_id - 200)
+            && ids.windows(2).all(|w| w[0] < w[1]),
+        "{page}"
+    );
+    let bounded = call(
+        "get_recent_reports",
+        serde_json::json!({"since_id": newest_id - 200, "until_id": ids[0], "limit": 50}),
+    )
+    .await;
+    let bounded_ids: Vec<i64> = bounded["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_i64().unwrap())
+        .collect();
     assert_eq!(bounded_ids, vec![ids[0]], "{bounded}");
-    let items = call("search_items", serde_json::json!({"item_type": "WOOD", "limit": 5})).await;
+    let items = call(
+        "search_items",
+        serde_json::json!({"item_type": "WOOD", "limit": 5}),
+    )
+    .await;
     assert!(items.get("error").is_none(), "{items}");
     assert!(items["total_matching"].as_u64().unwrap() > 0, "{items}");
     let bad = call("search_items", serde_json::json!({"item_type": "NOPE"})).await;
@@ -285,32 +397,83 @@ async fn ai_tools_end_to_end() {
     let stocks = call("get_food_drink_summary", serde_json::json!({})).await;
     assert!(stocks.get("error").is_none(), "{stocks}");
     assert!(stocks["population"].as_u64().unwrap() > 0, "{stocks}");
-    let drinks = call("search_items", serde_json::json!({"item_type": "DRINK", "limit": 1})).await;
+    let drinks = call(
+        "search_items",
+        serde_json::json!({"item_type": "DRINK", "limit": 1}),
+    )
+    .await;
     assert_eq!(
         stocks["drink"]["total"].as_u64(),
         drinks["quantity_by_type"]["drink"].as_u64().or(Some(0)),
         "{stocks} {drinks}"
     );
-    assert!(stocks["food"]["available"].as_u64().unwrap() <= stocks["food"]["total"].as_u64().unwrap(), "{stocks}");
+    assert!(
+        stocks["food"]["available"].as_u64().unwrap() <= stocks["food"]["total"].as_u64().unwrap(),
+        "{stocks}"
+    );
     let housing = call("get_housing", serde_json::json!({"limit": 5})).await;
     assert!(housing.get("error").is_none(), "{housing}");
     let summary = &housing["summary"];
-    assert!(summary["free_bed_count"].as_u64().unwrap() <= summary["beds"].as_u64().unwrap(), "{housing}");
-    assert_eq!(housing["total_matching"], summary["free_bed_count"], "{housing}");
-    assert!(housing["free_beds"].as_array().unwrap().len() <= 5 && summary["by_floor"].is_array(), "{housing}");
-    let unhoused = call("get_housing", serde_json::json!({"list": "unhoused", "limit": 5})).await;
-    assert_eq!(unhoused["total_matching"], unhoused["summary"]["unhoused_count"], "{unhoused}");
+    assert!(
+        summary["free_bed_count"].as_u64().unwrap() <= summary["beds"].as_u64().unwrap(),
+        "{housing}"
+    );
+    assert_eq!(
+        housing["total_matching"], summary["free_bed_count"],
+        "{housing}"
+    );
+    assert!(
+        housing["free_beds"].as_array().unwrap().len() <= 5 && summary["by_floor"].is_array(),
+        "{housing}"
+    );
+    let unhoused = call(
+        "get_housing",
+        serde_json::json!({"list": "unhoused", "limit": 5}),
+    )
+    .await;
+    assert_eq!(
+        unhoused["total_matching"], unhoused["summary"]["unhoused_count"],
+        "{unhoused}"
+    );
     let bad_list = call("get_housing", serde_json::json!({"list": "nope"})).await;
     assert!(bad_list.get("error").is_some(), "{bad_list}");
     let zones = call("list_zones", serde_json::json!({"limit": 3})).await;
-    assert!(zones["zone_types"].is_array() && zones["zones"].is_array(), "{zones}");
-    assert!(zones["zones"].as_array().unwrap().iter().all(|z| z["type"] != "bedroom"), "{zones}");
+    assert!(
+        zones["zone_types"].is_array() && zones["zones"].is_array(),
+        "{zones}"
+    );
+    assert!(
+        zones["zones"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|z| z["type"] != "bedroom"),
+        "{zones}"
+    );
     let locations = call("list_locations", serde_json::json!({})).await;
     assert!(locations["locations"].is_array(), "{locations}");
     let workshops = call("list_workshops", serde_json::json!({"limit": 50})).await;
-    assert!(workshops["workshops"].as_array().unwrap().iter().all(|w| w["position"]["x"].is_i64() && w["job_count"].is_u64()), "{workshops}");
-    let busy = call("list_workshops", serde_json::json!({"only_with_jobs": true, "limit": 50})).await;
-    assert!(busy["workshops"].as_array().unwrap().iter().all(|w| w["job_count"].as_u64().unwrap() > 0), "{busy}");
+    assert!(
+        workshops["workshops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| w["position"]["x"].is_i64() && w["job_count"].is_u64()),
+        "{workshops}"
+    );
+    let busy = call(
+        "list_workshops",
+        serde_json::json!({"only_with_jobs": true, "limit": 50}),
+    )
+    .await;
+    assert!(
+        busy["workshops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| w["job_count"].as_u64().unwrap() > 0),
+        "{busy}"
+    );
     let counts = call("get_building_counts", serde_json::json!({})).await;
     assert!(counts["buildings"].is_array(), "{counts}");
     let moods = call("get_strange_moods", serde_json::json!({})).await;
@@ -349,7 +512,11 @@ fn raw_creature_raws_utf8() {
 #[test]
 #[ignore = "requires a running game"]
 fn raw_unit_list_utf8() {
-    let found = scan("GetUnitList", dfhack_remote::UnitList::full_name(), Vec::new());
+    let found = scan(
+        "GetUnitList",
+        dfhack_remote::UnitList::full_name(),
+        Vec::new(),
+    );
     assert_eq!(found, 0, "non-UTF-8 strings found");
 }
 
@@ -390,7 +557,13 @@ fn scan(method: &str, output_msg: String, request: Vec<u8>) -> usize {
     };
     let mut raw = RawClient::connect();
     let reply = raw
-        .call("RemoteFortressReader", method, &input_msg, &output_msg, &request)
+        .call(
+            "RemoteFortressReader",
+            method,
+            &input_msg,
+            &output_msg,
+            &request,
+        )
         .unwrap_or_else(|error| panic!("{method} failed: {error}"));
     let mut findings = Vec::new();
     let well_formed = scan_message(&reply, "", &mut findings);

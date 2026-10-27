@@ -95,9 +95,9 @@ impl NotificationHistory {
                 loop {
                     match rx.recv().await {
                         Ok(message) => recorder.push(message),
-                        Err(broadcast::error::RecvError::Lagged(count)) => recorder.push(format!(
-                            "{count} notifications were missed."
-                        )),
+                        Err(broadcast::error::RecvError::Lagged(count)) => {
+                            recorder.push(format!("{count} notifications were missed."))
+                        }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
@@ -260,7 +260,8 @@ pub fn run_companion_worker(
                 }
                 Wake::Flush => {
                     flush_at = None;
-                    if state.timed_turns_enabled() && !suspended && has_active_configuration(&state) {
+                    if state.timed_turns_enabled() && !suspended && has_active_configuration(&state)
+                    {
                         suspended = !try_ai_turn(&state, TurnKind::Periodic).await;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
@@ -324,7 +325,10 @@ async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatC
     match command {
         Ok(chat_commands::ChatCommand::CallTool { name, arguments }) => {
             let result = state.ai.call_tool(&name, arguments).await;
-            state.notify(format!("Tool {name} result:\n{}", format_tool_result(&result)));
+            state.notify(format!(
+                "Tool {name} result:\n{}",
+                format_tool_result(&result)
+            ));
         }
         Ok(chat_commands::ChatCommand::ListTools) => state.notify(ai_tools::describe_tools()),
         Ok(chat_commands::ChatCommand::DescribeTool { name }) => {
@@ -378,7 +382,11 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
                 let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&result.answer);
                 conversation.complete(prompt, result.answer.clone());
                 if !uneventful {
-                    let prefix = if kind == TurnKind::Periodic { UNSOLICITED_PREFIX } else { "Companion: " };
+                    let prefix = if kind == TurnKind::Periodic {
+                        UNSOLICITED_PREFIX
+                    } else {
+                        "Companion: "
+                    };
                     state.notify(format!("{prefix}{})", result.answer));
                     state.notify(result.usage.summary())
                 }
@@ -861,7 +869,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure() {
+    async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure()
+    {
         let (state, queue_rx) = AppState::new();
         state
             .ai
@@ -875,11 +884,17 @@ mod tests {
             )
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
-        state.timed_turns.store(true, std::sync::atomic::Ordering::Relaxed);
+        state
+            .timed_turns
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
         state.queue_tx.send(sample_event()).await.unwrap();
 
-        assert!(notifications.recv().await.unwrap().starts_with(GAME_EVENT_PREFIX));
+        assert!(notifications
+            .recv()
+            .await
+            .unwrap()
+            .starts_with(GAME_EVENT_PREFIX));
         let started = Instant::now();
         let failure = notifications.recv().await.unwrap();
         assert!(failure.contains("AI request failed"), "{failure}");
@@ -909,7 +924,11 @@ mod tests {
         let mut notifications = state.notifications_tx.subscribe();
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
         state.queue_tx.send(sample_event()).await.unwrap();
-        assert!(notifications.recv().await.unwrap().starts_with(GAME_EVENT_PREFIX));
+        assert!(notifications
+            .recv()
+            .await
+            .unwrap()
+            .starts_with(GAME_EVENT_PREFIX));
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
         worker.abort();

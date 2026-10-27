@@ -104,10 +104,7 @@ fn split_arguments(text: &str) -> Result<Vec<String>, String> {
 }
 
 fn parse_value(value: &str) -> Value {
-    if let Some(inner) = value
-        .strip_prefix('\'')
-        .and_then(|v| v.strip_suffix('\''))
-    {
+    if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
         return Value::String(inner.to_owned());
     }
     serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_owned()))
@@ -180,7 +177,10 @@ mod tests {
 
     #[test]
     fn tools_command_takes_no_arguments() {
-        assert_eq!(ChatCommand::parse("/tools"), Some(Ok(ChatCommand::ListTools)));
+        assert_eq!(
+            ChatCommand::parse("/tools"),
+            Some(Ok(ChatCommand::ListTools))
+        );
         assert!(ChatCommand::parse("/tools x").unwrap().is_err());
         assert_eq!(
             ChatCommand::parse("/tool get_unit_details"),
@@ -202,7 +202,9 @@ mod tests {
             ChatCommand::parse("/call t race='magma crab' a=\"x \\\"y\\\" z\"").unwrap(),
             call("t", json!({"race": "magma crab", "a": "x \"y\" z"}))
         );
-        assert!(ChatCommand::parse("/call t race=\"magma crab").unwrap().is_err());
+        assert!(ChatCommand::parse("/call t race=\"magma crab")
+            .unwrap()
+            .is_err());
     }
 
     #[test]
