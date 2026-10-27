@@ -300,7 +300,7 @@ form.addEventListener("submit", async (event) => {
 loadProviders()
   .then(() => {
     resetForm();
-    return loadConfigurations();
+//    return loadConfigurations();
   })
   .catch((error) => {
     document.getElementById("list-status").textContent =

@@ -19,10 +19,18 @@ pub const MAX_SYSTEM_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_API_KEY_BYTES: usize = 4_096;
 
 pub fn is_supported_interaction_method(method: AdapterKind) -> bool {
-    matches!(
-        method,
-        AdapterKind::OpenAI | AdapterKind::OpenAIResp | AdapterKind::Anthropic
-    )
+    interaction_method_label(method).is_some()
+}
+
+pub fn interaction_method_label(method: AdapterKind) -> Option<&'static str> {
+    // This is the definitive list of AdapterKind values that we support, as well
+    // as providing human-readable labels for them.
+    match method {
+        AdapterKind::OpenAI => Some("OpenAI Chat Completions"),
+        AdapterKind::OpenAIResp => Some("OpenAI Responses"),
+        AdapterKind::Anthropic => Some("Anthropic"),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -429,6 +437,23 @@ mod tests {
                 SYSTEM_TEXT.to_owned(),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn supported_interaction_methods_have_labels() {
+        assert_eq!(
+            interaction_method_label(AdapterKind::OpenAI),
+            Some("OpenAI Chat Completions")
+        );
+        assert_eq!(
+            interaction_method_label(AdapterKind::OpenAIResp),
+            Some("OpenAI Responses")
+        );
+        assert_eq!(
+            interaction_method_label(AdapterKind::Anthropic),
+            Some("Anthropic")
+        );
+        assert_eq!(interaction_method_label(AdapterKind::Gemini), None);
     }
 
     #[test]

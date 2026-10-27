@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+askama = "0.16.1"
 axum = { version = "0.7", features = ["form"] }
 directories = "6"
 dfhack-remote = "0.12.0"

@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AI Configurations — DFCompanion</title>
+    <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/ai-configurations.js" defer></script>
     <link rel="stylesheet" href="/assets/style.css">
   </head>
@@ -14,7 +15,12 @@
 
     <section aria-labelledby="config-list-heading">
       <h2 id="config-list-heading">Saved configurations</h2>
-      <ul id="configuration-list"></ul>
+      <div id="configuration-list"
+           hx-get="/fragments/ai-configurations"
+           hx-trigger="load"
+           hx-swap="outerHTML">
+        <p>Loading configurations…</p>
+      </div>
       <p id="list-status" role="status" aria-live="polite"></p>
     </section>
 

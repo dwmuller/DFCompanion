@@ -1,5 +1,6 @@
 use std::convert::Infallible;
 
+use askama::Template;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Form, Path, State},
@@ -23,6 +24,21 @@ use crate::{
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
 const HTTP_HOST: &str = "127.0.0.1:3000";
+
+#[derive(Debug)]
+struct ConfigurationListItem {
+    name: String,
+    interaction_method: String,
+    model_id: String,
+    api_key_saved: bool,
+    active: bool,
+}
+
+#[derive(Template)]
+#[template(path = "configuration-list.html")]
+struct ConfigurationListTemplate {
+    configurations: Vec<ConfigurationListItem>,
+}
 
 #[derive(Deserialize)]
 struct ChatForm {
@@ -115,6 +131,10 @@ pub fn router(state: AppState) -> Router {
             get(list_configurations)
                 .post(create_configuration)
                 .layer(DefaultBodyLimit::max(32_768)),
+        )
+        .route(
+            "/fragments/ai-configurations",
+            get(configuration_list_fragment),
         )
         .route("/api/ai-providers", get(list_providers))
         .route(
@@ -228,6 +248,29 @@ async fn list_configurations(State(state): State<AppState>) -> Response {
             ([(header::CACHE_CONTROL, "no-store")], axum::Json(response)).into_response()
         }
         Err(response) => response,
+    }
+}
+
+async fn configuration_list_fragment(State(state): State<AppState>) -> Response {
+    let response = match configuration_list(&state.ai.configurations) {
+        Ok(response) => response,
+        Err(response) => return response,
+    };
+
+    match render_configuration_list(&response) {
+        Ok(html) => (
+            [(header::CACHE_CONTROL, "no-store")],
+            Html(html),
+        )
+            .into_response(),
+        Err(error) => {
+            eprintln!("Could not render AI configuration list: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not render AI configurations.",
+            )
+                .into_response()
+        }
     }
 }
 
@@ -479,6 +522,28 @@ fn configuration_list(
     })
 }
 
+fn render_configuration_list(
+    response: &ConfigurationListResponse,
+) -> Result<String, askama::Error> {
+    let configurations = response
+        .configurations
+        .iter()
+        .map(|summary| ConfigurationListItem {
+            name: summary.configuration.name.clone(),
+            interaction_method: crate::ai_config::interaction_method_label(
+                summary.configuration.interaction_method,
+            )
+            .unwrap_or("Unsupported interaction method")
+            .to_owned(),
+            model_id: summary.configuration.model_id.clone(),
+            api_key_saved: summary.api_key_saved,
+            active: response.active_id.as_ref() == Some(&summary.configuration.id),
+        })
+        .collect();
+
+    ConfigurationListTemplate { configurations }.render()
+}
+
 async fn configuration_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
@@ -684,4 +749,70 @@ fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use askama::Template;
+
+    #[test]
+    fn configuration_list_template_renders_empty_state() {
+        let rendered = ConfigurationListTemplate {
+            configurations: Vec::new(),
+        }
+        .render()
+        .expect("configuration list template should render");
+
+        assert!(rendered.contains("No configurations yet."));
+    }
+
+    #[test]
+    fn configuration_list_template_renders_and_escapes_configuration() {
+        let rendered = ConfigurationListTemplate {
+            configurations: vec![ConfigurationListItem {
+                name: "<script>bad</script>".to_owned(),
+                interaction_method: "OpenAI Responses".to_owned(),
+                model_id: "deepseek-flash".to_owned(),
+                api_key_saved: true,
+                active: true,
+            }],
+        }
+        .render()
+        .expect("configuration list template should render");
+
+        assert!(rendered.contains("&#60;script&#62;bad&#60;/script&#62;"));
+        assert!(!rendered.contains("<script>bad</script>"));
+        assert!(rendered.contains("OpenAI Responses"));
+        assert!(rendered.contains("deepseek-flash"));
+        assert!(rendered.contains("API key saved"));
+        assert!(rendered.contains("selected"));
+    }
+
+    #[test]
+    fn render_configuration_list_maps_configuration_summary() {
+        let response = ConfigurationListResponse {
+            configurations: vec![ConfigurationSummary {
+                configuration: AiConfiguration {
+                    id: "test-id".to_owned(),
+                    name: "Test configuration".to_owned(),
+                    interaction_method: AdapterKind::OpenAIResp,
+                    model_id: "test-model".to_owned(),
+                    url: "https://example.com/".to_owned(),
+                    system_text: "Test system text".to_owned(),
+                },
+                api_key_saved: true,
+            }],
+            active_id: Some("test-id".to_owned()),
+        };
+
+        let rendered =
+            render_configuration_list(&response).expect("configuration list should render");
+
+        assert!(rendered.contains("Test configuration"));
+        assert!(rendered.contains("OpenAI Responses"));
+        assert!(rendered.contains("test-model"));
+        assert!(rendered.contains("API key saved"));
+        assert!(rendered.contains("selected"));
+    }
 }
