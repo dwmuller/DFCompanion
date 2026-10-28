@@ -27,6 +27,7 @@ const HTTP_HOST: &str = "127.0.0.1:3000";
 
 #[derive(Debug)]
 struct ConfigurationListItem {
+    id: String,
     name: String,
     interaction_method: String,
     model_id: String,
@@ -77,6 +78,12 @@ struct ConfigurationListResponse {
 #[serde(deny_unknown_fields)]
 struct ActiveConfigurationForm {
     id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectConfigurationForm {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -135,6 +142,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/fragments/ai-configurations",
             get(configuration_list_fragment),
+        )
+        .route(
+            "/fragments/ai-configurations/active",
+            put(select_configuration_fragment).layer(DefaultBodyLimit::max(8_192)),
         )
         .route("/api/ai-providers", get(list_providers))
         .route(
@@ -417,6 +428,24 @@ async fn select_configuration(
     list_configurations(State(state)).await
 }
 
+async fn select_configuration_fragment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<SelectConfigurationForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+
+    if let Err(error) = state.ai.configurations.set_active(Some(&form.id)) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+
+    let _ = state.queue_tx.try_send(QueueItem::Orient);
+
+    configuration_list_fragment(State(state)).await
+}
+
 async fn update_api_key(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -529,6 +558,7 @@ fn render_configuration_list(
         .configurations
         .iter()
         .map(|summary| ConfigurationListItem {
+            id: summary.configuration.id.clone(),
             name: summary.configuration.name.clone(),
             interaction_method: crate::ai_config::interaction_method_label(
                 summary.configuration.interaction_method,
@@ -771,6 +801,7 @@ mod test {
     fn configuration_list_template_renders_and_escapes_configuration() {
         let rendered = ConfigurationListTemplate {
             configurations: vec![ConfigurationListItem {
+                id: "test-id".to_owned(),
                 name: "<script>bad</script>".to_owned(),
                 interaction_method: "OpenAI Responses".to_owned(),
                 model_id: "deepseek-flash".to_owned(),
@@ -787,23 +818,37 @@ mod test {
         assert!(rendered.contains("deepseek-flash"));
         assert!(rendered.contains("API key saved"));
         assert!(rendered.contains("selected"));
+        assert!(!rendered.contains(">Select</button>"));
     }
 
     #[test]
     fn render_configuration_list_maps_configuration_summary() {
         let response = ConfigurationListResponse {
-            configurations: vec![ConfigurationSummary {
-                configuration: AiConfiguration {
-                    id: "test-id".to_owned(),
-                    name: "Test configuration".to_owned(),
-                    interaction_method: AdapterKind::OpenAIResp,
-                    model_id: "test-model".to_owned(),
-                    url: "https://example.com/".to_owned(),
-                    system_text: "Test system text".to_owned(),
+            configurations: vec![
+                ConfigurationSummary {
+                    configuration: AiConfiguration {
+                        id: "test-id-1".to_owned(),
+                        name: "Test configuration 1".to_owned(),
+                        interaction_method: AdapterKind::OpenAIResp,
+                        model_id: "test-model".to_owned(),
+                        url: "https://example.com/".to_owned(),
+                        system_text: "Test system text 1".to_owned(),
+                    },
+                    api_key_saved: true,
                 },
-                api_key_saved: true,
-            }],
-            active_id: Some("test-id".to_owned()),
+                ConfigurationSummary {
+                    configuration: AiConfiguration {
+                        id: "test-id-2".to_owned(),
+                        name: "Test configuration 2".to_owned(),
+                        interaction_method: AdapterKind::OpenAIResp,
+                        model_id: "test-model".to_owned(),
+                        url: "https://example.com/".to_owned(),
+                        system_text: "Test system text 2".to_owned(),
+                    },
+                    api_key_saved: true,
+                },
+            ],
+            active_id: Some("test-id-1".to_owned()),
         };
 
         let rendered =
@@ -814,5 +859,27 @@ mod test {
         assert!(rendered.contains("test-model"));
         assert!(rendered.contains("API key saved"));
         assert!(rendered.contains("selected"));
+        assert!(rendered.contains("value=\"test-id-2\""));
+    }
+
+    #[test]
+    fn configuration_list_template_renders_select_for_inactive_configuration() {
+        let rendered = ConfigurationListTemplate {
+            configurations: vec![ConfigurationListItem {
+                id: "inactive-id".to_owned(),
+                name: "Inactive configuration".to_owned(),
+                interaction_method: "Anthropic".to_owned(),
+                model_id: "test-model".to_owned(),
+                api_key_saved: false,
+                active: false,
+            }],
+        }
+        .render()
+        .expect("configuration list template should render");
+
+        assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/active\""));
+        assert!(rendered.contains("name=\"id\""));
+        assert!(rendered.contains("value=\"inactive-id\""));
+        assert!(rendered.contains("Select"));
     }
 }

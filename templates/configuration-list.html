@@ -9,6 +9,18 @@
         {% if configuration.api_key_saved %}API key saved{% else %}API key missing{% endif %}
         {% if configuration.active %} — selected{% endif %}
       </span>
+      {% if !configuration.active %}
+      <button
+        type="button"
+        name="id"
+        value="{{ configuration.id }}"
+        hx-put="/fragments/ai-configurations/active"
+        hx-target="#configuration-list"
+        hx-swap="outerHTML"
+        hx-disabled-elt="this">
+        Select
+      </button>
+      {% endif %}
     </li>
   {% else %}
     <li>No configurations yet.</li>
