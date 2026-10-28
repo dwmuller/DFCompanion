@@ -269,11 +269,7 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
     };
 
     match render_configuration_list(&response) {
-        Ok(html) => (
-            [(header::CACHE_CONTROL, "no-store")],
-            Html(html),
-        )
-            .into_response(),
+        Ok(html) => ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
         Err(error) => {
             eprintln!("Could not render AI configuration list: {error}");
             (
