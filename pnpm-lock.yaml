@@ -12,8 +12,8 @@ importers:
         specifier: 3.4.17
         version: 3.4.17
       htmx.org:
-        specifier: 2.0.11
-        version: 2.0.11
+        specifier: 4.0.0
+        version: 4.0.0
       marked:
         specifier: 18.1.1
         version: 18.1.1
@@ -26,8 +26,9 @@ packages:
   dompurify@3.4.17:
     resolution: {integrity: sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==}
 
-  htmx.org@2.0.11:
-    resolution: {integrity: sha512-Thx/WtpeOQqSrqBCw/A1cwGJGg4UrVa3+sW0GmrM3p4gJgO89ecH4qtbnyzDDWFvBTqjnIMCgELTNt636dtamA==}
+  htmx.org@4.0.0:
+    resolution: {integrity: sha512-T/171FUY93Kdfp8t+DnHdk45QvKRiBhVhhrwSzrXgUi4pHKvhp77dUA/qg8FAjsFWPIHNbmUuIdCrcVHuiZWng==}
+    hasBin: true
 
   marked@18.1.1:
     resolution: {integrity: sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg==}
@@ -43,6 +44,6 @@ snapshots:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
-  htmx.org@2.0.11: {}
+  htmx.org@4.0.0: {}
 
   marked@18.1.1: {}

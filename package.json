@@ -4,7 +4,7 @@
   "description": "Pins the third-party browser libraries vendored into static/vendor. Run scripts/update-vendor.ps1 after changing versions.",
   "dependencies": {
     "dompurify": "3.4.17",
-    "htmx.org": "2.0.11",
+    "htmx.org": "4.0.0",
     "marked": "18.1.1"
   }
 }

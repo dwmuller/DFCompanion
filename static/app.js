@@ -170,7 +170,7 @@ document.getElementById("active-configuration").addEventListener("change", async
   }
 });
 
-document.getElementById("chat-form").addEventListener("htmx:afterRequest", (event) => {
+document.getElementById("chat-form").addEventListener("htmx:after:request", (event) => {
   if (event.detail.successful) {
     document.getElementById("message").value = "";
   }

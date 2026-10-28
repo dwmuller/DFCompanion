@@ -47,7 +47,7 @@
     <form id="chat-form"
         hx-post="/chat"
         hx-target="#chat-status"
-        hx-disabled-elt="find button">
+        hx-disable="find button">
       <label for="message">Message</label>
       <textarea id="message" name="message" maxlength="8000" required></textarea>
       <button type="submit">Send</button>
@@ -56,7 +56,7 @@
     <form id="retry-form"
         hx-post="/retry"
         hx-target="#retry-status"
-        hx-disabled-elt="find button">
+        hx-disable="find button">
       <button id="retry-button" type="submit">Retry failed AI request</button>
       <span id="retry-status" role="status"></span>
     </form>

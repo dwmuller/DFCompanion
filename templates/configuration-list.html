@@ -17,7 +17,7 @@
         hx-put="/fragments/ai-configurations/active"
         hx-target="#configuration-list"
         hx-swap="outerHTML"
-        hx-disabled-elt="this">
+        hx-disable="this">
         Select
       </button>
       {% endif %}
@@ -27,7 +27,7 @@
         hx-post="/fragments/ai-configurations/{{ configuration.id }}/key"
         hx-target="#configuration-list"
         hx-swap="outerHTML"
-        hx-disabled-elt="this"
+        hx-disable="this"
         hx-confirm="Forget the saved API key for {{ configuration.name }}?">
         Forget API key
       </button>
