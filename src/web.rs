@@ -147,6 +147,10 @@ pub fn router(state: AppState) -> Router {
             "/fragments/ai-configurations/active",
             put(select_configuration_fragment).layer(DefaultBodyLimit::max(8_192)),
         )
+        .route(
+            "/fragments/ai-configurations/:id/key",
+            post(forget_api_key_fragment).layer(DefaultBodyLimit::max(8_192)),
+        )
         .route("/api/ai-providers", get(list_providers))
         .route(
             "/api/ai-configurations/active",
@@ -483,6 +487,26 @@ async fn update_api_key(
         return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
     }
     list_configurations(State(state)).await
+}
+
+async fn forget_api_key_fragment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+
+    if let Err(error) = state.ai.configurations.get(&id) {
+        return (StatusCode::NOT_FOUND, error).into_response();
+    }
+
+    if let Err(error) = state.ai.configurations.forget_api_key(&id) {
+        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+    }
+
+    configuration_list_fragment(State(state)).await
 }
 
 async fn delete_configuration(
@@ -877,5 +901,44 @@ mod test {
         assert!(rendered.contains("name=\"id\""));
         assert!(rendered.contains("value=\"inactive-id\""));
         assert!(rendered.contains("Select"));
+    }
+
+    #[test]
+    fn configuration_list_template_renders_forget_key_for_saved_key() {
+        let rendered = ConfigurationListTemplate {
+            configurations: vec![ConfigurationListItem {
+                id: "configuration-id".to_owned(),
+                name: "Test configuration".to_owned(),
+                interaction_method: "Anthropic".to_owned(),
+                model_id: "test-model".to_owned(),
+                api_key_saved: true,
+                active: true,
+            }],
+        }
+        .render()
+        .expect("configuration list template should render");
+
+        assert!(rendered.contains("hx-post=\"/fragments/ai-configurations/configuration-id/key\""));
+        assert!(rendered.contains("hx-confirm="));
+        assert!(rendered.contains("Forget API key"));
+    }
+
+    #[test]
+    fn configuration_list_template_omits_forget_key_when_key_is_missing() {
+        let rendered = ConfigurationListTemplate {
+            configurations: vec![ConfigurationListItem {
+                id: "configuration-id".to_owned(),
+                name: "Test configuration".to_owned(),
+                interaction_method: "Anthropic".to_owned(),
+                model_id: "test-model".to_owned(),
+                api_key_saved: false,
+                active: true,
+            }],
+        }
+        .render()
+        .expect("configuration list template should render");
+
+        assert!(!rendered.contains("Forget API key"));
+        assert!(!rendered.contains("/fragments/ai-configurations/configuration-id/key"));
     }
 }
