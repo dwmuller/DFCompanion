@@ -814,7 +814,7 @@ mod test {
         .render()
         .expect("configuration list template should render");
 
-        assert!(rendered.contains("No configurations yet."));
+        assert!(rendered.contains("Create new configuration"));
     }
 
     #[test]
@@ -839,6 +839,9 @@ mod test {
         assert!(rendered.contains("API key saved"));
         assert!(rendered.contains("selected"));
         assert!(!rendered.contains(">Select</button>"));
+        assert!(rendered.contains("id=\"configuration-test-id\""));
+        assert!(rendered.contains("id=\"new-configuration\""));
+        assert!(rendered.contains("Create new configuration"));
     }
 
     #[test]
@@ -940,5 +943,18 @@ mod test {
 
         assert!(!rendered.contains("Forget API key"));
         assert!(!rendered.contains("/fragments/ai-configurations/configuration-id/key"));
+    }
+
+    #[test]
+    fn configuration_list_template_renders_create_row_when_empty() {
+        let rendered = ConfigurationListTemplate {
+            configurations: Vec::new(),
+        }
+        .render()
+        .expect("configuration list template should render");
+
+        assert!(rendered.contains("id=\"new-configuration\""));
+        assert!(rendered.contains("Create new configuration"));
+        assert!(!rendered.contains("No configurations yet."));
     }
 }

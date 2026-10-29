@@ -1,40 +1,10 @@
 <div id="configuration-list">
   <ul>
   {% for configuration in configurations %}
-    <li>
-      <span>
-        {{ configuration.name }} —
-        {{ configuration.interaction_method }} —
-        {{ configuration.model_id }} —
-        {% if configuration.api_key_saved %}API key saved{% else %}API key missing{% endif %}
-        {% if configuration.active %} — selected{% endif %}
-      </span>
-      {% if !configuration.active %}
-      <button
-        type="button"
-        name="id"
-        value="{{ configuration.id }}"
-        hx-put="/fragments/ai-configurations/active"
-        hx-target="#configuration-list"
-        hx-swap="outerHTML"
-        hx-disable="this">
-        Select
-      </button>
-      {% endif %}
-      {% if configuration.api_key_saved %}
-      <button
-        type="button"
-        hx-post="/fragments/ai-configurations/{{ configuration.id }}/key"
-        hx-target="#configuration-list"
-        hx-swap="outerHTML"
-        hx-disable="this"
-        hx-confirm="Forget the saved API key for {{ configuration.name }}?">
-        Forget API key
-      </button>
-      {% endif %}
-    </li>
-  {% else %}
-    <li>No configurations yet.</li>
+    {% include "configuration-summary.html" %}
   {% endfor %}
+  <li id="new-configuration">
+    <button type="button">Create new configuration</button>
+  </li>
   </ul>
 </div>
