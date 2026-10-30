@@ -9,7 +9,9 @@ body {
   border: 1px solid #888;
   min-height: 15rem;
   overflow-y: auto;
-  padding: 1rem;
+  /* Room on the left for list numbers, which are drawn outside the items and
+     would otherwise be clipped by the scrolling box. */
+  padding: 1rem 1rem 1rem 3.5rem;
 }
 
 #notifications li {

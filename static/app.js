@@ -39,11 +39,17 @@ for (const id of ["event-turns", "periodic-turns"]) {
 
 // Sending clears the box through an out-of-band swap in the server's reply.
 // Enter-to-send stays here: htmx trigger filters need eval, which the CSP forbids.
-document.getElementById("message").addEventListener("keydown", (event) => {
+// Delegated, because a successful send replaces the textarea element.
+document.addEventListener("keydown", (event) => {
   // Enter sends; Shift+Enter inserts a newline. Ignore Enter while composing (IME).
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (
+    event.target.id === "message" &&
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.isComposing
+  ) {
     event.preventDefault();
-    if (event.currentTarget.value.trim() !== "") {
+    if (event.target.value.trim() !== "") {
       document.getElementById("chat-form").requestSubmit();
     }
   }
