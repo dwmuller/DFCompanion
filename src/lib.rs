@@ -18,6 +18,7 @@ pub mod api {
 }
 pub mod rpc;
 pub mod web;
+pub mod web_templates;
 
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
 /// Marks UI notifications that echo game events, so the browser can hide them.
