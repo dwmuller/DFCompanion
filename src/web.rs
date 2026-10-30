@@ -223,18 +223,26 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
         .into_response()
 }
 
-async fn index() -> impl IntoResponse {
-    (
-        [(header::CACHE_CONTROL, "no-store")],
-        Html(include_str!("../static/index.html")),
-    )
+async fn index(State(state): State<AppState>) -> Response {
+    match current_items(&state) {
+        Ok(items) => fragment_response(StatusCode::OK, templates::render_index(&items), "page"),
+        Err(response) => response,
+    }
 }
 
-async fn configurations_page() -> impl IntoResponse {
-    (
-        [(header::CACHE_CONTROL, "no-store")],
-        Html(include_str!("../static/ai-configurations.html")),
-    )
+async fn configurations_page(State(state): State<AppState>) -> Response {
+    match current_items(&state) {
+        Ok(items) => fragment_response(
+            StatusCode::OK,
+            templates::render_configurations_page(&items),
+            "page",
+        ),
+        Err(response) => response,
+    }
+}
+
+fn current_items(state: &AppState) -> Result<Vec<ConfigurationListItem>, Response> {
+    configuration_list(&state.ai.configurations).map(|response| list_items(&response))
 }
 
 async fn list_configurations(State(state): State<AppState>) -> Response {

@@ -3,14 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="htmx-config" content='{
-      "responseHandling": [
-        {"code": "204", "swap": false},
-        {"code": "[23]..", "swap": true},
-        {"code": "[45]..", "swap": true, "error": true},
-        {"code": "...", "swap": false}
-      ]
-    }'>
+    {% include "htmx-config.html" %}
     <title>AI Configurations — DFCompanion</title>
     <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/ai-configurations.js" defer></script>
@@ -23,22 +16,12 @@
 
     <section aria-labelledby="active-configuration-heading">
       <h2 id="active-configuration-heading">Active configuration</h2>
-      <div id="active-configuration"
-           hx-get="/fragments/ai-configurations/active"
-           hx-trigger="load"
-           hx-swap="outerHTML">
-        <p>Loading configurations…</p>
-      </div>
+      {% include "active-configuration.html" %}
     </section>
 
     <section aria-labelledby="config-list-heading">
       <h2 id="config-list-heading">Saved configurations</h2>
-      <div id="configuration-list"
-           hx-get="/fragments/ai-configurations"
-           hx-trigger="load"
-           hx-swap="outerHTML">
-        <p>Loading configurations…</p>
-      </div>
+      {% include "configuration-list.html" %}
     </section>
   </body>
 </html>

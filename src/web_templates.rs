@@ -105,7 +105,27 @@ struct NotificationTemplate<'a> {
 
 #[derive(Template)]
 #[template(path = "chat-sent.html")]
-struct ChatSentTemplate;
+struct ChatSentTemplate {
+    oob: bool,
+}
+
+#[derive(Template)]
+#[template(path = "index.html")]
+struct IndexTemplate<'a> {
+    configurations: &'a [ConfigurationListItem],
+    has_active: bool,
+    oob: bool,
+    error: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "ai-configurations.html")]
+struct ConfigurationsPageTemplate<'a> {
+    configurations: &'a [ConfigurationListItem],
+    has_active: bool,
+    oob: bool,
+    error: &'a str,
+}
 
 #[derive(Template)]
 #[template(path = "configuration-list.html")]
@@ -217,7 +237,38 @@ fn markdown_to_safe_html(markdown: &str) -> String {
 /// The chat status line, plus an out-of-band replacement that empties the
 /// message box (setting `value` is the only way to clear what was typed).
 pub fn render_chat_sent() -> Result<String, RenderError> {
-    Ok(ChatSentTemplate.render()?)
+    Ok(ChatSentTemplate { oob: true }.render()?)
+}
+
+/// Renders the main page with the configuration selector already in place.
+pub fn render_index(configurations: &[ConfigurationListItem]) -> Result<String, RenderError> {
+    Ok(IndexTemplate {
+        configurations,
+        has_active: has_active(configurations),
+        oob: false,
+        error: "",
+    }
+    .render()?)
+}
+
+/// Renders the configuration management page with the selector and the list
+/// of configurations already in place.
+pub fn render_configurations_page(
+    configurations: &[ConfigurationListItem],
+) -> Result<String, RenderError> {
+    Ok(ConfigurationsPageTemplate {
+        configurations,
+        has_active: has_active(configurations),
+        oob: false,
+        error: "",
+    }
+    .render()?)
+}
+
+fn has_active(configurations: &[ConfigurationListItem]) -> bool {
+    configurations
+        .iter()
+        .any(|configuration| configuration.active)
 }
 
 pub fn render_configuration_list(
@@ -235,9 +286,7 @@ pub fn render_active_configuration(
 ) -> Result<String, RenderError> {
     Ok(ActiveConfigurationTemplate {
         configurations,
-        has_active: configurations
-            .iter()
-            .any(|configuration| configuration.active),
+        has_active: has_active(configurations),
         oob,
         error,
     }
@@ -359,6 +408,35 @@ mod test {
         assert!(rendered.contains("Message queued."));
         assert!(rendered.contains("id=\"message\""));
         assert!(rendered.contains("hx-swap-oob=\"true\""));
+    }
+
+    #[test]
+    fn pages_include_their_fragments_without_load_requests() {
+        let configurations = [ConfigurationListItem::from_configuration(
+            &AiConfiguration {
+                id: "one".to_owned(),
+                name: "First".to_owned(),
+                interaction_method: AdapterKind::OpenAI,
+                model_id: "m".to_owned(),
+                url: "https://api.openai.com/v1/".to_owned(),
+                system_text: "s".to_owned(),
+            },
+            true,
+            true,
+        )];
+
+        let index = render_index(&configurations).expect("index should render");
+        assert!(index.contains("id=\"active-configuration\""));
+        assert!(index.contains("<option value=\"one\" selected>"));
+        assert!(index.contains("htmx-config"));
+        assert!(index.contains("name=\"message\""));
+        assert!(!index.contains("hx-trigger=\"load\"\n           hx-swap"));
+        assert!(!index.contains("hx-swap-oob"));
+
+        let page = render_configurations_page(&configurations).expect("page should render");
+        assert!(page.contains("id=\"configuration-list\""));
+        assert!(page.contains("First"));
+        assert!(!page.contains("Loading configurations"));
     }
 
     #[test]

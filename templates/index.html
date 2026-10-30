@@ -3,14 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="htmx-config" content='{
-      "responseHandling": [
-        {"code": "204", "swap": false},
-        {"code": "[23]..", "swap": true},
-        {"code": "[45]..", "swap": true, "error": true},
-        {"code": "...", "swap": false}
-      ]
-    }'>
+    {% include "htmx-config.html" %}
 
     <title>DFCompanion</title>
     <script src="/assets/htmx.min.js" defer></script>
@@ -72,7 +65,7 @@
         hx-target="#chat-status"
         hx-disable="find button">
       <label for="message">Message</label>
-      <textarea id="message" name="message" maxlength="8000" required></textarea>
+      {% include "chat-message.html" %}
       <button type="submit">Send</button>
     <span id="chat-status" role="status"></span>
     </form>
@@ -85,12 +78,7 @@
     </form>
     <section aria-labelledby="configuration-heading">
       <h2 id="configuration-heading">AI configuration</h2>
-      <div id="active-configuration"
-           hx-get="/fragments/ai-configurations/active"
-           hx-trigger="load"
-           hx-swap="outerHTML">
-        <p>Loading configurations…</p>
-      </div>
+      {% include "active-configuration.html" %}
       <a href="/ai-configurations">Manage AI configurations</a>
     </section>
   </body>
