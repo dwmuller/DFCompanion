@@ -21,51 +21,6 @@
            hx-swap="outerHTML">
         <p>Loading configurations…</p>
       </div>
-      <p id="list-status" role="status" aria-live="polite"></p>
-    </section>
-
-    <section aria-labelledby="form-heading">
-      <h2 id="form-heading">Create configuration</h2>
-      <form id="configuration-form">
-        <input id="configuration-id" type="hidden">
-        <label for="configuration-name">Name</label>
-        <input id="configuration-name" type="text" maxlength="128" required>
-
-        <label for="provider-preset">Provider preset</label>
-        <select id="provider-preset">
-          <option value="">Choose a provider preset</option>
-          <option value="custom">Custom</option>
-        </select>
-        <p>Provider presets only fill in suggested values. The saved configuration remembers its interaction method and connection details, not the provider choice.</p>
-
-        <label for="interaction-method">Interaction method</label>
-        <select id="interaction-method" required>
-          <option value="">Choose an interaction method</option>
-        </select>
-
-        <label for="configuration-url">API URL</label>
-        <input id="configuration-url" type="url" maxlength="512" autocomplete="url" required>
-        <p>Use HTTPS. HTTP is allowed only for localhost. The URL is the service base URL, not a complete request URL.</p>
-
-        <label for="configuration-model">Model ID</label>
-        <input id="configuration-model" type="text" maxlength="256" list="configuration-models" required>
-        <datalist id="configuration-models"></datalist>
-        <p>Suggested models are editable and may vary by account or region.</p>
-
-        <label for="configuration-system-text">System text</label>
-        <textarea id="configuration-system-text" maxlength="16384" required></textarea>
-
-        <label for="configuration-api-key">API key</label>
-        <input id="configuration-api-key" type="password" maxlength="4096" autocomplete="new-password" placeholder="Leave blank to keep the saved key">
-        <p id="api-key-status"></p>
-        <p>Chat messages and selected fortress reports will be sent to this service when you ask a question. Review its data-use terms and <a id="privacy-policy" target="_blank" rel="noopener noreferrer">privacy policy</a>. If the URL uses a custom endpoint, the linked policy may not apply; review that service's terms directly.</p>
-
-        <div>
-          <button id="save-configuration" type="submit">Create configuration</button>
-          <button id="cancel-edit" type="button" hidden>Cancel edit</button>
-        </div>
-        <span id="form-status" role="status" aria-live="polite"></span>
-      </form>
     </section>
   </body>
 </html>
