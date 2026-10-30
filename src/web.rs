@@ -155,10 +155,7 @@ pub fn router(state: AppState) -> Router {
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
         )
         .route("/events", get(events))
-        .route(
-            "/api/timed-turns",
-            get(get_timed_turns).put(set_timed_turns),
-        )
+        .route("/api/automatic-turns", put(set_automatic_turns))
         .route("/assets/app.js", get(app_script))
         .route("/assets/hx-sse.min.js", get(htmx_sse_script))
         .route("/assets/htmx.min.js", get(htmx_script))
@@ -754,27 +751,30 @@ fn notification_events(id: u64, message: &str, live: bool) -> Vec<Event> {
     events
 }
 
+/// Checkboxes are only submitted when checked, so presence means enabled.
 #[derive(Deserialize)]
-struct TimedTurnsForm {
-    enabled: bool,
+struct AutomaticTurnsForm {
+    event_turns: Option<String>,
+    periodic_turns: Option<String>,
 }
 
-async fn get_timed_turns(State(state): State<AppState>) -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({"enabled": state.timed_turns_enabled()}))
-}
-
-async fn set_timed_turns(
+async fn set_automatic_turns(
     State(state): State<AppState>,
     headers: HeaderMap,
-    axum::Json(form): axum::Json<TimedTurnsForm>,
+    Form(form): Form<AutomaticTurnsForm>,
 ) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    state
-        .timed_turns
-        .store(form.enabled, std::sync::atomic::Ordering::Relaxed);
-    get_timed_turns(State(state)).await.into_response()
+    state.event_turns.store(
+        form.event_turns.is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    state.periodic_turns.store(
+        form.periodic_turns.is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn events(

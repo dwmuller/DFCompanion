@@ -33,6 +33,7 @@
       <span id="copy-status" role="status" aria-live="polite"></span>
     </p>
     <h2>Conversation and notifications</h2>
+    <div class="filter-bar">
     <details id="notification-filters">
       <summary>Show or hide notifications</summary>
       <div class="popup">
@@ -46,10 +47,24 @@
       </p>
       </div>
     </details>
-    <p>
-      <input type="checkbox" id="timed-turns">
-      <label for="timed-turns">Let the companion check in on its own (within 5 seconds of game events, and every 30 seconds while the game runs). Uses AI tokens; it beeps when it has something to say.</label>
-    </p>
+    <details id="automatic-turns">
+      <summary>Companion check-ins</summary>
+      <form class="popup"
+          hx-put="/api/automatic-turns"
+          hx-trigger="load, change"
+          hx-swap="none">
+        <p>
+          <input type="checkbox" id="event-turns" name="event_turns">
+          <label for="event-turns">Respond to game events (within 5 seconds of one). Uses AI tokens.</label>
+        </p>
+        <p>
+          <input type="checkbox" id="periodic-turns" name="periodic_turns">
+          <label for="periodic-turns">Check in every 30 seconds while the game runs. Uses AI tokens.</label>
+        </p>
+        <p>The companion beeps when it has something to say on its own.</p>
+      </form>
+    </details>
+    </div>
     <ol id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></ol>
     <h2>Chat</h2>
     <form id="chat-form"

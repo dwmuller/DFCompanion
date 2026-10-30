@@ -152,9 +152,12 @@ pub struct AppState {
     pub notifications_tx: broadcast::Sender<String>,
     pub history: NotificationHistory,
     pub ai: std::sync::Arc<ai::AiRuntime>,
-    /// Whether the AI gets automatic (timed) turns. Off by default because
-    /// they spend tokens without the player asking.
-    pub timed_turns: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the AI gets a turn shortly after game events arrive. Off by
+    /// default because automatic turns spend tokens without the player asking.
+    pub event_turns: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the AI gets a turn every `PERIODIC_CHECK_INTERVAL` while the
+    /// game runs. Off by default, for the same reason.
+    pub periodic_turns: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -181,14 +184,20 @@ impl AppState {
                 notifications_tx,
                 history,
                 ai,
-                timed_turns: Default::default(),
+                event_turns: Default::default(),
+                periodic_turns: Default::default(),
             },
             queue_rx,
         )
     }
 
-    pub fn timed_turns_enabled(&self) -> bool {
-        self.timed_turns.load(std::sync::atomic::Ordering::Relaxed)
+    pub fn event_turns_enabled(&self) -> bool {
+        self.event_turns.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn periodic_turns_enabled(&self) -> bool {
+        self.periodic_turns
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn notify(&self, message: impl Into<String>) {
@@ -283,7 +292,7 @@ pub fn run_companion_worker(
                 }
                 Wake::Flush => {
                     flush_at = None;
-                    if state.timed_turns_enabled() && !suspended && has_active_configuration(&state)
+                    if state.event_turns_enabled() && !suspended && has_active_configuration(&state)
                     {
                         suspended = !try_ai_turn(&state, TurnKind::Periodic).await;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -291,7 +300,7 @@ pub fn run_companion_worker(
                 }
                 Wake::Check => {
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
-                    if state.timed_turns_enabled()
+                    if state.periodic_turns_enabled()
                         && !suspended
                         && has_active_configuration(&state)
                         && state.ai.game_is_running().await == Some(true)
@@ -866,7 +875,7 @@ mod tests {
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
         state
-            .timed_turns
+            .event_turns
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
         state.queue_tx.send(sample_event()).await.unwrap();
@@ -889,7 +898,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn timed_turns_are_off_by_default() {
+    async fn automatic_turns_are_off_by_default() {
         let (state, queue_rx) = AppState::new();
         state
             .ai
@@ -938,6 +947,35 @@ mod tests {
             )
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn automatic_turn_form_sets_each_trigger_independently() {
+        let (state, _) = AppState::new();
+        for (body, events, periodic) in [
+            ("event_turns=on", true, false),
+            ("periodic_turns=on", false, true),
+            ("event_turns=on&periodic_turns=on", true, true),
+            ("", false, false),
+        ] {
+            let response = crate::web::router(state.clone())
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("PUT")
+                        .uri("/api/automatic-turns")
+                        .header(header::HOST, "127.0.0.1:3000")
+                        .header(header::ORIGIN, "http://127.0.0.1:3000")
+                        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "{body}");
+            assert_eq!(state.event_turns_enabled(), events, "{body}");
+            assert_eq!(state.periodic_turns_enabled(), periodic, "{body}");
+        }
     }
 
     #[tokio::test]

@@ -29,20 +29,13 @@ function beep() {
   }
 }
 
-// Timed turns cost tokens, so they are opt-in. The browser remembers the
-// choice and tells the service on each page load.
-const timedTurns = document.getElementById("timed-turns");
-async function sendTimedTurns() {
-  localStorage.setItem("timedTurns", timedTurns.checked);
-  await fetch("/api/timed-turns", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled: timedTurns.checked }),
-  });
+// Automatic turns cost tokens, so they are opt-in. The browser remembers the
+// choices; the form's hx-trigger="load" then tells the service on each page load.
+for (const id of ["event-turns", "periodic-turns"]) {
+  const checkbox = document.getElementById(id);
+  checkbox.checked = localStorage.getItem(id) === "true";
+  checkbox.addEventListener("change", () => localStorage.setItem(id, checkbox.checked));
 }
-timedTurns.checked = localStorage.getItem("timedTurns") === "true";
-timedTurns.addEventListener("change", sendTimedTurns);
-sendTimedTurns();
 
 document.getElementById("chat-form").addEventListener("htmx:after:request", (event) => {
   if (event.detail.ctx.response.raw.ok) {

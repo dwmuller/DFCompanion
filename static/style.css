@@ -101,11 +101,18 @@ body:has(#show-ai-usage:not(:checked)) .ai-usage {
   display: none;
 }
 
-#notification-filters {
+.filter-bar {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.filter-bar details {
   position: relative;
 }
 
-#notification-filters .popup {
+.filter-bar .popup {
+  max-width: 24rem;
+  width: max-content;
   background: #fff;
   border: 1px solid #bbb;
   margin: 0;
@@ -114,7 +121,7 @@ body:has(#show-ai-usage:not(:checked)) .ai-usage {
   z-index: 1;
 }
 
-#notification-filters .popup p {
+.filter-bar .popup p {
   margin: 0.2rem 0;
 }
 
