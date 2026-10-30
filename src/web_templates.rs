@@ -82,6 +82,25 @@ struct FormFieldValues {
     system_text: String,
 }
 
+/// An entry in the conversation and notifications list.
+pub enum Notification<'a> {
+    /// Text from the player or the companion; rendered as sanitized Markdown.
+    Speech { speaker: &'a str, markdown: &'a str },
+    /// An echo of a game event, which the page can hide.
+    GameEvent(&'a str),
+    /// Any other notice, shown as plain text.
+    Text(&'a str),
+}
+
+#[derive(Template)]
+#[template(path = "notification.html")]
+struct NotificationTemplate<'a> {
+    class: &'a str,
+    label: &'a str,
+    body: &'a str,
+    markdown: bool,
+}
+
 #[derive(Template)]
 #[template(path = "configuration-list.html")]
 struct ConfigurationListTemplate<'a> {
@@ -127,6 +146,59 @@ struct ConfigurationCreateFormTemplate<'a> {
 #[template(path = "configuration-create-success.html")]
 struct ConfigurationCreateSuccessTemplate<'a> {
     configuration: &'a ConfigurationListItem,
+}
+
+pub fn render_notification(notification: &Notification) -> Result<String, RenderError> {
+    let rendered = match notification {
+        Notification::Speech { speaker, markdown } => {
+            let body = markdown_to_safe_html(markdown);
+            NotificationTemplate {
+                class: "markdown",
+                label: speaker,
+                body: &body,
+                markdown: true,
+            }
+            .render()?
+        }
+        Notification::GameEvent(text) => NotificationTemplate {
+            class: "game-event",
+            label: "Game event:",
+            body: text,
+            markdown: false,
+        }
+        .render()?,
+        Notification::Text(text) => NotificationTemplate {
+            class: "",
+            label: "",
+            body: text,
+            markdown: false,
+        }
+        .render()?,
+    };
+    Ok(rendered.trim().to_owned())
+}
+
+/// Companion and player text is untrusted Markdown (model output, game
+/// names), so it is always sanitized: links open safely, and images and
+/// styling are dropped.
+fn markdown_to_safe_html(markdown: &str) -> String {
+    use pulldown_cmark::{html, Event, Options, Parser};
+
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(markdown, options).map(|event| match event {
+        Event::SoftBreak => Event::HardBreak,
+        event => event,
+    });
+    let mut unsafe_html = String::new();
+    html::push_html(&mut unsafe_html, parser);
+
+    ammonia::Builder::default()
+        .rm_tags(&["img", "style"])
+        .link_rel(Some("noopener noreferrer"))
+        .set_tag_attribute_value("a", "target", "_blank")
+        .clean(&unsafe_html)
+        .to_string()
 }
 
 pub fn render_configuration_list(
@@ -230,6 +302,48 @@ mod test {
             api_key_saved: key_saved,
             active,
         }
+    }
+
+    #[test]
+    fn speech_is_rendered_as_markdown_with_a_label() {
+        let rendered = render_notification(&Notification::Speech {
+            speaker: "Companion:",
+            markdown: "**Hello**\nthere",
+        })
+        .expect("notification should render");
+
+        assert!(rendered.starts_with("<li class=\"markdown\"><strong>Companion: </strong>"));
+        assert!(rendered.contains("<strong>Hello</strong><br>"));
+        assert!(!rendered.contains("\n</li>"));
+    }
+
+    #[test]
+    fn speech_markdown_is_sanitized() {
+        let rendered = render_notification(&Notification::Speech {
+            speaker: "Companion:",
+            markdown: "<script>alert(1)</script>\n\n![x](http://e/x.png) [a](https://example.com) <img src=x onerror=alert(1)>[b](javascript:alert(1))",
+        })
+        .expect("notification should render");
+
+        assert!(!rendered.contains("<script"));
+        assert!(!rendered.contains("<img"));
+        assert!(!rendered.contains("href=\"javascript:"));
+        assert!(rendered.contains("href=\"https://example.com\""));
+        assert!(rendered.contains("target=\"_blank\""));
+        assert!(rendered.contains("noopener noreferrer"));
+    }
+
+    #[test]
+    fn plain_and_game_event_notifications_are_escaped_text() {
+        let game = render_notification(&Notification::GameEvent("<b>x</b>"))
+            .expect("notification should render");
+        let text =
+            render_notification(&Notification::Text("a < b")).expect("notification should render");
+
+        assert!(game.starts_with("<li class=\"game-event\">"));
+        assert!(game.contains("Game event: "));
+        assert!(!game.contains("<b>"));
+        assert_eq!(text, "<li>a &#60; b</li>");
     }
 
     #[test]

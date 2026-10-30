@@ -1,0 +1,1 @@
+<li{% if !class.is_empty() %} class="{{ class }}"{% endif %}>{% if !label.is_empty() %}<strong>{{ label }} </strong>{% endif %}{% if markdown %}<div class="markdown-body">{{ body|safe }}</div>{% else %}{{ body }}{% endif %}</li>

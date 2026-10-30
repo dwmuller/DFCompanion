@@ -12,14 +12,17 @@ use axum::{
     routing::{get, post, put},
     Router,
 };
+use futures_util::StreamExt as _;
 use genai::adapter::AdapterKind;
 use serde::{Deserialize, Serialize};
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_providers::built_in_providers,
-    web_templates::{self as templates, ConfigurationListItem, CreateFormValues, RenderError},
+    web_templates::{
+        self as templates, ConfigurationListItem, CreateFormValues, Notification, RenderError,
+    },
     AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
 
@@ -157,8 +160,7 @@ pub fn router(state: AppState) -> Router {
             get(get_timed_turns).put(set_timed_turns),
         )
         .route("/assets/app.js", get(app_script))
-        .route("/assets/marked.min.js", get(marked_script))
-        .route("/assets/purify.min.js", get(purify_script))
+        .route("/assets/hx-sse.min.js", get(htmx_sse_script))
         .route("/assets/htmx.min.js", get(htmx_script))
         .route("/assets/ai-configurations.js", get(configuration_script))
         .route("/assets/style.css", get(stylesheet))
@@ -681,24 +683,17 @@ async fn app_script() -> impl IntoResponse {
     )
 }
 
-async fn marked_script() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../static/vendor/marked.min.js"),
-    )
-}
-
-async fn purify_script() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../static/vendor/purify.min.js"),
-    )
-}
-
 async fn htmx_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         include_str!("../static/vendor/htmx.min.js"),
+    )
+}
+
+async fn htmx_sse_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        include_str!("../static/vendor/hx-sse.min.js"),
     )
 }
 
@@ -709,16 +704,52 @@ async fn stylesheet() -> impl IntoResponse {
     )
 }
 
-/// Game-event echoes get their own SSE event type so the page can hide them.
-fn notification_event(message: String) -> Event {
-    match message.strip_prefix(GAME_EVENT_PREFIX) {
-        Some(text) => return Event::default().event("game_event").data(text),
-        None => {}
+/// Turns a recorded notification into the HTML list item the page appends.
+/// `live` is false while replaying history, so replays never beep.
+fn notification_events(id: u64, message: &str, live: bool) -> Vec<Event> {
+    let (notification, unsolicited) = if let Some(text) = message.strip_prefix(GAME_EVENT_PREFIX) {
+        (Notification::GameEvent(text), false)
+    } else if let Some(text) = message.strip_prefix(crate::UNSOLICITED_PREFIX) {
+        (
+            Notification::Speech {
+                speaker: "Companion:",
+                markdown: text,
+            },
+            true,
+        )
+    } else if let Some(text) = message.strip_prefix("You: ") {
+        (
+            Notification::Speech {
+                speaker: "You:",
+                markdown: text,
+            },
+            false,
+        )
+    } else if let Some(text) = message.strip_prefix("Companion: ") {
+        (
+            Notification::Speech {
+                speaker: "Companion:",
+                markdown: text,
+            },
+            false,
+        )
+    } else {
+        (Notification::Text(message), false)
+    };
+
+    let html = match templates::render_notification(&notification) {
+        Ok(html) => html,
+        Err(error) => {
+            eprintln!("Could not render notification: {error}");
+            return Vec::new();
+        }
+    };
+    // Unnamed events are swapped into the page; named ones become DOM events.
+    let mut events = vec![Event::default().id(id.to_string()).data(html)];
+    if unsolicited && live {
+        events.push(Event::default().event("beep").data(""));
     }
-    match message.strip_prefix(crate::UNSOLICITED_PREFIX) {
-        Some(text) => Event::default().event("unsolicited").data(text),
-        None => Event::default().data(message),
-    }
+    events
 }
 
 #[derive(Deserialize)]
@@ -746,22 +777,34 @@ async fn set_timed_turns(
 
 async fn events(
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let (backlog, live) = state.history.subscribe();
-    let backlog = tokio_stream::iter(
-        backlog
+    // A reconnecting browser says where it left off, so it isn't sent
+    // messages it already has.
+    let last_event_id = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let (backlog, live) = state.history.subscribe(last_event_id);
+    let backlog = tokio_stream::iter(backlog.into_iter().flat_map(|(id, message)| {
+        notification_events(id, &message, false)
             .into_iter()
-            .map(|message| Ok(notification_event(message))),
-    );
-    let live = BroadcastStream::new(live).map(|notification| {
-        Ok(match notification {
-            Ok(message) => notification_event(message),
+            .map(Ok)
+            .collect::<Vec<_>>()
+    }));
+    let live = BroadcastStream::new(live).flat_map(|notification| {
+        let events = match notification {
+            Ok((id, message)) => notification_events(id, &message, true),
             Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(count)) => {
-                Event::default().event("warning").data(format!(
-                    "{count} UI notifications were missed while the browser was disconnected."
-                ))
+                vec![Event::default().data(
+                    templates::render_notification(&Notification::Text(&format!(
+                        "{count} UI notifications were missed while the browser was disconnected."
+                    )))
+                    .unwrap_or_default(),
+                )]
             }
-        })
+        };
+        tokio_stream::iter(events.into_iter().map(Ok))
     });
 
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::default())

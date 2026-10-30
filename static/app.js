@@ -1,59 +1,4 @@
 const notifications = document.getElementById("notifications");
-const eventStream = new EventSource("/events");
-
-// The server replays the recorded conversation on every (re)connection.
-eventStream.onopen = () => notifications.replaceChildren();
-
-// Companion and user text is untrusted Markdown (model output, game names), so
-// it is always sanitized, links open safely, and images are dropped (the page's
-// CSP blocks them too). Everything else stays plain text.
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A" && node.hasAttribute("href")) {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-  }
-});
-
-function renderMarkdown(markdown) {
-  return DOMPurify.sanitize(marked.parse(markdown, { breaks: true, gfm: true }), {
-    FORBID_TAGS: ["img", "style"],
-    FORBID_ATTR: ["style"],
-  });
-}
-
-function addMarkdownItem(label, markdown) {
-  const item = document.createElement("li");
-  item.className = "markdown";
-  const name = document.createElement("strong");
-  name.textContent = `${label} `;
-  const body = document.createElement("div");
-  body.className = "markdown-body";
-  body.innerHTML = renderMarkdown(markdown);
-  item.append(name, body);
-  notifications.appendChild(item);
-  notifications.scrollTop = notifications.scrollHeight;
-}
-
-eventStream.onmessage = (event) => {
-  const speech = /^(You|Companion): ([\s\S]*)$/.exec(event.data);
-  if (speech) {
-    addMarkdownItem(`${speech[1]}:`, speech[2]);
-    return;
-  }
-  const item = document.createElement("li");
-  item.textContent = event.data;
-  notifications.appendChild(item);
-  notifications.scrollTop = notifications.scrollHeight;
-};
-
-eventStream.addEventListener("game_event", (event) => {
-  const item = document.createElement("li");
-  item.className = "game-event";
-  item.textContent = `Game event: ${event.data}`;
-  notifications.appendChild(item);
-  notifications.scrollTop = notifications.scrollHeight;
-});
-
 // Game events are hidden by default; the choice is remembered.
 const showGameEvents = document.getElementById("show-game-events");
 function applyGameEventVisibility() {
@@ -67,16 +12,8 @@ showGameEvents.addEventListener("change", () => {
 });
 applyGameEventVisibility();
 
-eventStream.addEventListener("unsolicited", (event) => {
-  addMarkdownItem("Companion:", event.data);
-  // The server replays history right after (re)connecting; only beep for live comments.
-  if (Date.now() - connectedAt > 2000) {
-    beep();
-  }
-});
-
-let connectedAt = Date.now();
-eventStream.addEventListener("open", () => (connectedAt = Date.now()));
+// The server sends a "beep" event only for live (not replayed) companion comments.
+document.addEventListener("beep", beep);
 
 function beep() {
   try {
@@ -108,12 +45,6 @@ async function sendTimedTurns() {
 timedTurns.checked = localStorage.getItem("timedTurns") === "true";
 timedTurns.addEventListener("change", sendTimedTurns);
 sendTimedTurns();
-
-eventStream.addEventListener("warning", (event) => {
-  const item = document.createElement("li");
-  item.textContent = event.data;
-  notifications.appendChild(item);
-});
 
 document.getElementById("chat-form").addEventListener("htmx:after:request", (event) => {
   if (event.detail.ctx.response.raw.ok) {

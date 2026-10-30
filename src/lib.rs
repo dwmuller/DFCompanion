@@ -77,8 +77,14 @@ const NOTIFICATION_HISTORY_LIMIT: usize = 500;
 /// visiting the configuration page) can replay the conversation.
 #[derive(Clone)]
 pub struct NotificationHistory {
-    inner: std::sync::Arc<std::sync::Mutex<VecDeque<String>>>,
-    live_tx: broadcast::Sender<String>,
+    inner: std::sync::Arc<std::sync::Mutex<HistoryState>>,
+    live_tx: broadcast::Sender<(u64, String)>,
+}
+
+#[derive(Default)]
+struct HistoryState {
+    entries: VecDeque<(u64, String)>,
+    last_id: u64,
 }
 
 impl NotificationHistory {
@@ -109,18 +115,32 @@ impl NotificationHistory {
 
     fn push(&self, message: String) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.len() == NOTIFICATION_HISTORY_LIMIT {
-            inner.pop_front();
+        if inner.entries.len() == NOTIFICATION_HISTORY_LIMIT {
+            inner.entries.pop_front();
         }
-        inner.push_back(message.clone());
+        inner.last_id += 1;
+        let id = inner.last_id;
+        inner.entries.push_back((id, message.clone()));
         // Sent under the lock so subscribers never see a gap or a duplicate.
-        let _ = self.live_tx.send(message);
+        let _ = self.live_tx.send((id, message));
     }
 
-    /// The recorded messages and a receiver for every message after them.
-    pub fn subscribe(&self) -> (Vec<String>, broadcast::Receiver<String>) {
+    /// The recorded messages with an id greater than `after` (all of them when
+    /// `after` is `None`) and a receiver for every message after those. Ids
+    /// increase with each message, so a reconnecting browser can resume where
+    /// it left off.
+    pub fn subscribe(
+        &self,
+        after: Option<u64>,
+    ) -> (Vec<(u64, String)>, broadcast::Receiver<(u64, String)>) {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        (inner.iter().cloned().collect(), self.live_tx.subscribe())
+        let backlog = inner
+            .entries
+            .iter()
+            .filter(|(id, _)| after.map_or(true, |after| *id > after))
+            .cloned()
+            .collect();
+        (backlog, self.live_tx.subscribe())
     }
 }
 
@@ -415,15 +435,18 @@ mod tests {
         state.notify("first");
         state.notify("second");
         for _ in 0..50 {
-            if state.history.subscribe().0.len() == 2 {
+            if state.history.subscribe(None).0.len() == 2 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        let (backlog, mut live) = state.history.subscribe();
-        assert_eq!(backlog, ["first", "second"]);
+        let (backlog, mut live) = state.history.subscribe(None);
+        assert_eq!(backlog, [(1, "first".to_owned()), (2, "second".to_owned())]);
         state.notify("third");
-        assert_eq!(live.recv().await.unwrap(), "third");
+        assert_eq!(live.recv().await.unwrap(), (3, "third".to_owned()));
+
+        let (resumed, _) = state.history.subscribe(Some(2));
+        assert_eq!(resumed, [(3, "third".to_owned())]);
     }
     use api::{
         companion_client::CompanionClient, companion_server::CompanionServer,
@@ -947,14 +970,16 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("enable dfcompanion"));
         assert!(html.contains("show-game-events"));
-        assert!(html.contains("/assets/marked.min.js") && html.contains("/assets/purify.min.js"));
+        assert!(html.contains("hx-sse:connect=\"/events\""));
+        assert!(html.contains("/assets/hx-sse.min.js"));
+        assert!(!html.contains("marked") && !html.contains("purify"));
         assert!(csp.contains("script-src 'self'") && !csp.contains("img-src"));
     }
 
     #[tokio::test]
-    async fn markdown_libraries_are_served() {
+    async fn htmx_scripts_are_served() {
         let (state, _) = AppState::new();
-        for path in ["/assets/marked.min.js", "/assets/purify.min.js"] {
+        for path in ["/assets/htmx.min.js", "/assets/hx-sse.min.js"] {
             let response = crate::web::router(state.clone())
                 .oneshot(
                     HttpRequest::builder()

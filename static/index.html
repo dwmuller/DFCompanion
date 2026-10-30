@@ -13,9 +13,8 @@
     }'>
 
     <title>DFCompanion</title>
-    <script src="/assets/marked.min.js" defer></script>
-    <script src="/assets/purify.min.js" defer></script>
     <script src="/assets/htmx.min.js" defer></script>
+    <script src="/assets/hx-sse.min.js" defer></script>
     <script src="/assets/app.js" defer></script>
     <link rel="stylesheet" href="/assets/style.css">
   </head>
@@ -42,7 +41,7 @@
       <input type="checkbox" id="timed-turns">
       <label for="timed-turns">Let the companion check in on its own (within 5 seconds of game events, and every 30 seconds while the game runs). Uses AI tokens; it beeps when it has something to say.</label>
     </p>
-    <ol id="notifications" aria-live="polite" class="hide-game-events"></ol>
+    <ol id="notifications" aria-live="polite" class="hide-game-events" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></ol>
     <h2>Chat</h2>
     <form id="chat-form"
         hx-post="/chat"
