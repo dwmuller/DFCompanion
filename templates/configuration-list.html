@@ -3,8 +3,6 @@
   {% for configuration in configurations %}
     {% include "configuration-summary.html" %}
   {% endfor %}
-  <li id="new-configuration">
-    <button type="button">Create new configuration</button>
-  </li>
+  {% include "configuration-create-closed.html" %}
   </ul>
 </div>

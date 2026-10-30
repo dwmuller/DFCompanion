@@ -1,0 +1,74 @@
+<label for="{{ values.field_prefix }}-configuration-name">Name</label>
+<input
+  id="{{ values.field_prefix }}-configuration-name"
+  name="name"
+  type="text"
+  maxlength="128"
+  value="{{ values.name }}"
+  required>
+
+<label for="{{ values.field_prefix }}-interaction-method">Interaction method</label>
+<select
+  id="{{ values.field_prefix }}-interaction-method"
+  name="interaction_method"
+  data-configuration-method
+  required>
+  <option value="">Choose an interaction method</option>
+  {% for method in interaction_methods %}
+  <option value="{{ method.value }}">{{ method.label }}</option>
+  {% endfor %}
+</select>
+
+<label for="{{ values.field_prefix }}-configuration-url">API URL</label>
+<input
+  id="{{ values.field_prefix }}-configuration-url"
+  name="url"
+  type="url"
+  maxlength="512"
+  autocomplete="url"
+  value="{{ values.url }}"
+  required>
+
+<p>
+  Use HTTPS. HTTP is allowed only for localhost. The URL is the service base
+  URL, not a complete request URL.
+</p>
+
+<label for="{{ values.field_prefix }}-configuration-model">Model ID</label>
+<input
+  id="{{ values.field_prefix }}-configuration-model"
+  name="model_id"
+  type="text"
+  maxlength="256"
+  list="{{ values.field_prefix }}-configuration-models"
+  value="{{ values.model_id }}"
+  data-configuration-model
+  required>
+<datalist
+  id="{{ values.field_prefix }}-configuration-models"
+  data-configuration-models>
+</datalist>
+
+<p>Suggested models are editable and may vary by account or region.</p>
+
+<label for="{{ values.field_prefix }}-configuration-system-text">System text</label>
+<textarea
+  id="{{ values.field_prefix }}-configuration-system-text"
+  name="system_text"
+  maxlength="16384"
+  required>{{ values.system_text }}</textarea>
+
+<label for="{{ values.field_prefix }}-configuration-api-key">API key</label>
+<input
+  id="{{ values.field_prefix }}-configuration-api-key"
+  name="api_key"
+  type="password"
+  maxlength="4096"
+  autocomplete="new-password">
+
+<p>API key is stored in the operating system credential vault.</p>
+
+<p>
+  Chat messages and selected fortress reports will be sent to this service
+  when you ask a question.
+</p>

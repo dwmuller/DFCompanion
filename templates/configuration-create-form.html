@@ -1,0 +1,43 @@
+<li id="new-configuration">
+  <h3>Creating New AI Configuration</h3>
+
+  <form
+    data-configuration-form
+    hx-post="/fragments/ai-configurations"
+    hx-target="#new-configuration"
+    hx-swap="outerHTML"
+    hx-disable="find button">
+
+    <label for="new-provider-preset">Provider preset</label>
+    <select id="new-provider-preset" data-configuration-provider>
+        <option value="">Choose a provider preset</option>
+        {% for provider in providers %}
+        <option value="{{ provider.name }}">{{ provider.name }}</option>
+        {% endfor %}
+        <option value="custom">Custom</option>
+    </select>
+
+    <p>
+    Provider presets only fill in suggested values. The saved configuration
+    remembers its interaction method and connection details, not the provider
+    choice.
+    </p>
+
+    {% include "configuration-form-fields.html" %}
+
+    <div>
+      <button type="submit">Create configuration</button>
+      <button
+        type="button"
+        hx-get="/fragments/ai-configurations/new/closed"
+        hx-target="#new-configuration"
+        hx-swap="outerHTML">
+        Cancel
+      </button>
+    </div>
+
+    {% if !error.is_empty() %}
+    <p role="alert">{{ error }}</p>
+    {% endif %}
+  </form>
+</li>

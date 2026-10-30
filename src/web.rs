@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
 use crate::{
-    ai_config::{AiConfiguration, ConfigurationRepository},
+    ai_config::{interaction_method_label, AiConfiguration, ConfigurationRepository},
+    ai_providers::{built_in_providers, Provider},
     AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
 
@@ -35,10 +36,108 @@ struct ConfigurationListItem {
     active: bool,
 }
 
+impl ConfigurationListItem {
+    fn from_configuration(
+        configuration: &AiConfiguration,
+        api_key_saved: bool,
+        is_active: bool,
+    ) -> Self {
+        Self {
+            id: configuration.id.clone(),
+            name: configuration.name.clone(),
+            interaction_method: configuration.interaction_method.to_string(),
+            model_id: configuration.model_id.clone(),
+            api_key_saved: api_key_saved,
+            active: is_active,
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "configuration-list.html")]
 struct ConfigurationListTemplate {
     configurations: Vec<ConfigurationListItem>,
+}
+
+struct InteractionMethodOption {
+    value: String,
+    label: String,
+}
+
+struct ProviderOption {
+    name: String,
+    adapter_kind: String,
+    api_url: String,
+    models: Vec<String>,
+}
+
+struct ConfigurationFormValues {
+    field_prefix: String,
+    name: String,
+    url: String,
+    model_id: String,
+    system_text: String,
+}
+
+#[derive(Template)]
+#[template(path = "configuration-create-closed.html")]
+struct ConfigurationCreateClosedTemplate;
+
+#[derive(Template)]
+#[template(path = "configuration-create-form.html")]
+struct ConfigurationCreateFormTemplate {
+    values: ConfigurationFormValues,
+    providers: Vec<ProviderOption>,
+    interaction_methods: Vec<InteractionMethodOption>,
+    error: String,
+}
+
+#[derive(Template)]
+#[template(path = "configuration-create-success.html")]
+struct ConfigurationCreateSuccessTemplate {
+    configuration: ConfigurationListItem,
+}
+
+fn new_create_form_template(
+    name: String,
+    url: String,
+    model_id: String,
+    system_text: String,
+    error: String,
+    providers: &Vec<Provider>,
+) -> Result<ConfigurationCreateFormTemplate, String> {
+    Ok(ConfigurationCreateFormTemplate {
+        values: ConfigurationFormValues {
+            field_prefix: String::from("new"),
+            name: name,
+            url: url,
+            model_id: model_id,
+            system_text: system_text,
+        },
+        providers: providers
+            .iter()
+            .map(|p| ProviderOption {
+                name: p.name.clone(),
+                adapter_kind: p.adapter_kind.to_string(),
+                api_url: p.api_url.clone(),
+                models: p.models.clone(),
+            })
+            .collect(),
+        interaction_methods: AdapterKind::all()
+            .iter()
+            .filter_map(|kind| {
+                let label = interaction_method_label(*kind);
+                match label {
+                    Some(label) => Some(InteractionMethodOption {
+                        value: kind.as_str().to_string(),
+                        label: label.to_string(),
+                    }),
+                    None => None,
+                }
+            })
+            .collect(),
+        error: error,
+    })
 }
 
 #[derive(Deserialize)]
@@ -141,7 +240,15 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/fragments/ai-configurations",
-            get(configuration_list_fragment),
+            get(configuration_list_fragment).post(create_configuration_fragment),
+        )
+        .route(
+            "/fragments/ai-configurations/new",
+            get(new_configuration_form_fragment),
+        )
+        .route(
+            "/fragments/ai-configurations/new/closed",
+            get(closed_configuration_form_fragment),
         )
         .route(
             "/fragments/ai-configurations/active",
@@ -279,6 +386,183 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Could not render AI configurations.",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn new_configuration_form_fragment(State(_state): State<AppState>) -> Response {
+    let providers = match built_in_providers() {
+        Ok(providers) => providers,
+        Err(error) => {
+            eprintln!("Could not retrieve built-in providers: {error}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not retrieve built-in providers.",
+            )
+                .into_response();
+        }
+    };
+    let form = new_create_form_template(
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        &providers,
+    );
+    match form {
+        Ok(form) => match form.render() {
+            Ok(html) => ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
+            Err(error) => {
+                eprintln!("Could not render new configuration form: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not render new configuration form.",
+                )
+                    .into_response()
+            }
+        },
+        Err(error) => {
+            eprintln!("Could not create new configuration form: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not create new configuration form.",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn closed_configuration_form_fragment(State(_state): State<AppState>) -> Response {
+    match (ConfigurationCreateClosedTemplate {}).render() {
+        Ok(html) => ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
+        Err(error) => {
+            eprintln!("Could not render closed configuration form: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not render closed configuration form.",
+            )
+                .into_response()
+        }
+    }
+}
+
+fn render_rejected_create_form(
+    status: StatusCode,
+    form: ConfigurationForm,
+    error: Option<String>,
+) -> Response {
+    let providers = match built_in_providers() {
+        Ok(providers) => providers,
+        Err(_) => {
+            eprintln!("Could not retrieve built-in providers.");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not retrieve built-in providers.",
+            )
+                .into_response();
+        }
+    };
+    let template = new_create_form_template(
+        form.name,
+        form.url,
+        form.model_id,
+        form.system_text,
+        error.unwrap_or_default(),
+        &providers,
+    );
+    match template {
+        Ok(form) => match form.render() {
+            Ok(html) => (status, [(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
+            Err(error) => {
+                eprintln!("Could not render new configuration form: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not render new configuration form.",
+                )
+                    .into_response()
+            }
+        },
+        Err(error) => {
+            eprintln!("Could not create new configuration form: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not create new configuration form.",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn create_configuration_fragment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<ConfigurationForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    if form
+        .api_key
+        .as_ref()
+        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
+    {
+        return render_rejected_create_form(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            form,
+            Some("API key is too long.".to_string()),
+        );
+    }
+
+    let configuration = match state.ai.configurations.create(
+        form.name,
+        form.interaction_method,
+        form.model_id,
+        form.url,
+        form.system_text,
+    ) {
+        Ok(configuration) => configuration,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    if let Some(key) = form.api_key.filter(|key| !key.trim().is_empty()) {
+        if let Err(error) = state
+            .ai
+            .configurations
+            .save_api_key(&configuration.id, &key)
+        {
+            let cleanup = state.ai.configurations.delete(&configuration.id);
+            let detail = cleanup
+                .err()
+                .map(|cleanup_error| format!(" Configuration cleanup also failed: {cleanup_error}"))
+                .unwrap_or_default();
+            return (StatusCode::SERVICE_UNAVAILABLE, format!("{error}{detail}")).into_response();
+        }
+    }
+    let has_api_key = match state.ai.configurations.has_api_key(&configuration.id) {
+        Ok(has_api_key) => has_api_key,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    };
+    let is_active = match state.ai.configurations.active() {
+        Ok(Some(config)) => config.id == configuration.id,
+        Ok(None) => false,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    };
+    let template = ConfigurationCreateSuccessTemplate {
+        configuration: ConfigurationListItem::from_configuration(
+            &configuration,
+            has_api_key,
+            is_active,
+        ),
+    };
+    match template.render() {
+        Ok(rendered) => rendered.into_response(),
+        Err(error) => {
+            eprintln!("{error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to render template.",
             )
                 .into_response()
         }
