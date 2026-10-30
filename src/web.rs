@@ -709,6 +709,8 @@ async fn stylesheet() -> impl IntoResponse {
 fn notification_events(id: u64, message: &str, live: bool) -> Vec<Event> {
     let (notification, unsolicited) = if let Some(text) = message.strip_prefix(GAME_EVENT_PREFIX) {
         (Notification::GameEvent(text), false)
+    } else if let Some(text) = message.strip_prefix(crate::AI_USAGE_PREFIX) {
+        (Notification::AiUsage(text), false)
     } else if let Some(text) = message.strip_prefix(crate::UNSOLICITED_PREFIX) {
         (
             Notification::Speech {

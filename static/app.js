@@ -1,16 +1,14 @@
 const notifications = document.getElementById("notifications");
-// Game events are hidden by default; the choice is remembered.
-const showGameEvents = document.getElementById("show-game-events");
-function applyGameEventVisibility() {
-  notifications.classList.toggle("hide-game-events", !showGameEvents.checked);
-  notifications.scrollTop = notifications.scrollHeight;
+// Hidden notification kinds are filtered by CSS from these checkboxes; the
+// choices are remembered. Both kinds are hidden by default.
+for (const id of ["show-game-events", "show-ai-usage"]) {
+  const checkbox = document.getElementById(id);
+  checkbox.checked = localStorage.getItem(id) === "true";
+  checkbox.addEventListener("change", () => {
+    localStorage.setItem(id, checkbox.checked);
+    notifications.scrollTop = notifications.scrollHeight;
+  });
 }
-showGameEvents.checked = localStorage.getItem("showGameEvents") === "true";
-showGameEvents.addEventListener("change", () => {
-  localStorage.setItem("showGameEvents", showGameEvents.checked);
-  applyGameEventVisibility();
-});
-applyGameEventVisibility();
 
 // The server sends a "beep" event only for live (not replayed) companion comments.
 document.addEventListener("beep", beep);

@@ -88,6 +88,8 @@ pub enum Notification<'a> {
     Speech { speaker: &'a str, markdown: &'a str },
     /// An echo of a game event, which the page can hide.
     GameEvent(&'a str),
+    /// A summary of the AI tokens a turn used, which the page can hide.
+    AiUsage(&'a str),
     /// Any other notice, shown as plain text.
     Text(&'a str),
 }
@@ -163,6 +165,13 @@ pub fn render_notification(notification: &Notification) -> Result<String, Render
         Notification::GameEvent(text) => NotificationTemplate {
             class: "game-event",
             label: "Game event:",
+            body: text,
+            markdown: false,
+        }
+        .render()?,
+        Notification::AiUsage(text) => NotificationTemplate {
+            class: "ai-usage",
+            label: "AI usage:",
             body: text,
             markdown: false,
         }
@@ -331,6 +340,17 @@ mod test {
         assert!(rendered.contains("href=\"https://example.com\""));
         assert!(rendered.contains("target=\"_blank\""));
         assert!(rendered.contains("noopener noreferrer"));
+    }
+
+    #[test]
+    fn ai_usage_notifications_have_their_own_class() {
+        let usage = render_notification(&Notification::AiUsage("This turn: 1 API request"))
+            .expect("notification should render");
+
+        assert_eq!(
+            usage,
+            "<li class=\"ai-usage\"><strong>AI usage: </strong>This turn: 1 API request</li>"
+        );
     }
 
     #[test]

@@ -33,15 +33,24 @@
       <span id="copy-status" role="status" aria-live="polite"></span>
     </p>
     <h2>Conversation and notifications</h2>
-    <p>
-      <input type="checkbox" id="show-game-events">
-      <label for="show-game-events">Show game events (they are already shown in the game)</label>
-    </p>
+    <details id="notification-filters">
+      <summary>Show or hide notifications</summary>
+      <div class="popup">
+      <p>
+        <input type="checkbox" id="show-game-events">
+        <label for="show-game-events">Game events (they are already shown in the game)</label>
+      </p>
+      <p>
+        <input type="checkbox" id="show-ai-usage">
+        <label for="show-ai-usage">AI usage (tokens used by each turn)</label>
+      </p>
+      </div>
+    </details>
     <p>
       <input type="checkbox" id="timed-turns">
       <label for="timed-turns">Let the companion check in on its own (within 5 seconds of game events, and every 30 seconds while the game runs). Uses AI tokens; it beeps when it has something to say.</label>
     </p>
-    <ol id="notifications" aria-live="polite" class="hide-game-events" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></ol>
+    <ol id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></ol>
     <h2>Chat</h2>
     <form id="chat-form"
         hx-post="/chat"

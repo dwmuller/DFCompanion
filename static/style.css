@@ -91,8 +91,31 @@ body {
   color: #666;
 }
 
-.hide-game-events .game-event {
+.ai-usage {
+  color: #666;
+}
+
+/* The filter checkboxes live in a popup; the list follows their state. */
+body:has(#show-game-events:not(:checked)) .game-event,
+body:has(#show-ai-usage:not(:checked)) .ai-usage {
   display: none;
+}
+
+#notification-filters {
+  position: relative;
+}
+
+#notification-filters .popup {
+  background: #fff;
+  border: 1px solid #bbb;
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  position: absolute;
+  z-index: 1;
+}
+
+#notification-filters .popup p {
+  margin: 0.2rem 0;
 }
 
 textarea {

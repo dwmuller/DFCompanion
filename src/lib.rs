@@ -25,6 +25,8 @@ pub const EVENT_QUEUE_CAPACITY: usize = 50;
 pub const GAME_EVENT_PREFIX: &str = "Game event: ";
 /// Marks a companion comment the player did not ask for (from a timed turn),
 /// so the page can beep.
+/// Marks token-usage notices so the page can hide them.
+pub const AI_USAGE_PREFIX: &str = "AI usage: ";
 pub const UNSOLICITED_PREFIX: &str = "Unsolicited companion comment: ";
 
 /// A game event in the format of the `get_recent_reports` tool.
@@ -409,7 +411,7 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
                         "Companion: "
                     };
                     state.notify(format!("{prefix}{})", result.answer));
-                    state.notify(result.usage.summary())
+                    state.notify(format!("{AI_USAGE_PREFIX}{}", result.usage.summary()))
                 }
                 if kind == TurnKind::Periodic || conversation.pending_user_messages.is_empty() {
                     return true;
