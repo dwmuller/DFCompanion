@@ -163,6 +163,18 @@ button {
   margin-top: 0.5rem;
 }
 
+/* htmx marks the element that issued a request while it is in flight, and
+   hx-disable disables the controls inside it. */
+.htmx-request,
+.htmx-request button {
+  cursor: progress;
+}
+
+.htmx-request:is(form, div) [role="status"]:empty::before {
+  content: "Working…";
+  color: #666;
+}
+
 .copy-command {
   align-items: center;
   display: flex;
