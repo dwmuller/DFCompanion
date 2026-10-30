@@ -104,6 +104,10 @@ struct NotificationTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "chat-sent.html")]
+struct ChatSentTemplate;
+
+#[derive(Template)]
 #[template(path = "configuration-list.html")]
 struct ConfigurationListTemplate<'a> {
     configurations: &'a [ConfigurationListItem],
@@ -208,6 +212,12 @@ fn markdown_to_safe_html(markdown: &str) -> String {
         .set_tag_attribute_value("a", "target", "_blank")
         .clean(&unsafe_html)
         .to_string()
+}
+
+/// The chat status line, plus an out-of-band replacement that empties the
+/// message box (setting `value` is the only way to clear what was typed).
+pub fn render_chat_sent() -> Result<String, RenderError> {
+    Ok(ChatSentTemplate.render()?)
 }
 
 pub fn render_configuration_list(
@@ -340,6 +350,15 @@ mod test {
         assert!(rendered.contains("href=\"https://example.com\""));
         assert!(rendered.contains("target=\"_blank\""));
         assert!(rendered.contains("noopener noreferrer"));
+    }
+
+    #[test]
+    fn chat_sent_clears_the_message_box_out_of_band() {
+        let rendered = render_chat_sent().expect("fragment should render");
+
+        assert!(rendered.contains("Message queued."));
+        assert!(rendered.contains("id=\"message\""));
+        assert!(rendered.contains("hx-swap-oob=\"true\""));
     }
 
     #[test]

@@ -585,6 +585,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("hx-swap-oob"));
         assert_eq!(
             queue_rx.recv().await.unwrap(),
             QueueItem::UserInput("hello Companion".to_owned())

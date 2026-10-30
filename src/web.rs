@@ -839,7 +839,7 @@ async fn chat(
     {
         Ok(()) => {
             state.notify(format!("You: {message}"));
-            (StatusCode::OK, "Message queued.").into_response()
+            fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let warning = format!(

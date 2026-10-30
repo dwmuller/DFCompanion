@@ -37,12 +37,8 @@ for (const id of ["event-turns", "periodic-turns"]) {
   checkbox.addEventListener("change", () => localStorage.setItem(id, checkbox.checked));
 }
 
-document.getElementById("chat-form").addEventListener("htmx:after:request", (event) => {
-  if (event.detail.ctx.response.raw.ok) {
-    document.getElementById("message").value = "";
-  }
-});
-
+// Sending clears the box through an out-of-band swap in the server's reply.
+// Enter-to-send stays here: htmx trigger filters need eval, which the CSP forbids.
 document.getElementById("message").addEventListener("keydown", (event) => {
   // Enter sends; Shift+Enter inserts a newline. Ignore Enter while composing (IME).
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
