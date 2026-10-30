@@ -2,19 +2,27 @@
   <span>
     {{ configuration.name }} —
     {{ configuration.interaction_method }} —
-    {{ configuration.model_id }} —
-    {% if configuration.api_key_saved %}API key saved{% else %}API key missing{% endif %}
+    {{ configuration.model_id }}
   </span>
 
   {% if configuration.api_key_saved %}
   <button
     type="button"
-    hx-post="/fragments/ai-configurations/{{ configuration.id }}/key"
-    hx-target="#configuration-list"
+    hx-delete="/fragments/ai-configurations/{{ configuration.id }}/key"
+    hx-target="#configuration-{{ configuration.id }}"
     hx-swap="outerHTML"
     hx-disable="this"
     hx-confirm="Forget the saved API key for {{ configuration.name }}?">
     Forget API key
+  </button>
+  {% else %}
+  <button
+    type="button"
+    hx-get="/fragments/ai-configurations/{{ configuration.id }}/key"
+    hx-target="#configuration-{{ configuration.id }}"
+    hx-swap="outerHTML"
+    hx-disable="this">
+    Add API key
   </button>
   {% endif %}
 </li>

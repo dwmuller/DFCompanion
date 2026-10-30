@@ -98,6 +98,19 @@ struct ActiveConfigurationTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "configuration-summary.html")]
+struct ConfigurationSummaryTemplate<'a> {
+    configuration: &'a ConfigurationListItem,
+}
+
+#[derive(Template)]
+#[template(path = "configuration-api-key-form.html")]
+struct ApiKeyFormTemplate<'a> {
+    configuration: &'a ConfigurationListItem,
+    error: &'a str,
+}
+
+#[derive(Template)]
 #[template(path = "configuration-create-closed.html")]
 struct ConfigurationCreateClosedTemplate;
 
@@ -135,6 +148,25 @@ pub fn render_active_configuration(
             .iter()
             .any(|configuration| configuration.active),
         oob,
+        error,
+    }
+    .render()?)
+}
+
+/// Renders one list item: its name and an add or forget API key button.
+pub fn render_configuration_summary(
+    configuration: &ConfigurationListItem,
+) -> Result<String, RenderError> {
+    Ok(ConfigurationSummaryTemplate { configuration }.render()?)
+}
+
+/// Renders the list item as a form for entering the configuration's API key.
+pub fn render_api_key_form(
+    configuration: &ConfigurationListItem,
+    error: &str,
+) -> Result<String, RenderError> {
+    Ok(ApiKeyFormTemplate {
+        configuration,
         error,
     }
     .render()?)
@@ -220,7 +252,6 @@ mod test {
         assert!(!rendered.contains("<script>bad</script>"));
         assert!(rendered.contains("OpenAI Responses"));
         assert!(rendered.contains("deepseek-flash"));
-        assert!(rendered.contains("API key saved"));
         assert!(!rendered.contains(">Select</button>"));
         assert!(rendered.contains("id=\"configuration-test-id\""));
         assert!(rendered.contains("id=\"new-configuration\""));
@@ -231,18 +262,42 @@ mod test {
         let rendered = render_configuration_list(&[item("configuration-id", "Test", true, true)])
             .expect("list should render");
 
-        assert!(rendered.contains("hx-post=\"/fragments/ai-configurations/configuration-id/key\""));
+        assert!(
+            rendered.contains("hx-delete=\"/fragments/ai-configurations/configuration-id/key\"")
+        );
         assert!(rendered.contains("hx-confirm="));
         assert!(rendered.contains("Forget API key"));
+        assert!(!rendered.contains("Add API key"));
     }
 
     #[test]
-    fn configuration_list_omits_forget_key_when_key_is_missing() {
+    fn configuration_list_offers_add_key_when_key_is_missing() {
         let rendered = render_configuration_list(&[item("configuration-id", "Test", false, true)])
             .expect("list should render");
 
         assert!(!rendered.contains("Forget API key"));
-        assert!(!rendered.contains("/fragments/ai-configurations/configuration-id/key"));
+        assert!(rendered.contains("hx-get=\"/fragments/ai-configurations/configuration-id/key\""));
+        assert!(rendered.contains("Add API key"));
+    }
+
+    #[test]
+    fn api_key_form_submits_a_password_field_and_shows_error() {
+        let rendered = render_api_key_form(&item("configuration-id", "Test", false, true), "Nope")
+            .expect("form should render");
+
+        assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/configuration-id/key\""));
+        assert!(rendered.contains("name=\"api_key\""));
+        assert!(rendered.contains("type=\"password\""));
+        assert!(rendered.contains("hx-get=\"/fragments/ai-configurations/configuration-id\""));
+        assert!(rendered.contains("Nope"));
+    }
+
+    #[test]
+    fn create_form_has_no_api_key_field() {
+        let rendered =
+            render_create_form(CreateFormValues::default(), &[], "").expect("form should render");
+
+        assert!(!rendered.contains("name=\"api_key\""));
     }
 
     #[test]

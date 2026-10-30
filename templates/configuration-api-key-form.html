@@ -1,0 +1,33 @@
+<li id="configuration-{{ configuration.id }}">
+  <form
+    hx-put="/fragments/ai-configurations/{{ configuration.id }}/key"
+    hx-target="#configuration-{{ configuration.id }}"
+    hx-swap="outerHTML"
+    hx-disable="find button">
+    <label for="api-key-{{ configuration.id }}">API key for {{ configuration.name }}</label>
+    <input
+      id="api-key-{{ configuration.id }}"
+      name="api_key"
+      type="password"
+      maxlength="4096"
+      autocomplete="new-password"
+      autofocus
+      required>
+    <p>
+      The key is stored in the operating system credential vault. Chat messages
+      and selected fortress reports will be sent to this configuration's
+      service when you ask a question.
+    </p>
+    <button type="submit">Save API key</button>
+    <button
+      type="button"
+      hx-get="/fragments/ai-configurations/{{ configuration.id }}"
+      hx-target="#configuration-{{ configuration.id }}"
+      hx-swap="outerHTML">
+      Cancel
+    </button>
+    {% if !error.is_empty() %}
+    <p role="alert">{{ error }}</p>
+    {% endif %}
+  </form>
+</li>

@@ -61,6 +61,12 @@ struct ConfigurationListResponse {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ApiKeyForm {
+    api_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SelectConfigurationForm {
     id: String,
 }
@@ -124,8 +130,15 @@ pub fn router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(8_192)),
         )
         .route(
+            "/fragments/ai-configurations/:id",
+            get(configuration_summary_fragment),
+        )
+        .route(
             "/fragments/ai-configurations/:id/key",
-            post(forget_api_key_fragment).layer(DefaultBodyLimit::max(8_192)),
+            get(api_key_form_fragment)
+                .put(save_api_key_fragment)
+                .delete(forget_api_key_fragment)
+                .layer(DefaultBodyLimit::max(8_192)),
         )
         .route("/api/ai-providers", get(list_providers))
         .route(
@@ -258,10 +271,8 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
         Err(response) => return response,
     };
 
-    // The selector shows key status, which this response may have changed.
-    let rendered = templates::render_configuration_list(&items).and_then(|list| {
-        templates::render_active_configuration(&items, true, "").map(|selector| list + &selector)
-    });
+    let rendered =
+        templates::render_configuration_list(&items).and_then(|list| with_selector(&state, list));
     fragment_response(StatusCode::OK, rendered, "AI configurations")
 }
 
@@ -304,23 +315,6 @@ async fn create_configuration_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    if form
-        .api_key
-        .as_ref()
-        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
-    {
-        return create_form_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            CreateFormValues {
-                name: form.name,
-                url: form.url,
-                model_id: form.model_id,
-                system_text: form.system_text,
-            },
-            "API key is too long.",
-        );
-    }
-
     let configuration = match state.ai.configurations.create(
         form.name,
         form.interaction_method,
@@ -331,37 +325,12 @@ async fn create_configuration_fragment(
         Ok(configuration) => configuration,
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
-    if let Some(key) = form.api_key.filter(|key| !key.trim().is_empty()) {
-        if let Err(error) = state
-            .ai
-            .configurations
-            .save_api_key(&configuration.id, &key)
-        {
-            let cleanup = state.ai.configurations.delete(&configuration.id);
-            let detail = cleanup
-                .err()
-                .map(|cleanup_error| format!(" Configuration cleanup also failed: {cleanup_error}"))
-                .unwrap_or_default();
-            return (StatusCode::SERVICE_UNAVAILABLE, format!("{error}{detail}")).into_response();
-        }
-    }
-    let has_api_key = match state.ai.configurations.has_api_key(&configuration.id) {
-        Ok(has_api_key) => has_api_key,
-        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    let item = match configuration_item(&state, &configuration) {
+        Ok(item) => item,
+        Err(response) => return response,
     };
-    let is_active = match state.ai.configurations.active() {
-        Ok(Some(config)) => config.id == configuration.id,
-        Ok(None) => false,
-        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
-    };
-    let item = ConfigurationListItem::from_configuration(&configuration, has_api_key, is_active);
-    let rendered = templates::render_created_configuration(&item).and_then(|created| {
-        let items = match configuration_list(&state.ai.configurations) {
-            Ok(response) => list_items(&response),
-            Err(_) => return Ok(created),
-        };
-        templates::render_active_configuration(&items, true, "").map(|selector| created + &selector)
-    });
+    let rendered = templates::render_created_configuration(&item)
+        .and_then(|created| with_selector(&state, created));
     fragment_response(StatusCode::OK, rendered, "created configuration")
 }
 
@@ -484,6 +453,124 @@ fn active_configuration_response(state: &AppState, status: StatusCode, error: St
     )
 }
 
+/// Looks up a configuration and builds its list item, or the error response.
+fn configuration_item(
+    state: &AppState,
+    configuration: &AiConfiguration,
+) -> Result<ConfigurationListItem, Response> {
+    let has_api_key = state
+        .ai
+        .configurations
+        .has_api_key(&configuration.id)
+        .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?;
+    let active = state
+        .ai
+        .configurations
+        .active()
+        .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?
+        .is_some_and(|active| active.id == configuration.id);
+    Ok(ConfigurationListItem::from_configuration(
+        configuration,
+        has_api_key,
+        active,
+    ))
+}
+
+fn existing_configuration_item(
+    state: &AppState,
+    id: &str,
+) -> Result<ConfigurationListItem, Response> {
+    let configuration = state
+        .ai
+        .configurations
+        .get(id)
+        .map_err(|error| (StatusCode::NOT_FOUND, error).into_response())?;
+    configuration_item(state, &configuration)
+}
+
+/// Appends the active-configuration selector as an out-of-band swap, because
+/// it shows which configurations still need an API key.
+fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> {
+    let items = match configuration_list(&state.ai.configurations) {
+        Ok(response) => list_items(&response),
+        Err(_) => return Ok(html),
+    };
+    templates::render_active_configuration(&items, true, "").map(|selector| html + &selector)
+}
+
+fn summary_response(state: &AppState, item: &ConfigurationListItem) -> Response {
+    let rendered = templates::render_configuration_summary(item)
+        .and_then(|summary| with_selector(state, summary));
+    fragment_response(StatusCode::OK, rendered, "AI configuration")
+}
+
+async fn configuration_summary_fragment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    match existing_configuration_item(&state, &id) {
+        Ok(item) => fragment_response(
+            StatusCode::OK,
+            templates::render_configuration_summary(&item),
+            "AI configuration",
+        ),
+        Err(response) => response,
+    }
+}
+
+async fn api_key_form_fragment(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match existing_configuration_item(&state, &id) {
+        Ok(item) => fragment_response(
+            StatusCode::OK,
+            templates::render_api_key_form(&item, ""),
+            "API key form",
+        ),
+        Err(response) => response,
+    }
+}
+
+async fn save_api_key_fragment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(form): Form<ApiKeyForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    let item = match existing_configuration_item(&state, &id) {
+        Ok(item) => item,
+        Err(response) => return response,
+    };
+
+    let rejection = if form.api_key.trim().is_empty() {
+        Some((StatusCode::BAD_REQUEST, "Enter an API key."))
+    } else if form.api_key.len() > crate::ai_config::MAX_API_KEY_BYTES {
+        Some((StatusCode::PAYLOAD_TOO_LARGE, "API key is too long."))
+    } else {
+        None
+    };
+    if let Some((status, message)) = rejection {
+        return fragment_response(
+            status,
+            templates::render_api_key_form(&item, message),
+            "API key form",
+        );
+    }
+
+    if let Err(error) = state.ai.configurations.save_api_key(&id, &form.api_key) {
+        return fragment_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            templates::render_api_key_form(&item, &error),
+            "API key form",
+        );
+    }
+    match existing_configuration_item(&state, &id) {
+        Ok(item) => summary_response(&state, &item),
+        Err(response) => response,
+    }
+}
+
 async fn forget_api_key_fragment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -492,16 +579,16 @@ async fn forget_api_key_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-
-    if let Err(error) = state.ai.configurations.get(&id) {
-        return (StatusCode::NOT_FOUND, error).into_response();
+    if let Err(response) = existing_configuration_item(&state, &id) {
+        return response;
     }
-
     if let Err(error) = state.ai.configurations.forget_api_key(&id) {
         return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
     }
-
-    configuration_list_fragment(State(state)).await
+    match existing_configuration_item(&state, &id) {
+        Ok(item) => summary_response(&state, &item),
+        Err(response) => response,
+    }
 }
 
 async fn delete_configuration(
@@ -822,7 +909,6 @@ mod test {
 
         assert!(list.contains("Test configuration 2"));
         assert!(list.contains("OpenAI Responses"));
-        assert!(list.contains("API key saved"));
         assert!(selector.contains("value=\"test-id-1\" selected"));
         assert!(!selector.contains("value=\"test-id-2\" selected"));
     }
