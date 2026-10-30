@@ -116,7 +116,7 @@ eventStream.addEventListener("warning", (event) => {
 });
 
 document.getElementById("chat-form").addEventListener("htmx:after:request", (event) => {
-  if (event.detail.successful) {
+  if (event.detail.ctx.response.raw.ok) {
     document.getElementById("message").value = "";
   }
 });
