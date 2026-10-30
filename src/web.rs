@@ -45,7 +45,9 @@ impl ConfigurationListItem {
         Self {
             id: configuration.id.clone(),
             name: configuration.name.clone(),
-            interaction_method: configuration.interaction_method.to_string(),
+            interaction_method: interaction_method_label(configuration.interaction_method)
+                .unwrap_or("Unsupported interaction method")
+                .to_owned(),
             model_id: configuration.model_id.clone(),
             api_key_saved: api_key_saved,
             active: is_active,
@@ -59,6 +61,15 @@ struct ConfigurationListTemplate {
     configurations: Vec<ConfigurationListItem>,
 }
 
+#[derive(Template)]
+#[template(path = "active-configuration.html")]
+struct ActiveConfigurationTemplate {
+    configurations: Vec<ConfigurationListItem>,
+    has_active: bool,
+    oob: bool,
+    error: String,
+}
+
 struct InteractionMethodOption {
     value: String,
     label: String,
@@ -66,9 +77,6 @@ struct InteractionMethodOption {
 
 struct ProviderOption {
     name: String,
-    adapter_kind: String,
-    api_url: String,
-    models: Vec<String>,
 }
 
 struct ConfigurationFormValues {
@@ -118,9 +126,6 @@ fn new_create_form_template(
             .iter()
             .map(|p| ProviderOption {
                 name: p.name.clone(),
-                adapter_kind: p.adapter_kind.to_string(),
-                api_url: p.api_url.clone(),
-                models: p.models.clone(),
             })
             .collect(),
         interaction_methods: AdapterKind::all()
@@ -175,21 +180,8 @@ struct ConfigurationListResponse {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ActiveConfigurationForm {
-    id: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SelectConfigurationForm {
     id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ApiKeyForm {
-    api_key: Option<String>,
-    forget: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -233,12 +225,6 @@ pub fn router(state: AppState) -> Router {
         .route("/chat", post(chat))
         .route("/retry", post(retry))
         .route(
-            "/api/ai-configurations",
-            get(list_configurations)
-                .post(create_configuration)
-                .layer(DefaultBodyLimit::max(32_768)),
-        )
-        .route(
             "/fragments/ai-configurations",
             get(configuration_list_fragment).post(create_configuration_fragment),
         )
@@ -252,7 +238,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/fragments/ai-configurations/active",
-            put(select_configuration_fragment).layer(DefaultBodyLimit::max(8_192)),
+            get(active_configuration_fragment)
+                .put(select_configuration_fragment)
+                .layer(DefaultBodyLimit::max(8_192)),
         )
         .route(
             "/fragments/ai-configurations/:id/key",
@@ -260,18 +248,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/ai-providers", get(list_providers))
         .route(
-            "/api/ai-configurations/active",
-            put(select_configuration).layer(DefaultBodyLimit::max(8_192)),
-        )
-        .route(
             "/api/ai-configurations/:id",
             put(update_configuration)
                 .delete(delete_configuration)
                 .layer(DefaultBodyLimit::max(32_768)),
-        )
-        .route(
-            "/api/ai-configurations/:id/key",
-            post(update_api_key).layer(DefaultBodyLimit::max(8_192)),
         )
         .route(
             "/api/plugin/events",
@@ -379,7 +359,11 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
         Err(response) => return response,
     };
 
-    match render_configuration_list(&response) {
+    let rendered = render_configuration_list(&response).and_then(|list| {
+        // The selector shows key status, which this response may have changed.
+        render_active_configuration(&response, true, String::new()).map(|selector| list + &selector)
+    });
+    match rendered {
         Ok(html) => ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
         Err(error) => {
             eprintln!("Could not render AI configuration list: {error}");
@@ -556,8 +540,15 @@ async fn create_configuration_fragment(
             is_active,
         ),
     };
-    match template.render() {
-        Ok(rendered) => rendered.into_response(),
+    let rendered = template.render().and_then(|created| {
+        let list = match configuration_list(&state.ai.configurations) {
+            Ok(list) => list,
+            Err(_) => return Ok(created),
+        };
+        render_active_configuration(&list, true, String::new()).map(|selector| created + &selector)
+    });
+    match rendered {
+        Ok(rendered) => Html(rendered).into_response(),
         Err(error) => {
             eprintln!("{error}");
             (
@@ -583,49 +574,6 @@ async fn list_providers() -> Response {
                 .into_response()
         }
     }
-}
-
-async fn create_configuration(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::Json(form): axum::Json<ConfigurationForm>,
-) -> Response {
-    if let Err(status) = validate_local_origin(&headers) {
-        return (status, "Request origin not allowed.").into_response();
-    }
-    if form
-        .api_key
-        .as_ref()
-        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
-    {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
-    }
-
-    let configuration = match state.ai.configurations.create(
-        form.name,
-        form.interaction_method,
-        form.model_id,
-        form.url,
-        form.system_text,
-    ) {
-        Ok(configuration) => configuration,
-        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-    };
-    if let Some(key) = form.api_key.filter(|key| !key.trim().is_empty()) {
-        if let Err(error) = state
-            .ai
-            .configurations
-            .save_api_key(&configuration.id, &key)
-        {
-            let cleanup = state.ai.configurations.delete(&configuration.id);
-            let detail = cleanup
-                .err()
-                .map(|cleanup_error| format!(" Configuration cleanup also failed: {cleanup_error}"))
-                .unwrap_or_default();
-            return (StatusCode::SERVICE_UNAVAILABLE, format!("{error}{detail}")).into_response();
-        }
-    }
-    list_configurations(State(state)).await
 }
 
 async fn update_configuration(
@@ -695,21 +643,8 @@ async fn update_configuration(
     list_configurations(State(state)).await
 }
 
-async fn select_configuration(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::Json(form): axum::Json<ActiveConfigurationForm>,
-) -> Response {
-    if let Err(status) = validate_local_origin(&headers) {
-        return (status, "Request origin not allowed.").into_response();
-    }
-    if let Err(error) = state.ai.configurations.set_active(form.id.as_deref()) {
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    if form.id.is_some() {
-        let _ = state.queue_tx.try_send(QueueItem::Orient);
-    }
-    list_configurations(State(state)).await
+async fn active_configuration_fragment(State(state): State<AppState>) -> Response {
+    active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
 async fn select_configuration_fragment(
@@ -721,56 +656,33 @@ async fn select_configuration_fragment(
         return (status, "Request origin not allowed.").into_response();
     }
 
-    if let Err(error) = state.ai.configurations.set_active(Some(&form.id)) {
-        return (StatusCode::BAD_REQUEST, error).into_response();
+    let id = Some(form.id.as_str()).filter(|id| !id.is_empty());
+    if let Err(error) = state.ai.configurations.set_active(id) {
+        return active_configuration_response(&state, StatusCode::BAD_REQUEST, error);
+    }
+    if id.is_some() {
+        let _ = state.queue_tx.try_send(QueueItem::Orient);
     }
 
-    let _ = state.queue_tx.try_send(QueueItem::Orient);
-
-    configuration_list_fragment(State(state)).await
+    active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
-async fn update_api_key(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    axum::Json(form): axum::Json<ApiKeyForm>,
-) -> Response {
-    if let Err(status) = validate_local_origin(&headers) {
-        return (status, "Request origin not allowed.").into_response();
-    }
-    if let Err(error) = state.ai.configurations.get(&id) {
-        return (StatusCode::NOT_FOUND, error).into_response();
-    }
-    if form
-        .api_key
-        .as_ref()
-        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
-    {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
-    }
-    let result = match (form.forget.unwrap_or(false), form.api_key) {
-        (true, Some(key)) if !key.trim().is_empty() => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "Choose either saving or forgetting the API key.",
-            )
-                .into_response()
-        }
-        (true, _) => state.ai.configurations.forget_api_key(&id),
-        (false, Some(key)) => state.ai.configurations.save_api_key(&id, &key),
-        (false, None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "API key or forget=true is required.",
-            )
-                .into_response()
-        }
+fn active_configuration_response(state: &AppState, status: StatusCode, error: String) -> Response {
+    let list = match configuration_list(&state.ai.configurations) {
+        Ok(list) => list,
+        Err(response) => return response,
     };
-    if let Err(error) = result {
-        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+    match render_active_configuration(&list, false, error) {
+        Ok(html) => (status, [(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
+        Err(error) => {
+            eprintln!("Could not render active AI configuration: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not render the active AI configuration.",
+            )
+                .into_response()
+        }
     }
-    list_configurations(State(state)).await
 }
 
 async fn forget_api_key_fragment(
@@ -855,27 +767,41 @@ fn configuration_list(
     })
 }
 
+fn list_items(response: &ConfigurationListResponse) -> Vec<ConfigurationListItem> {
+    response
+        .configurations
+        .iter()
+        .map(|summary| {
+            ConfigurationListItem::from_configuration(
+                &summary.configuration,
+                summary.api_key_saved,
+                response.active_id.as_ref() == Some(&summary.configuration.id),
+            )
+        })
+        .collect()
+}
+
 fn render_configuration_list(
     response: &ConfigurationListResponse,
 ) -> Result<String, askama::Error> {
-    let configurations = response
-        .configurations
-        .iter()
-        .map(|summary| ConfigurationListItem {
-            id: summary.configuration.id.clone(),
-            name: summary.configuration.name.clone(),
-            interaction_method: crate::ai_config::interaction_method_label(
-                summary.configuration.interaction_method,
-            )
-            .unwrap_or("Unsupported interaction method")
-            .to_owned(),
-            model_id: summary.configuration.model_id.clone(),
-            api_key_saved: summary.api_key_saved,
-            active: response.active_id.as_ref() == Some(&summary.configuration.id),
-        })
-        .collect();
+    ConfigurationListTemplate {
+        configurations: list_items(response),
+    }
+    .render()
+}
 
-    ConfigurationListTemplate { configurations }.render()
+fn render_active_configuration(
+    response: &ConfigurationListResponse,
+    oob: bool,
+    error: String,
+) -> Result<String, askama::Error> {
+    ActiveConfigurationTemplate {
+        configurations: list_items(response),
+        has_active: response.active_id.is_some(),
+        oob,
+        error,
+    }
+    .render()
 }
 
 async fn configuration_script() -> impl IntoResponse {
@@ -1121,7 +1047,6 @@ mod test {
         assert!(rendered.contains("OpenAI Responses"));
         assert!(rendered.contains("deepseek-flash"));
         assert!(rendered.contains("API key saved"));
-        assert!(rendered.contains("selected"));
         assert!(!rendered.contains(">Select</button>"));
         assert!(rendered.contains("id=\"configuration-test-id\""));
         assert!(rendered.contains("id=\"new-configuration\""));
@@ -1165,29 +1090,52 @@ mod test {
         assert!(rendered.contains("OpenAI Responses"));
         assert!(rendered.contains("test-model"));
         assert!(rendered.contains("API key saved"));
-        assert!(rendered.contains("selected"));
-        assert!(rendered.contains("value=\"test-id-2\""));
+        assert!(!rendered.contains(">Select</button>"));
     }
 
     #[test]
-    fn configuration_list_template_renders_select_for_inactive_configuration() {
-        let rendered = ConfigurationListTemplate {
-            configurations: vec![ConfigurationListItem {
-                id: "inactive-id".to_owned(),
-                name: "Inactive configuration".to_owned(),
-                interaction_method: "Anthropic".to_owned(),
-                model_id: "test-model".to_owned(),
-                api_key_saved: false,
-                active: false,
-            }],
-        }
-        .render()
-        .expect("configuration list template should render");
+    fn active_configuration_template_marks_active_and_flags_missing_key() {
+        let response = ConfigurationListResponse {
+            configurations: vec![
+                ConfigurationSummary {
+                    configuration: AiConfiguration {
+                        id: "id-1".to_owned(),
+                        name: "First".to_owned(),
+                        interaction_method: AdapterKind::Anthropic,
+                        model_id: "m".to_owned(),
+                        url: "https://example.com/".to_owned(),
+                        system_text: "t".to_owned(),
+                    },
+                    api_key_saved: false,
+                },
+                ConfigurationSummary {
+                    configuration: AiConfiguration {
+                        id: "id-2".to_owned(),
+                        name: "Second".to_owned(),
+                        interaction_method: AdapterKind::Anthropic,
+                        model_id: "m".to_owned(),
+                        url: "https://example.com/".to_owned(),
+                        system_text: "t".to_owned(),
+                    },
+                    api_key_saved: true,
+                },
+            ],
+            active_id: Some("id-2".to_owned()),
+        };
 
+        let rendered = render_active_configuration(&response, true, String::new())
+            .expect("selector should render");
+
+        assert!(rendered.contains("hx-swap-oob=\"true\""));
         assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/active\""));
-        assert!(rendered.contains("name=\"id\""));
-        assert!(rendered.contains("value=\"inactive-id\""));
-        assert!(rendered.contains("Select"));
+        assert!(rendered.contains("value=\"id-1\">"));
+        assert!(rendered.contains("value=\"id-2\" selected"));
+        assert!(rendered.contains("(API key needed)"));
+
+        let plain = render_active_configuration(&response, false, "Oops".to_owned())
+            .expect("selector should render");
+        assert!(!plain.contains("hx-swap-oob"));
+        assert!(plain.contains("Oops"));
     }
 
     #[test]

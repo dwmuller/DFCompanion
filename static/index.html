@@ -62,11 +62,12 @@
     </form>
     <section aria-labelledby="configuration-heading">
       <h2 id="configuration-heading">AI configuration</h2>
-      <label for="active-configuration">Selected configuration</label>
-      <select id="active-configuration" name="active_configuration">
-        <option value="">No AI configurations</option>
-      </select>
-      <p id="configuration-status" role="status" aria-live="polite"></p>
+      <div id="active-configuration"
+           hx-get="/fragments/ai-configurations/active"
+           hx-trigger="load"
+           hx-swap="outerHTML">
+        <p>Loading configurations…</p>
+      </div>
       <a href="/ai-configurations">Manage AI configurations</a>
     </section>
   </body>

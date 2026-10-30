@@ -3,6 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="htmx-config" content='{
+      "responseHandling": [
+        {"code": "204", "swap": false},
+        {"code": "[23]..", "swap": true},
+        {"code": "[45]..", "swap": true, "error": true},
+        {"code": "...", "swap": false}
+      ]
+    }'>
     <title>AI Configurations — DFCompanion</title>
     <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/ai-configurations.js" defer></script>
@@ -12,6 +20,16 @@
     <h1>AI Configurations</h1>
     <p>Configuration metadata is saved locally. API keys are stored separately in the operating system credential vault and are never returned to this page.</p>
     <p><a href="/">Back to chat</a></p>
+
+    <section aria-labelledby="active-configuration-heading">
+      <h2 id="active-configuration-heading">Active configuration</h2>
+      <div id="active-configuration"
+           hx-get="/fragments/ai-configurations/active"
+           hx-trigger="load"
+           hx-swap="outerHTML">
+        <p>Loading configurations…</p>
+      </div>
+    </section>
 
     <section aria-labelledby="config-list-heading">
       <h2 id="config-list-heading">Saved configurations</h2>

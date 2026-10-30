@@ -613,12 +613,12 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
-                    .uri("/api/ai-configurations")
+                    .uri("/fragments/ai-configurations")
                     .header(header::HOST, "127.0.0.1:3000")
                     .header(header::ORIGIN, "https://attacker.example")
-                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        r#"{"name":"Profile","interaction_method":"Anthropic","model_id":"model","url":"https://api.anthropic.com/","system_text":"text","api_key":"secret"}"#,
+                        "name=Profile&interaction_method=Anthropic&model_id=model&url=https%3A%2F%2Fapi.anthropic.com%2F&system_text=text&api_key=secret",
                     ))
                     .unwrap(),
             )
@@ -643,75 +643,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configuration_api_supports_create_select_rename_and_delete() {
+    async fn configuration_api_supports_rename_and_delete() {
         let (state, _) = AppState::new();
-        let router = crate::web::router(state);
+        let router = crate::web::router(state.clone());
+        let configurations = &state.ai.configurations;
         let create_body = |name: &str| {
             format!(
                 r#"{{"name":"{name}","interaction_method":"OpenAI","model_id":"gpt-test","url":"https://api.openai.com/v1/","system_text":"Use the provided evidence."}}"#
             )
         };
         let create = |name: &str| {
-            HttpRequest::builder()
-                .method("POST")
-                .uri("/api/ai-configurations")
-                .header(header::HOST, "127.0.0.1:3000")
-                .header(header::ORIGIN, "http://127.0.0.1:3000")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_body(name)))
+            configurations
+                .create(
+                    name.to_owned(),
+                    genai::adapter::AdapterKind::OpenAI,
+                    "gpt-test".to_owned(),
+                    "https://api.openai.com/v1/".to_owned(),
+                    "Use the provided evidence.".to_owned(),
+                )
                 .unwrap()
+                .id
         };
-        let first = router.clone().oneshot(create("Primary")).await.unwrap();
-        assert_eq!(first.status(), StatusCode::OK);
-        let first_body = axum::body::to_bytes(first.into_body(), 32_768)
-            .await
-            .unwrap();
-        let first_result: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
-        let first_id = first_result["configurations"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        assert_eq!(first_result["active_id"], first_id);
-        assert_eq!(first_result["configurations"][0]["api_key_saved"], false);
-        assert!(first_result["configurations"][0].get("api_key").is_none());
-
-        let second = router.clone().oneshot(create("Secondary")).await.unwrap();
-        assert_eq!(second.status(), StatusCode::OK);
-        let second_body = axum::body::to_bytes(second.into_body(), 32_768)
-            .await
-            .unwrap();
-        let second_result: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
-        let second_id = second_result["configurations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|configuration| configuration["name"] == "Secondary")
-            .unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        assert_eq!(second_result["active_id"], first_id);
-
-        let select = router
-            .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .method("PUT")
-                    .uri("/api/ai-configurations/active")
-                    .header(header::HOST, "127.0.0.1:3000")
-                    .header(header::ORIGIN, "http://127.0.0.1:3000")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(format!(r#"{{"id":"{second_id}"}}"#)))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(select.status(), StatusCode::OK);
-        let select_body = axum::body::to_bytes(select.into_body(), 32_768)
-            .await
-            .unwrap();
-        let select_result: serde_json::Value = serde_json::from_slice(&select_body).unwrap();
-        assert_eq!(select_result["active_id"], second_id);
+        let first_id = create("Primary");
+        let second_id = create("Secondary");
+        configurations.set_active(Some(&second_id)).unwrap();
 
         let rename = router
             .clone()
@@ -768,7 +723,7 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("AI Configurations"));
-        assert!(html.contains("configuration-system-text"));
+        assert!(html.contains("configuration-list"));
     }
 
     #[tokio::test]

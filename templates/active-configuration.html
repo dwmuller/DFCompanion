@@ -1,0 +1,34 @@
+<div id="active-configuration"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <label for="active-configuration-select">Selected configuration</label>
+  <select
+    id="active-configuration-select"
+    name="id"
+    hx-put="/fragments/ai-configurations/active"
+    hx-trigger="change"
+    hx-target="#active-configuration"
+    hx-swap="outerHTML"
+    hx-disable="this">
+    {% if configurations.is_empty() %}
+    <option value="">No AI configurations</option>
+    {% else %}
+    <option value="">Choose a configuration</option>
+    {% for configuration in configurations %}
+    <option value="{{ configuration.id }}"{% if configuration.active %} selected{% endif %}>
+      {{ configuration.name }} — {{ configuration.interaction_method }}{% if !configuration.api_key_saved %} (API key needed){% endif %}
+    </option>
+    {% endfor %}
+    {% endif %}
+  </select>
+  <p role="status" aria-live="polite">
+    {% if configurations.is_empty() %}
+    Create an AI configuration before starting a chat.
+    {% else if has_active %}
+    Chat messages and collected reports will use the selected configuration.
+    {% else %}
+    Select an AI configuration to enable chat.
+    {% endif %}
+  </p>
+  {% if !error.is_empty() %}
+  <p role="alert">{{ error }}</p>
+  {% endif %}
+</div>
