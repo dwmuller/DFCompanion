@@ -427,7 +427,7 @@ mod test {
 
         let index = render_index(&configurations).expect("index should render");
         assert!(index.contains("id=\"active-configuration\""));
-        assert!(index.contains("<option value=\"one\" selected>"));
+        assert!(index.contains("value=\"one\" checked"));
         assert!(index.contains("htmx-config"));
         assert!(index.contains("name=\"message\""));
         assert!(!index.contains("hx-trigger=\"load\"\n           hx-swap"));
@@ -544,7 +544,7 @@ mod test {
         assert!(rendered.contains("hx-swap-oob=\"true\""));
         assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/active\""));
         assert!(rendered.contains("value=\"id-1\">"));
-        assert!(rendered.contains("value=\"id-2\" selected"));
+        assert!(rendered.contains("value=\"id-2\" checked"));
         assert!(rendered.contains("(API key needed)"));
 
         let plain = render_active_configuration(&configurations, false, "Oops")

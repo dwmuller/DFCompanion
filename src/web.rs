@@ -962,7 +962,7 @@ mod test {
 
         assert!(list.contains("Test configuration 2"));
         assert!(list.contains("OpenAI Responses"));
-        assert!(selector.contains("value=\"test-id-1\" selected"));
-        assert!(!selector.contains("value=\"test-id-2\" selected"));
+        assert!(selector.contains("value=\"test-id-1\" checked"));
+        assert!(!selector.contains("value=\"test-id-2\" checked"));
     }
 }

@@ -1,33 +1,25 @@
 <div id="active-configuration"{% if oob %} hx-swap-oob="true"{% endif %}>
-  <label for="active-configuration-select">Selected configuration</label>
-  <select
-    id="active-configuration-select"
-    name="id"
-    hx-put="/fragments/ai-configurations/active"
-    hx-trigger="change"
-    hx-target="#active-configuration"
-    hx-swap="outerHTML"
-    hx-disable="this">
-    {% if configurations.is_empty() %}
-    <option value="">No AI configurations</option>
-    {% else %}
-    <option value="">Choose a configuration</option>
-    {% for configuration in configurations %}
-    <option value="{{ configuration.id }}"{% if configuration.active %} selected{% endif %}>
-      {{ configuration.name }} — {{ configuration.interaction_method }}{% if !configuration.api_key_saved %} (API key needed){% endif %}
-    </option>
-    {% endfor %}
-    {% endif %}
-  </select>
-  <p role="status" aria-live="polite">
-    {% if configurations.is_empty() %}
-    Create an AI configuration before starting a chat.
-    {% else if has_active %}
-    Chat messages and collected reports will use the selected configuration.
-    {% else %}
-    Select an AI configuration to enable chat.
-    {% endif %}
-  </p>
+  <details>
+    <summary>AI configuration: {% for configuration in configurations %}{% if configuration.active %}{{ configuration.name }}{% endif %}{% endfor %}{% if !has_active %}none selected{% endif %}</summary>
+    <form class="popup"
+        hx-put="/fragments/ai-configurations/active"
+        hx-trigger="change"
+        hx-target="#active-configuration"
+        hx-swap="outerHTML"
+        hx-disable="find input">
+      <p>
+        <input type="radio" id="active-configuration-none" name="id" value=""{% if !has_active %} checked{% endif %}>
+        <label for="active-configuration-none">{% if configurations.is_empty() %}No AI configurations{% else %}None{% endif %}</label>
+      </p>
+      {% for configuration in configurations %}
+      <p>
+        <input type="radio" id="active-configuration-{{ configuration.id }}" name="id" value="{{ configuration.id }}"{% if configuration.active %} checked{% endif %}>
+        <label for="active-configuration-{{ configuration.id }}">{{ configuration.name }} — {{ configuration.interaction_method }}{% if !configuration.api_key_saved %} (API key needed){% endif %}</label>
+      </p>
+      {% endfor %}
+      <p><a href="/ai-configurations">Manage AI configurations</a></p>
+    </form>
+  </details>
   {% if !error.is_empty() %}
   <p role="alert">{{ error }}</p>
   {% endif %}

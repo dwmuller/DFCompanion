@@ -57,6 +57,7 @@
         <p>The companion beeps when it has something to say on its own.</p>
       </form>
     </details>
+    {% include "active-configuration.html" %}
     </div>
     <ol id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></ol>
     <h2>Chat</h2>
@@ -76,10 +77,5 @@
       <button id="retry-button" type="submit">Retry failed AI request</button>
       <span id="retry-status" role="status"></span>
     </form>
-    <section aria-labelledby="configuration-heading">
-      <h2 id="configuration-heading">AI configuration</h2>
-      {% include "active-configuration.html" %}
-      <a href="/ai-configurations">Manage AI configurations</a>
-    </section>
   </body>
 </html>

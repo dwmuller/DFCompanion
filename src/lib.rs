@@ -200,6 +200,10 @@ impl AppState {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    ///
+    /// Sends a notification to clients.
+    ///
+    /// This is a best-effort operation; if no clients are connected, the message is simply dropped.
     pub fn notify(&self, message: impl Into<String>) {
         // No connected browser is a normal state; notifications are best-effort.
         let _ = self.notifications_tx.send(message.into());

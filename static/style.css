@@ -1,7 +1,7 @@
 body {
   font: 16px system-ui, sans-serif;
   margin: 2rem auto;
-  max-width: 52rem;
+  max-width: 64rem;
   padding: 0 1rem;
 }
 
@@ -108,11 +108,22 @@ body:has(#show-ai-usage:not(:checked)) .ai-usage {
   gap: 1.5rem;
 }
 
-.filter-bar details {
+.filter-bar {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.filter-bar #active-configuration p[role="alert"] {
+  margin: 0.2rem 0;
+}
+
+.filter-bar details,
+#active-configuration details {
   position: relative;
 }
 
-.filter-bar .popup {
+.filter-bar .popup,
+#active-configuration .popup {
   max-width: 24rem;
   width: max-content;
   background: #fff;
@@ -123,7 +134,8 @@ body:has(#show-ai-usage:not(:checked)) .ai-usage {
   z-index: 1;
 }
 
-.filter-bar .popup p {
+.filter-bar .popup p,
+#active-configuration .popup p {
   margin: 0.2rem 0;
 }
 
