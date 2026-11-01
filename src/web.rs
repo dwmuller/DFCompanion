@@ -21,7 +21,7 @@ use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_providers::built_in_providers,
     web_templates::{
-        self as templates, render_edit_form, ConfigurationListItem, CreateFormValues,
+        self as templates, ConfigurationListItem, CreateFormValues,
         EditFormValues, Notification, RenderError,
     },
     AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
@@ -124,7 +124,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/fragments/ai-configurations/new/closed",
-            get(closed_configuration_form_fragment),
+            get(closed_new_configuration_form_fragment),
         )
         .route(
             "/fragments/ai-configurations/:id",
@@ -317,15 +317,11 @@ async fn edit_configuration_form_fragment(
         model_id: config.model_id.clone(),
         system_text: config.system_text.clone(),
     };
-    fragment_response(
-        StatusCode::OK,
-        render_edit_form(values, "closed edit form"),
-        "edit configuration form",
-    )
+    edit_form_response(StatusCode::OK, values, "")
 }
 
 /// Handles GET requests for the closed AI configuration form fragment
-async fn closed_configuration_form_fragment(State(_state): State<AppState>) -> Response {
+async fn closed_new_configuration_form_fragment(State(_state): State<AppState>) -> Response {
     fragment_response(
         StatusCode::OK,
         templates::render_create_closed(),
@@ -410,6 +406,14 @@ async fn list_providers() -> Response {
     }
 }
 
+fn edit_form_response(status: StatusCode, values: EditFormValues, error: &str) -> Response {
+    fragment_response(
+        status,
+        templates::render_edit_form(values, error),
+        "edit configuration form",
+    )
+}
+
 /// Handles PUT requests for updating an AI configuration
 async fn update_configuration_fragment(
     State(state): State<AppState>,
@@ -430,16 +434,14 @@ async fn update_configuration_fragment(
     ) {
         Ok(configuration) => configuration,
         Err(error) => {
-            return create_form_response(
-                StatusCode::BAD_REQUEST,
-                CreateFormValues {
-                    name: form.name,
-                    url: form.url,
-                    model_id: form.model_id,
-                    system_text: form.system_text,
-                },
-                &error,
-            )
+            let values = EditFormValues {
+                id: id.clone(),
+                name: form.name,
+                url: form.url,
+                model_id: form.model_id,
+                system_text: form.system_text,
+            };
+            return edit_form_response(StatusCode::BAD_REQUEST, values, &error);
         }
     };
     let item = match configuration_item(&state, &configuration) {
