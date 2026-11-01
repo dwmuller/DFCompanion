@@ -46,9 +46,7 @@ impl ConfigurationListItem {
         Self {
             id: configuration.id.clone(),
             name: configuration.name.clone(),
-            interaction_method: interaction_method_label(configuration.interaction_method)
-                .unwrap_or("Unsupported interaction method")
-                .to_owned(),
+            interaction_method: configuration.interaction_method.to_string(),
             model_id: configuration.model_id.clone(),
             api_key_saved,
             active,
@@ -60,6 +58,7 @@ impl ConfigurationListItem {
 #[derive(Default)]
 pub struct CreateFormValues {
     pub name: String,
+    pub interaction_method: String,
     pub url: String,
     pub model_id: String,
     pub system_text: String,
@@ -69,6 +68,7 @@ pub struct CreateFormValues {
 pub struct EditFormValues {
     pub id: String,
     pub name: String,
+    pub interaction_method: String,
     pub url: String,
     pub model_id: String,
     pub system_text: String,
@@ -89,14 +89,16 @@ struct FormFieldValues {
     url: String,
     model_id: String,
     system_text: String,
+    interaction_method: String,
     interaction_methods: Vec<InteractionMethodOption>,
 }
 
 impl FormFieldValues {
-    fn new(id: &str, name: &str, url: &str, model_id: &str, system_text: &str) -> Self {
+    fn new(id: &str, name: &str, interaction_method: &str, url: &str, model_id: &str, system_text: &str) -> Self {
         Self {
             id: id.to_owned(),
             name: name.to_owned(),
+            interaction_method: interaction_method.to_owned(),
             url: url.to_owned(),
             model_id: model_id.to_owned(),
             system_text: system_text.to_owned(),
@@ -362,6 +364,7 @@ pub fn render_create_form(
         values: FormFieldValues::new(
             "new",
             &values.name,
+            &values.interaction_method,
             &values.url,
             &values.model_id,
             &values.system_text,
@@ -390,6 +393,7 @@ pub fn render_edit_form(values: EditFormValues, error: &str) -> Result<String, R
         values: FormFieldValues::new(
             &values.id,
             &values.name,
+            &values.interaction_method,
             &values.url,
             &values.model_id,
             &values.system_text,

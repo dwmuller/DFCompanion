@@ -18,13 +18,10 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
-    ai_config::{AiConfiguration, ConfigurationRepository},
-    ai_providers::built_in_providers,
-    web_templates::{
+    AppState, GAME_EVENT_PREFIX, GameEvent, QueueItem, ai_config::{AiConfiguration, ConfigurationRepository}, ai_providers::built_in_providers, web_templates::{
         self as templates, ConfigurationListItem, CreateFormValues,
         EditFormValues, Notification, RenderError,
     },
-    AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
@@ -36,14 +33,9 @@ struct ChatForm {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ConfigurationForm {
     name: String,
-    #[serde(
-        alias = "method",
-        deserialize_with = "crate::ai_config::deserialize_interaction_method"
-    )]
-    interaction_method: AdapterKind,
+    interaction_method: String,
     model_id: String,
     url: String,
     system_text: String,
@@ -309,11 +301,11 @@ async fn edit_configuration_form_fragment(
         Ok(config) => config,
         Err(response) => return (StatusCode::NOT_FOUND, response).into_response(),
     };
-
     let values = EditFormValues {
         id: id,
         name: config.name.clone(),
         url: config.url.clone(),
+        interaction_method: config.interaction_method.to_string(),
         model_id: config.model_id.clone(),
         system_text: config.system_text.clone(),
     };
@@ -359,9 +351,25 @@ async fn create_configuration_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
+    let method = match AdapterKind::from_lower_str(&form.interaction_method) {
+        Some(method) => method,
+        None => {
+            return create_form_response(
+                StatusCode::BAD_REQUEST,
+                CreateFormValues {
+                    name: form.name,
+                    interaction_method: form.interaction_method,
+                    url: form.url,
+                    model_id: form.model_id,
+                    system_text: form.system_text,
+                },
+                "Invalid interaction method",
+            );
+        }
+    };
     let configuration = match state.ai.configurations.create(
         &form.name,
-        form.interaction_method,
+        method,
         &form.model_id,
         &form.url,
         &form.system_text,
@@ -372,6 +380,7 @@ async fn create_configuration_fragment(
                 StatusCode::BAD_REQUEST,
                 CreateFormValues {
                     name: form.name,
+                    interaction_method: form.interaction_method,
                     url: form.url,
                     model_id: form.model_id,
                     system_text: form.system_text,
@@ -424,10 +433,27 @@ async fn update_configuration_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
+    let method = match AdapterKind::from_lower_str(&form.interaction_method.to_lowercase()) {
+        Some(method) => method,
+        None => {
+            return edit_form_response(
+                StatusCode::BAD_REQUEST,
+                EditFormValues {
+                    id: id.clone(),
+                    name: form.name,
+                    interaction_method: form.interaction_method,
+                    url: form.url,
+                    model_id: form.model_id,
+                    system_text: form.system_text,
+                },
+                "Invalid interaction method",
+            );
+        }
+    };
     let configuration = match state.ai.configurations.update(
         &id,
         &form.name,
-        form.interaction_method,
+        method,
         &form.model_id,
         &form.url,
         &form.system_text,
@@ -437,6 +463,7 @@ async fn update_configuration_fragment(
             let values = EditFormValues {
                 id: id.clone(),
                 name: form.name,
+                interaction_method: form.interaction_method,
                 url: form.url,
                 model_id: form.model_id,
                 system_text: form.system_text,

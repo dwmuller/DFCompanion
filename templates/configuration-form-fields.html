@@ -15,7 +15,11 @@
   required>
   <option value="">Choose an interaction method</option>
   {% for method in values.interaction_methods %}
-  <option value="{{ method.value }}">{{ method.label }}</option>
+    <option
+      {% if values.interaction_method == method.value %}selected{% endif %}
+      value="{{ method.value }}">
+      {{ method.label }}
+    </option>
   {% endfor %}
 </select>
 
