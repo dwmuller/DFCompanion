@@ -65,6 +65,15 @@ pub struct CreateFormValues {
     pub system_text: String,
 }
 
+#[derive(Default)]
+pub struct EditFormValues {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub model_id: String,
+    pub system_text: String,
+}
+
 struct InteractionMethodOption {
     value: String,
     label: String,
@@ -75,7 +84,7 @@ struct ProviderOption {
 }
 
 struct FormFieldValues {
-    field_prefix: String,
+    id: String,
     name: String,
     url: String,
     model_id: String,
@@ -84,9 +93,9 @@ struct FormFieldValues {
 }
 
 impl FormFieldValues {
-    fn new(field_prefix: &str, name: &str, url: &str, model_id: &str, system_text: &str) -> Self {
+    fn new(id: &str, name: &str, url: &str, model_id: &str, system_text: &str) -> Self {
         Self {
-            field_prefix: field_prefix.to_owned(),
+            id: id.to_owned(),
             name: name.to_owned(),
             url: url.to_owned(),
             model_id: model_id.to_owned(),
@@ -193,6 +202,13 @@ struct ConfigurationCreateFormTemplate<'a> {
 #[template(path = "configuration-create-success.html")]
 struct ConfigurationCreateSuccessTemplate<'a> {
     configuration: &'a ConfigurationListItem,
+}
+
+#[derive(Template)]
+#[template(path = "configuration-edit-form.html")]
+struct ConfigurationEditFormTemplate<'a> {
+    values: FormFieldValues,
+    error: &'a str,
 }
 
 pub fn render_notification(notification: &Notification) -> Result<String, RenderError> {
@@ -343,7 +359,13 @@ pub fn render_create_form(
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationCreateFormTemplate {
-        values: FormFieldValues::new("new", &values.name, &values.url, &values.model_id, &values.system_text),
+        values: FormFieldValues::new(
+            "new",
+            &values.name,
+            &values.url,
+            &values.model_id,
+            &values.system_text,
+        ),
         providers: providers
             .iter()
             .map(|provider| ProviderOption {
@@ -361,6 +383,20 @@ pub fn render_created_configuration(
     configuration: &ConfigurationListItem,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationCreateSuccessTemplate { configuration }.render()?)
+}
+
+pub fn render_edit_form(values: EditFormValues, error: &str) -> Result<String, RenderError> {
+    Ok(ConfigurationEditFormTemplate {
+        values: FormFieldValues::new(
+            &values.id,
+            &values.name,
+            &values.url,
+            &values.model_id,
+            &values.system_text,
+        ),
+        error,
+    }
+    .render()?)
 }
 
 #[cfg(test)]
@@ -538,6 +574,13 @@ mod test {
     }
 
     #[test]
+    fn edit_form_has_no_api_key_field() {
+        let rendered = render_edit_form(EditFormValues::default(), "").expect("form should render");
+
+        assert!(!rendered.contains("name=\"api_key\""));
+    }
+
+    #[test]
     fn active_configuration_marks_active_and_flags_missing_key() {
         let configurations = [
             item("id-1", "First", false, false),
@@ -566,6 +609,19 @@ mod test {
             ..Default::default()
         };
         let rendered = render_create_form(values, &[], "Bad key").expect("form should render");
+
+        assert!(rendered.contains("value=\"My config\""));
+        assert!(rendered.contains("Bad key"));
+    }
+
+    #[test]
+    fn edit_form_prefills_values_and_shows_error() {
+        let values = EditFormValues {
+            id: "edit-id".to_owned(),
+            name: "My config".to_owned(),
+            ..Default::default()
+        };
+        let rendered = render_edit_form(values, "Bad key").expect("form should render");
 
         assert!(rendered.contains("value=\"My config\""));
         assert!(rendered.contains("Bad key"));

@@ -656,12 +656,12 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
-                    .uri("/fragments/ai-configurations")
+                    .uri("/fragments/ai-configurations/new")
                     .header(header::HOST, "127.0.0.1:3000")
                     .header(header::ORIGIN, "https://attacker.example")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        "name=Profile&interaction_method=Anthropic&model_id=model&url=https%3A%2F%2Fapi.anthropic.com%2F&system_text=text&api_key=secret",
+                        "name=Profile&interaction_method=Anthropic&model_id=model&url=https%3A%2F%2Fapi.anthropic.com%2F&system_text=text",
                     ))
                     .unwrap(),
             )
@@ -692,7 +692,7 @@ mod tests {
         let configurations = &state.ai.configurations;
         let create_body = |name: &str| {
             format!(
-                r#"{{"name":"{name}","interaction_method":"OpenAI","model_id":"gpt-test","url":"https://api.openai.com/v1/","system_text":"Use the provided evidence."}}"#
+                "name={name}&interaction_method=OpenAI&model_id=gpt-test&url=https%3A%2F%2Fapi.openai.com%2Fv1%2F&system_text=Use+the+provided+evidence."
             )
         };
         let create = |name: &str| {
@@ -716,10 +716,10 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .method("PUT")
-                    .uri(format!("/api/ai-configurations/{first_id}"))
+                    .uri(format!("/fragments/ai-configurations/{first_id}"))
                     .header(header::HOST, "127.0.0.1:3000")
                     .header(header::ORIGIN, "http://127.0.0.1:3000")
-                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(create_body("Renamed")))
                     .unwrap(),
             )

@@ -1,15 +1,15 @@
-<label for="{{ values.field_prefix }}-configuration-name">Name</label>
+<label for="{{ values.id }}-configuration-name">Name</label>
 <input
-  id="{{ values.field_prefix }}-configuration-name"
+  id="{{ values.id }}-configuration-name"
   name="name"
   type="text"
   maxlength="128"
   value="{{ values.name }}"
   required>
 
-<label for="{{ values.field_prefix }}-interaction-method">Interaction method</label>
+<label for="{{ values.id }}-interaction-method">Interaction method</label>
 <select
-  id="{{ values.field_prefix }}-interaction-method"
+  id="{{ values.id }}-interaction-method"
   name="interaction_method"
   data-configuration-method
   required>
@@ -19,9 +19,9 @@
   {% endfor %}
 </select>
 
-<label for="{{ values.field_prefix }}-configuration-url">API URL</label>
+<label for="{{ values.id }}-configuration-url">API URL</label>
 <input
-  id="{{ values.field_prefix }}-configuration-url"
+  id="{{ values.id }}-configuration-url"
   name="url"
   type="url"
   maxlength="512"
@@ -34,26 +34,26 @@
   URL, not a complete request URL.
 </p>
 
-<label for="{{ values.field_prefix }}-configuration-model">Model ID</label>
+<label for="{{ values.id }}-configuration-model">Model ID</label>
 <input
-  id="{{ values.field_prefix }}-configuration-model"
+  id="{{ values.id }}-configuration-model"
   name="model_id"
   type="text"
   maxlength="256"
-  list="{{ values.field_prefix }}-configuration-models"
+  list="{{ values.id }}-configuration-models"
   value="{{ values.model_id }}"
   data-configuration-model
   required>
 <datalist
-  id="{{ values.field_prefix }}-configuration-models"
+  id="{{ values.id }}-configuration-models"
   data-configuration-models>
 </datalist>
 
 <p>Suggested models are editable and may vary by account or region.</p>
 
-<label for="{{ values.field_prefix }}-configuration-system-text">System text</label>
+<label for="{{ values.id }}-configuration-system-text">System text</label>
 <textarea
-  id="{{ values.field_prefix }}-configuration-system-text"
+  id="{{ values.id }}-configuration-system-text"
   name="system_text"
   maxlength="16384"
   required>{{ values.system_text }}</textarea>

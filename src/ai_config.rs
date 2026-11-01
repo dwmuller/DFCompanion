@@ -179,11 +179,11 @@ impl ConfigurationRepository {
     pub fn update(
         &self,
         id: &str,
-        name: String,
+        name: &str,
         interaction_method: AdapterKind,
-        model_id: String,
-        url: String,
-        system_text: String,
+        model_id: &str,
+        url: &str,
+        system_text: &str,
     ) -> Result<AiConfiguration, String> {
         validate_fields(interaction_method, &name, &model_id, &url, &system_text)?;
         let mut current = self.write()?;
@@ -467,11 +467,11 @@ mod tests {
         let renamed = repository
             .update(
                 &second.id,
-                "Renamed".to_owned(),
+                "Renamed",
                 AdapterKind::Anthropic,
-                "claude-model".to_owned(),
-                "https://api.anthropic.com/".to_owned(),
-                "Custom system text.".to_owned(),
+                "claude-model",
+                "https://api.anthropic.com/",
+                "Custom system text.",
             )
             .unwrap();
         assert_eq!(renamed.name, "Renamed");
@@ -522,11 +522,11 @@ mod tests {
         repository
             .update(
                 &configuration.id,
-                "Updated".to_owned(),
+                "Updated",
                 AdapterKind::OpenAIResp,
-                "gpt-test".to_owned(),
-                "https://api.openai.com/v1/".to_owned(),
-                "Updated system text.".to_owned(),
+                "gpt-test",
+                "https://api.openai.com/v1/",
+                "Updated system text.",
             )
             .unwrap();
         let contents = fs::read_to_string(&path).unwrap();

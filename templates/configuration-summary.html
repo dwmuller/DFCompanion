@@ -5,6 +5,14 @@
     {{ configuration.model_id }}
   </span>
 
+  <button
+    type="button"
+    hx-get="/fragments/ai-configurations/{{ configuration.id }}"
+    hx-target="#configuration-{{ configuration.id }}"
+    hx-swap="outerHTML">
+    Edit
+  </button>
+
   {% if configuration.api_key_saved %}
   <button
     type="button"

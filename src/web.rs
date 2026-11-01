@@ -9,7 +9,7 @@ use axum::{
         sse::{Event, KeepAlive},
         Html, IntoResponse, Response, Sse,
     },
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use futures_util::StreamExt as _;
@@ -21,7 +21,8 @@ use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_providers::built_in_providers,
     web_templates::{
-        self as templates, ConfigurationListItem, CreateFormValues, Notification, RenderError,
+        self as templates, render_edit_form, ConfigurationListItem, CreateFormValues,
+        EditFormValues, Notification, RenderError,
     },
     AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
@@ -46,7 +47,6 @@ struct ConfigurationForm {
     model_id: String,
     url: String,
     system_text: String,
-    api_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -116,25 +116,23 @@ pub fn router(state: AppState) -> Router {
         .route("/retry", post(retry))
         .route(
             "/fragments/ai-configurations",
-            get(configuration_list_fragment).post(create_configuration_fragment),
+            get(configuration_list_fragment),
         )
         .route(
             "/fragments/ai-configurations/new",
-            get(new_configuration_form_fragment),
+            get(new_configuration_form_fragment).post(create_configuration_fragment),
         )
         .route(
             "/fragments/ai-configurations/new/closed",
             get(closed_configuration_form_fragment),
         )
         .route(
-            "/fragments/ai-configurations/active",
-            get(active_configuration_fragment)
-                .put(select_configuration_fragment)
-                .layer(DefaultBodyLimit::max(8_192)),
+            "/fragments/ai-configurations/:id",
+            get(edit_configuration_form_fragment).put(update_configuration_fragment),
         )
         .route(
-            "/fragments/ai-configurations/:id",
-            get(configuration_summary_fragment),
+            "/fragments/ai-configurations/:id/closed",
+            get(closed_configuration_summary_fragment),
         )
         .route(
             "/fragments/ai-configurations/:id/key",
@@ -143,13 +141,17 @@ pub fn router(state: AppState) -> Router {
                 .delete(forget_api_key_fragment)
                 .layer(DefaultBodyLimit::max(8_192)),
         )
-        .route("/api/ai-providers", get(list_providers))
+        .route(
+            "/fragments/ai-configurations/active",
+            get(active_configuration_fragment)
+                .put(select_configuration_fragment)
+                .layer(DefaultBodyLimit::max(8_192)),
+        )
         .route(
             "/api/ai-configurations/:id",
-            put(update_configuration)
-                .delete(delete_configuration)
-                .layer(DefaultBodyLimit::max(32_768)),
+            delete(delete_configuration).layer(DefaultBodyLimit::max(32_768)),
         )
+        .route("/api/ai-providers", get(list_providers))
         .route(
             "/api/plugin/events",
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
@@ -165,6 +167,7 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Handles POST requests for events from DFHack plugin.
 async fn plugin_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -223,6 +226,7 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
         .into_response()
 }
 
+/// Handles GET requests for the index page.
 async fn index(State(state): State<AppState>) -> Response {
     match current_items(&state) {
         Ok(items) => fragment_response(StatusCode::OK, templates::render_index(&items), "page"),
@@ -230,6 +234,7 @@ async fn index(State(state): State<AppState>) -> Response {
     }
 }
 
+/// Handles GET requests for the AI configurations page.
 async fn configurations_page(State(state): State<AppState>) -> Response {
     match current_items(&state) {
         Ok(items) => fragment_response(
@@ -272,6 +277,7 @@ fn fragment_response(
     }
 }
 
+/// Handles GET requests for the AI configuration list fragment
 async fn configuration_list_fragment(State(state): State<AppState>) -> Response {
     let items = match configuration_list(&state.ai.configurations) {
         Ok(response) => list_items(&response),
@@ -283,10 +289,42 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
     fragment_response(StatusCode::OK, rendered, "AI configurations")
 }
 
-async fn new_configuration_form_fragment(State(_state): State<AppState>) -> Response {
+/// Handles GET requests for the new AI configuration form fragment
+async fn new_configuration_form_fragment(
+    State(_state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
     create_form_response(StatusCode::OK, CreateFormValues::default(), "")
 }
 
+/// Handles GET requests for the edit AI configuration form fragment
+async fn edit_configuration_form_fragment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let config = match state.ai.configurations.get(&id) {
+        Ok(config) => config,
+        Err(response) => return (StatusCode::NOT_FOUND, response).into_response(),
+    };
+
+    let values = EditFormValues {
+        id: id,
+        name: config.name.clone(),
+        url: config.url.clone(),
+        model_id: config.model_id.clone(),
+        system_text: config.system_text.clone(),
+    };
+    fragment_response(
+        StatusCode::OK,
+        render_edit_form(values, "closed edit form"),
+        "edit configuration form",
+    )
+}
+
+/// Handles GET requests for the closed AI configuration form fragment
 async fn closed_configuration_form_fragment(State(_state): State<AppState>) -> Response {
     fragment_response(
         StatusCode::OK,
@@ -314,6 +352,9 @@ fn create_form_response(status: StatusCode, values: CreateFormValues, error: &st
     )
 }
 
+///
+/// POST handler for creating a new AI configuration
+///
 async fn create_configuration_fragment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -330,7 +371,8 @@ async fn create_configuration_fragment(
         &form.system_text,
     ) {
         Ok(configuration) => configuration,
-        Err(error) => return create_form_response(
+        Err(error) => {
+            return create_form_response(
                 StatusCode::BAD_REQUEST,
                 CreateFormValues {
                     name: form.name,
@@ -339,7 +381,9 @@ async fn create_configuration_fragment(
                     system_text: form.system_text,
                 },
                 &error,
-            )    };
+            )
+        }
+    };
     let item = match configuration_item(&state, &configuration) {
         Ok(item) => item,
         Err(response) => return response,
@@ -349,6 +393,7 @@ async fn create_configuration_fragment(
     fragment_response(StatusCode::OK, rendered, "created configuration")
 }
 
+/// Handles GET requests for the list of built-in AI providers.
 async fn list_providers() -> Response {
     match crate::ai_providers::built_in_providers() {
         Ok(providers) => {
@@ -365,77 +410,53 @@ async fn list_providers() -> Response {
     }
 }
 
-async fn update_configuration(
+/// Handles PUT requests for updating an AI configuration
+async fn update_configuration_fragment(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(id): Path<String>,
-    axum::Json(form): axum::Json<ConfigurationForm>,
+    headers: HeaderMap,
+    Form(form): Form<ConfigurationForm>,
 ) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-
-    if let Err(error) = state.ai.configurations.get(&id) {
-        return (StatusCode::NOT_FOUND, error).into_response();
-    }
-
-    if form
-        .api_key
-        .as_ref()
-        .is_some_and(|key| key.len() > crate::ai_config::MAX_API_KEY_BYTES)
-    {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "API key is too long.").into_response();
-    }
-    let new_key = form.api_key.filter(|key| !key.trim().is_empty());
-    let previous_key = if new_key.is_some() {
-        match state.ai.configurations.has_api_key(&id) {
-            Ok(true) => match state.ai.configurations.get_api_key(&id) {
-                Ok(key) => Some(key),
-                Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
-            },
-            Ok(false) => None,
-            Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
-        }
-    } else {
-        None
-    };
-    if let Some(key) = &new_key {
-        if let Err(error) = state.ai.configurations.save_api_key(&id, key) {
-            return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
-        }
-    }
-
-    let updated = state.ai.configurations.update(
+    let configuration = match state.ai.configurations.update(
         &id,
-        form.name,
+        &form.name,
         form.interaction_method,
-        form.model_id,
-        form.url,
-        form.system_text,
-    );
-    if let Err(error) = updated {
-        if new_key.is_some() {
-            let rollback = match previous_key {
-                Some(previous_key) => state.ai.configurations.save_api_key(&id, &previous_key),
-                None => state.ai.configurations.forget_api_key(&id),
-            };
-            if let Err(rollback_error) = rollback {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("{error} API key rollback also failed: {rollback_error}"),
-                )
-                    .into_response();
-            }
+        &form.model_id,
+        &form.url,
+        &form.system_text,
+    ) {
+        Ok(configuration) => configuration,
+        Err(error) => {
+            return create_form_response(
+                StatusCode::BAD_REQUEST,
+                CreateFormValues {
+                    name: form.name,
+                    url: form.url,
+                    model_id: form.model_id,
+                    system_text: form.system_text,
+                },
+                &error,
+            )
         }
-        return (StatusCode::BAD_REQUEST, error).into_response();
-    }
-    list_configurations(State(state)).await
+    };
+    let item = match configuration_item(&state, &configuration) {
+        Ok(item) => item,
+        Err(response) => return response,
+    };
+    let rendered = templates::render_configuration_summary(&item)
+        .and_then(|created| with_selector(&state, created));
+    fragment_response(StatusCode::OK, rendered, "updated configuration")
 }
 
+/// Handles GET requests for the active AI configuration fragment.
 async fn active_configuration_fragment(State(state): State<AppState>) -> Response {
     active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
+/// Handles POST requests to select an AI configuration.
 async fn select_configuration_fragment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -519,7 +540,8 @@ fn summary_response(state: &AppState, item: &ConfigurationListItem) -> Response 
     fragment_response(StatusCode::OK, rendered, "AI configuration")
 }
 
-async fn configuration_summary_fragment(
+/// Handles GET requests for the closed AI configuration summary fragment.
+async fn closed_configuration_summary_fragment(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
@@ -533,6 +555,7 @@ async fn configuration_summary_fragment(
     }
 }
 
+/// Handles GET requests for the API key form fragment.
 async fn api_key_form_fragment(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match existing_configuration_item(&state, &id) {
         Ok(item) => fragment_response(
@@ -544,6 +567,7 @@ async fn api_key_form_fragment(State(state): State<AppState>, Path(id): Path<Str
     }
 }
 
+/// Handles POST requests to save an API key.
 async fn save_api_key_fragment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -586,6 +610,7 @@ async fn save_api_key_fragment(
     }
 }
 
+/// Handles POST requests to forget an API key.
 async fn forget_api_key_fragment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -606,6 +631,7 @@ async fn forget_api_key_fragment(
     }
 }
 
+/// Handles DELETE requests to remove an AI configuration.
 async fn delete_configuration(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -682,6 +708,7 @@ fn list_items(response: &ConfigurationListResponse) -> Vec<ConfigurationListItem
         .collect()
 }
 
+/// Handles GET requests for configuration page JavaScript.
 async fn configuration_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
@@ -689,6 +716,7 @@ async fn configuration_script() -> impl IntoResponse {
     )
 }
 
+/// Handles GET requests for the main app JavaScript.
 async fn app_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
@@ -696,6 +724,7 @@ async fn app_script() -> impl IntoResponse {
     )
 }
 
+/// Handles GET requests for the htmx JavaScript library.
 async fn htmx_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
@@ -703,6 +732,7 @@ async fn htmx_script() -> impl IntoResponse {
     )
 }
 
+/// Handles GET requests for the htmx SSE JavaScript library.
 async fn htmx_sse_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
@@ -710,6 +740,7 @@ async fn htmx_sse_script() -> impl IntoResponse {
     )
 }
 
+/// Handles GET requests for the main stylesheet.
 async fn stylesheet() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
@@ -774,6 +805,7 @@ struct AutomaticTurnsForm {
     periodic_turns: Option<String>,
 }
 
+/// Handles POST requests to configure automatic turns.
 async fn set_automatic_turns(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -793,6 +825,7 @@ async fn set_automatic_turns(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Handles GET requests for the server-sent events stream.
 async fn events(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -828,6 +861,7 @@ async fn events(
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::default())
 }
 
+/// Handles POST requests for chat messages.
 async fn chat(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -876,6 +910,7 @@ async fn chat(
     }
 }
 
+/// Handles POST requests to retry the last AI action.
 async fn retry(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
@@ -901,6 +936,7 @@ async fn validate_local_request(request: Request<Body>, next: Next) -> Response 
         .get(header::HOST)
         .and_then(|value| value.to_str().ok());
     if host != Some(HTTP_HOST) {
+        eprintln!("Host not allowed: {:?}", host);
         return (StatusCode::FORBIDDEN, "Host not allowed.").into_response();
     }
 

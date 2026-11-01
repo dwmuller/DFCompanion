@@ -1,0 +1,26 @@
+<li id="configuration-{{ values.id }}">
+  <form
+    data-configuration-form
+    hx-put="/fragments/ai-configurations/{{ values.id }}"
+    hx-target="#configuration-{{ values.id }}"
+    hx-swap="outerHTML"
+    hx-disable="find button">
+
+    <b>Editing {{ values.name }}</b>
+    <button type="submit">Save changes</button>
+    <button
+      type="button"
+      hx-get="/fragments/ai-configurations/{{ values.id }}/closed"
+      hx-target="#configuration-{{ values.id }}"
+      hx-swap="outerHTML">
+      Cancel
+    </button>
+    <br>
+    {% if !error.is_empty() %}
+    <p role="alert">{{ error }}</p>
+    {% endif %}
+    <br>
+    {% include "configuration-form-fields.html" %}
+
+  </form>
+</li>
