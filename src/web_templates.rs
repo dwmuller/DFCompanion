@@ -80,6 +80,28 @@ struct FormFieldValues {
     url: String,
     model_id: String,
     system_text: String,
+    interaction_methods: Vec<InteractionMethodOption>,
+}
+
+impl FormFieldValues {
+    fn new(field_prefix: &str, name: &str, url: &str, model_id: &str, system_text: &str) -> Self {
+        Self {
+            field_prefix: field_prefix.to_owned(),
+            name: name.to_owned(),
+            url: url.to_owned(),
+            model_id: model_id.to_owned(),
+            system_text: system_text.to_owned(),
+            interaction_methods: AdapterKind::all()
+                .iter()
+                .filter_map(|kind| {
+                    interaction_method_label(*kind).map(|label| InteractionMethodOption {
+                        value: kind.as_str().to_owned(),
+                        label: label.to_owned(),
+                    })
+                })
+                .collect(),
+        }
+    }
 }
 
 /// An entry in the conversation and notifications list.
@@ -164,7 +186,6 @@ struct ConfigurationCreateClosedTemplate;
 struct ConfigurationCreateFormTemplate<'a> {
     values: FormFieldValues,
     providers: Vec<ProviderOption>,
-    interaction_methods: Vec<InteractionMethodOption>,
     error: &'a str,
 }
 
@@ -322,26 +343,11 @@ pub fn render_create_form(
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationCreateFormTemplate {
-        values: FormFieldValues {
-            field_prefix: "new".to_owned(),
-            name: values.name,
-            url: values.url,
-            model_id: values.model_id,
-            system_text: values.system_text,
-        },
+        values: FormFieldValues::new("new", &values.name, &values.url, &values.model_id, &values.system_text),
         providers: providers
             .iter()
             .map(|provider| ProviderOption {
                 name: provider.name.clone(),
-            })
-            .collect(),
-        interaction_methods: AdapterKind::all()
-            .iter()
-            .filter_map(|kind| {
-                interaction_method_label(*kind).map(|label| InteractionMethodOption {
-                    value: kind.as_str().to_owned(),
-                    label: label.to_owned(),
-                })
             })
             .collect(),
         error,

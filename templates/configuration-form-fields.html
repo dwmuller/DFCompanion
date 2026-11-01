@@ -14,7 +14,7 @@
   data-configuration-method
   required>
   <option value="">Choose an interaction method</option>
-  {% for method in interaction_methods %}
+  {% for method in values.interaction_methods %}
   <option value="{{ method.value }}">{{ method.label }}</option>
   {% endfor %}
 </select>
