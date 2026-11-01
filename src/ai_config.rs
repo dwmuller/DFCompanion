@@ -148,11 +148,11 @@ impl ConfigurationRepository {
 
     pub fn create(
         &self,
-        name: String,
+        name: &str,
         interaction_method: AdapterKind,
-        model_id: String,
-        url: String,
-        system_text: String,
+        model_id: &str,
+        url: &str,
+        system_text: &str,
     ) -> Result<AiConfiguration, String> {
         validate_fields(interaction_method, &name, &model_id, &url, &system_text)?;
         let mut current = self.write()?;
@@ -430,11 +430,11 @@ mod tests {
     fn create(repository: &ConfigurationRepository, name: &str) -> AiConfiguration {
         repository
             .create(
-                name.to_owned(),
+                name,
                 AdapterKind::OpenAI,
-                "test-model".to_owned(),
-                "https://api.openai.com/v1/".to_owned(),
-                SYSTEM_TEXT.to_owned(),
+                "test-model",
+                "https://api.openai.com/v1/",
+                SYSTEM_TEXT,
             )
             .unwrap()
     }
@@ -486,11 +486,11 @@ mod tests {
         let repository = ConfigurationRepository::in_memory();
         create(&repository, "Primary");
         let duplicate = repository.create(
-            "primary".to_owned(),
+            "primary",
             AdapterKind::Anthropic,
-            "model".to_owned(),
-            "https://api.anthropic.com/".to_owned(),
-            SYSTEM_TEXT.to_owned(),
+            "model",
+            "https://api.anthropic.com/",
+            SYSTEM_TEXT,
         );
         assert!(duplicate.unwrap_err().contains("already exists"));
 

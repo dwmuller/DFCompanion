@@ -323,15 +323,23 @@ async fn create_configuration_fragment(
         return (status, "Request origin not allowed.").into_response();
     }
     let configuration = match state.ai.configurations.create(
-        form.name,
+        &form.name,
         form.interaction_method,
-        form.model_id,
-        form.url,
-        form.system_text,
+        &form.model_id,
+        &form.url,
+        &form.system_text,
     ) {
         Ok(configuration) => configuration,
-        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-    };
+        Err(error) => return create_form_response(
+                StatusCode::BAD_REQUEST,
+                CreateFormValues {
+                    name: form.name,
+                    url: form.url,
+                    model_id: form.model_id,
+                    system_text: form.system_text,
+                },
+                &error,
+            )    };
     let item = match configuration_item(&state, &configuration) {
         Ok(item) => item,
         Err(response) => return response,

@@ -698,11 +698,11 @@ mod tests {
         let create = |name: &str| {
             configurations
                 .create(
-                    name.to_owned(),
+                    name,
                     genai::adapter::AdapterKind::OpenAI,
-                    "gpt-test".to_owned(),
-                    "https://api.openai.com/v1/".to_owned(),
-                    "Use the provided evidence.".to_owned(),
+                    "gpt-test",
+                    "https://api.openai.com/v1/",
+                    "Use the provided evidence.",
                 )
                 .unwrap()
                 .id
@@ -810,11 +810,11 @@ mod tests {
             .ai
             .configurations
             .create(
-                "test config".to_owned(),
+                "test config",
                 genai::adapter::AdapterKind::OpenAI,
-                "test-model".to_owned(),
-                "https://api.openai.com/v1/".to_owned(),
-                crate::ai::DEFAULT_SYSTEM_TEXT.to_owned(),
+                "test-model",
+                "https://api.openai.com/v1/",
+                crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
@@ -874,11 +874,11 @@ mod tests {
             .ai
             .configurations
             .create(
-                "test config".to_owned(),
+                "test config",
                 genai::adapter::AdapterKind::OpenAI,
-                "test-model".to_owned(),
-                "https://api.openai.com/v1/".to_owned(),
-                crate::ai::DEFAULT_SYSTEM_TEXT.to_owned(),
+                "test-model",
+                "https://api.openai.com/v1/",
+                crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
@@ -912,11 +912,11 @@ mod tests {
             .ai
             .configurations
             .create(
-                "test config".to_owned(),
+                "test config",
                 genai::adapter::AdapterKind::OpenAI,
-                "test-model".to_owned(),
-                "https://api.openai.com/v1/".to_owned(),
-                crate::ai::DEFAULT_SYSTEM_TEXT.to_owned(),
+                "test-model",
+                "https://api.openai.com/v1/",
+                crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
