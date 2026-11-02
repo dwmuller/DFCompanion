@@ -13,6 +13,12 @@ use crate::{
 #[derive(Debug)]
 pub struct RenderError(String);
 
+impl RenderError {
+    pub fn new(message: &str) -> Self {
+        Self(message.to_owned())
+    }
+}
+
 impl fmt::Display for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -588,7 +594,7 @@ mod test {
         let rendered = render_active_configuration(&configurations, Some("id-2"), true, "")
             .expect("selector should render");
 
-        assert!(rendered.contains("hx-swap-oob=\"true\""));
+        assert!(rendered.contains("hx-partial"));
         assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/active\""));
         assert!(rendered.contains("value=\"id-1\">"));
         assert!(rendered.contains("value=\"id-2\" checked"));

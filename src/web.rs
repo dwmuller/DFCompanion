@@ -207,27 +207,35 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
     )
         .into_response()
 }
+fn render_error_response(what: &str, error: RenderError) -> Response {
+    eprintln!("Could not render {what}: {error}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Could not render {what}."),
+    )
+        .into_response()
+}
 
 fn configuration_items(
     repository: &ConfigurationRepository,
-) -> Result<(Vec<ConfigurationListItem>, Option<String>), Response> {
+) -> Result<(Vec<ConfigurationListItem>, Option<String>), RenderError> {
     let (configurations, active_id) = repository
         .list()
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())?;
+        .map_err(|error| RenderError::new(&error.to_string()))?;
 
     let items = configurations
         .into_iter()
         .map(|configuration| {
             let api_key_saved = repository
                 .has_api_key(&configuration.id)
-                .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?;
+                .map_err(|error| RenderError::new(&error.to_string()))?;
 
             Ok(ConfigurationListItem::from_configuration(
                 &configuration,
                 api_key_saved,
             ))
         })
-        .collect::<Result<Vec<_>, Response>>()?;
+        .collect::<Result<Vec<_>, RenderError>>()?;
     Ok((items, active_id))
 }
 
@@ -239,7 +247,7 @@ async fn index(State(state): State<AppState>) -> Response {
             templates::render_index(&items, active_id.as_deref()),
             "page",
         ),
-        Err(response) => response,
+        Err(err) => render_error_response("index", err),
     }
 }
 
@@ -251,7 +259,7 @@ async fn configurations_page(State(state): State<AppState>) -> Response {
             templates::render_configurations_page(&items, active_id.as_deref()),
             "page",
         ),
-        Err(response) => response,
+        Err(err) => render_error_response("configurations page", err),
     }
 }
 
@@ -277,7 +285,7 @@ fn fragment_response(
 async fn configuration_list_fragment(State(state): State<AppState>) -> Response {
     let (items, _active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
-        Err(response) => return response,
+        Err(err) => return render_error_response("AI configurations", err),
     };
 
     let rendered =
@@ -493,7 +501,7 @@ async fn select_configuration_fragment(
 fn active_configuration_response(state: &AppState, status: StatusCode, error: String) -> Response {
     let (items, active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
-        Err(response) => return response,
+        Err(error) => return render_error_response("configuration items", error),
     };
     fragment_response(
         status,
@@ -536,15 +544,42 @@ fn existing_configuration_item(
     configuration_item(state, &configuration)
 }
 
-/// Appends the active-configuration selector as an out-of-band swap, because
-/// it shows which configurations still need an API key.
-fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> {
+fn as_partial(html: &str, target: &str, swap: &str) -> String {
+    format!("\n<hx-partial hx-target=\"{target}\" hx-swap=\"{swap}\">{html}</hx-partial>\n")
+}
+
+fn get_active_configuration_selector(state: &AppState) -> Result<String, RenderError> {
     let (items, active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
-        Err(_) => return Ok(html), // TODO
+        Err(re) => return Err(re),
     };
-    templates::render_active_configuration(&items, active_id.as_deref(), true, "")
-        .map(|selector| html + &selector)
+    match templates::render_active_configuration(&items, active_id.as_deref(), true, "") {
+        Ok(selector) => Ok(selector),
+        Err(error) => Err(error),
+    }
+}
+
+/// Adds the active-configuration selector to the given HTML as an out-of-band
+/// swap. Use this when something about the selection list in the may have
+/// changed.
+///
+/// Argument `html` is the replacement for the triggering element. Even if
+/// empty, it's assumed that the intent is to replace it. If you want to send
+/// the selector only, leaving the triggering element unchanged, use the result
+/// of get_active_configuration_selector directly. Note that this behavior can
+/// be affected by htmx global settings and the hx-swap swapEmpty modifier.
+fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> {
+    // Note that there was a bug in htmx 4 where deleting the triggering element
+    // would cause following partials to not find their targets. So we prepend,
+    // rather than append, the selector to the HTML.
+    //
+    // Note that hx-target="this" does not seem to work as expected.
+    let selector = get_active_configuration_selector(state)?;
+    if html.is_empty() {
+        Ok(selector + &as_partial("", "closest li", "delete"))
+    } else {
+        Ok(selector + &html)
+    }
 }
 
 fn summary_response(state: &AppState, item: &ConfigurationListItem) -> Response {
@@ -715,8 +750,8 @@ async fn delete_configuration(
     }
     // Note that since we're sending an out-of-band response, and we want the
     // current triggering element to go away, we have to send something trivial
-    // to replace it. Hence the <span>.
-    let rendered = with_selector(&state, "<span></span>".to_owned());
+    // to replace it.
+    let rendered = with_selector(&state, "".to_string());
     fragment_response(StatusCode::OK, rendered, "deleted configuration")
 }
 
