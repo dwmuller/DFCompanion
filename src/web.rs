@@ -662,8 +662,11 @@ async fn delete_configuration(
 
     match state.ai.configurations.try_get(&id) {
         Err(error) => return configuration_form_error_response(StatusCode::NOT_FOUND, &id, &error),
-        Ok(None) => (),
+        Ok(None) => (), // Already gone. Odd, but no harm done. Desired state already achieved.
         Ok(Some(_)) => {
+            // If the configuration has an associated API key, we attempt to
+            // retrieve it so that we can roll it back in case the deletion
+            // fails.
             let previous_key = match state.ai.configurations.has_api_key(&id) {
                 Ok(true) => match state.ai.configurations.get_api_key(&id) {
                     Ok(key) => Some(key),
@@ -710,7 +713,10 @@ async fn delete_configuration(
             }
         }
     }
-    let rendered = with_selector(&state, String::new());
+    // Note that since we're sending an out-of-band response, and we want the
+    // current triggering element to go away, we have to send something trivial
+    // to replace it. Hence the <span>.
+    let rendered = with_selector(&state, "<span></span>".to_owned());
     fragment_response(StatusCode::OK, rendered, "deleted configuration")
 }
 
