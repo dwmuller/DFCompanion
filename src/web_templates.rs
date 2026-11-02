@@ -7,7 +7,7 @@ use askama::Template;
 use genai::adapter::AdapterKind;
 
 use crate::{
-    ai_config::{interaction_method_label, AiConfiguration},
+    ai_config::{supported_interaction_method_label, AiConfiguration},
     ai_providers::Provider,
 };
 
@@ -46,7 +46,11 @@ impl ConfigurationListItem {
         Self {
             id: configuration.id.clone(),
             name: configuration.name.clone(),
-            interaction_method: configuration.interaction_method.to_string(),
+            interaction_method: crate::ai_config::supported_interaction_method_name(
+                configuration.interaction_method,
+            )
+            .unwrap_or_default()
+            .to_owned(),
             model_id: configuration.model_id.clone(),
             api_key_saved,
             active,
@@ -112,7 +116,7 @@ impl FormFieldValues {
             interaction_methods: AdapterKind::all()
                 .iter()
                 .filter_map(|kind| {
-                    interaction_method_label(*kind).map(|label| InteractionMethodOption {
+                    supported_interaction_method_label(*kind).map(|label| InteractionMethodOption {
                         value: kind.as_str().to_owned(),
                         label: label.to_owned(),
                     })

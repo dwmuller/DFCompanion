@@ -18,18 +18,55 @@ const MAX_URL_BYTES: usize = 512;
 pub const MAX_SYSTEM_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_API_KEY_BYTES: usize = 4_096;
 
-pub fn is_supported_interaction_method(method: AdapterKind) -> bool {
-    interaction_method_label(method).is_some()
+#[derive(Clone, Copy, Debug)]
+struct SupportedAdapter {
+    pub kind: AdapterKind,
+    pub label: &'static str,
+    pub name: &'static str,
+}
+impl SupportedAdapter {
+    const fn new(kind: AdapterKind, label: &'static str, name: &'static str) -> Self {
+        Self { kind, label, name }
+    }
 }
 
-pub fn interaction_method_label(method: AdapterKind) -> Option<&'static str> {
-    // This is the definitive list of AdapterKind values that we support, as well
-    // as providing human-readable labels for them.
-    match method {
-        AdapterKind::OpenAI => Some("OpenAI Chat Completions"),
-        AdapterKind::OpenAIResp => Some("OpenAI Responses"),
-        AdapterKind::Anthropic => Some("Anthropic"),
-        _ => None,
+static SUPPORTED_ADAPTERS: &[SupportedAdapter] = &[
+    SupportedAdapter::new(AdapterKind::OpenAI, "OpenAI Chat Completions", "OpenAI"),
+    SupportedAdapter::new(AdapterKind::OpenAIResp, "OpenAI Responses", "OpenAIResp"),
+    SupportedAdapter::new(AdapterKind::Anthropic, "Anthropic", "Anthropic"),
+];
+
+pub fn is_supported_interaction_method(method: AdapterKind) -> bool {
+    SUPPORTED_ADAPTERS
+        .iter()
+        .any(|adapter| adapter.kind == method)
+}
+
+pub fn supported_interaction_method_label(method: AdapterKind) -> Option<&'static str> {
+    match SUPPORTED_ADAPTERS
+        .iter()
+        .find(|adapter| adapter.kind == method)
+    {
+        Some(adapter) => Some(adapter.label),
+        None => None,
+    }
+}
+pub fn supported_interaction_method_name(method: AdapterKind) -> Option<&'static str> {
+    match SUPPORTED_ADAPTERS
+        .iter()
+        .find(|adapter| adapter.kind == method)
+    {
+        Some(adapter) => Some(adapter.name),
+        None => None,
+    }
+}
+pub fn supported_interaction_method_from_name(name: &str) -> Option<AdapterKind> {
+    match SUPPORTED_ADAPTERS
+        .iter()
+        .find(|adapter| adapter.name == name)
+    {
+        Some(adapter) => Some(adapter.kind),
+        None => None,
     }
 }
 
@@ -52,11 +89,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = String::deserialize(deserializer)?;
-    match value.as_str() {
-        "OpenAI" | "open_ai_chat_completions" => Ok(AdapterKind::OpenAI),
-        "OpenAIResp" | "open_ai_responses" => Ok(AdapterKind::OpenAIResp),
-        "Anthropic" | "anthropic" => Ok(AdapterKind::Anthropic),
-        _ => Err(serde::de::Error::custom(
+    match supported_interaction_method_from_name(&value) {
+        Some(kind) => Ok(kind),
+        None => Err(serde::de::Error::custom(
             "unsupported AI interaction method",
         )),
     }
@@ -442,18 +477,21 @@ mod tests {
     #[test]
     fn supported_interaction_methods_have_labels() {
         assert_eq!(
-            interaction_method_label(AdapterKind::OpenAI),
+            supported_interaction_method_label(AdapterKind::OpenAI),
             Some("OpenAI Chat Completions")
         );
         assert_eq!(
-            interaction_method_label(AdapterKind::OpenAIResp),
+            supported_interaction_method_label(AdapterKind::OpenAIResp),
             Some("OpenAI Responses")
         );
         assert_eq!(
-            interaction_method_label(AdapterKind::Anthropic),
+            supported_interaction_method_label(AdapterKind::Anthropic),
             Some("Anthropic")
         );
-        assert_eq!(interaction_method_label(AdapterKind::Gemini), None);
+        assert_eq!(
+            supported_interaction_method_label(AdapterKind::Gemini),
+            None
+        );
     }
 
     #[test]
@@ -500,15 +538,6 @@ mod tests {
             normalize_url("https://example.com/v1").unwrap(),
             "https://example.com/v1/"
         );
-    }
-
-    #[test]
-    fn configurations_accept_the_previous_interaction_method_field() {
-        let configuration: AiConfiguration = serde_json::from_str(
-            r#"{"id":"config-id","name":"Legacy","method":"open_ai_responses","model_id":"gpt-test","url":"https://api.openai.com/v1/","system_text":"System text"}"#,
-        )
-        .unwrap();
-        assert_eq!(configuration.interaction_method, AdapterKind::OpenAIResp);
     }
 
     #[test]

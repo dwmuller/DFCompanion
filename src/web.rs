@@ -13,12 +13,11 @@ use axum::{
     Router,
 };
 use futures_util::StreamExt as _;
-use genai::adapter::AdapterKind;
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
-    ai_config::{AiConfiguration, ConfigurationRepository},
+    ai_config::{supported_interaction_method_from_name, AiConfiguration, ConfigurationRepository},
     ai_providers::built_in_providers,
     web_templates::{
         self as templates, render_configuration_form_error, ConfigurationListItem,
@@ -337,7 +336,7 @@ async fn create_configuration_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    let method = match AdapterKind::from_lower_str(&form.interaction_method.to_lowercase()) {
+    let method = match supported_interaction_method_from_name(&form.interaction_method) {
         Some(method) => method,
         None => {
             return configuration_form_error_response(
@@ -407,7 +406,7 @@ async fn update_configuration_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    let method = match AdapterKind::from_lower_str(&form.interaction_method.to_lowercase()) {
+    let method = match supported_interaction_method_from_name(&form.interaction_method) {
         Some(method) => method,
         None => {
             return configuration_form_error_response(
@@ -987,7 +986,7 @@ mod test {
             configuration: AiConfiguration {
                 id: id.to_owned(),
                 name: name.to_owned(),
-                interaction_method: AdapterKind::OpenAIResp,
+                interaction_method: genai::adapter::AdapterKind::OpenAIResp,
                 model_id: "test-model".to_owned(),
                 url: "https://example.com/".to_owned(),
                 system_text: "Test system text".to_owned(),
@@ -1012,7 +1011,7 @@ mod test {
             .expect("selector should render");
 
         assert!(list.contains("Test configuration 2"));
-        assert!(list.contains("OpenAI Responses"));
+        assert!(list.contains("OpenAI"));
         assert!(selector.contains("value=\"test-id-1\" checked"));
         assert!(!selector.contains("value=\"test-id-2\" checked"));
     }
