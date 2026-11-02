@@ -57,26 +57,6 @@ impl ConfigurationListItem {
     }
 }
 
-/// Field values used to (re)populate the create-configuration form.
-#[derive(Default)]
-pub struct CreateFormValues {
-    pub name: String,
-    pub interaction_method: String,
-    pub url: String,
-    pub model_id: String,
-    pub system_text: String,
-}
-
-#[derive(Default)]
-pub struct EditFormValues {
-    pub id: String,
-    pub name: String,
-    pub interaction_method: String,
-    pub url: String,
-    pub model_id: String,
-    pub system_text: String,
-}
-
 struct InteractionMethodOption {
     value: String,
     label: String,
@@ -369,20 +349,12 @@ pub fn render_create_closed() -> Result<String, RenderError> {
     Ok(ConfigurationCreateClosedTemplate.render()?)
 }
 
-pub fn render_create_form(
-    values: CreateFormValues,
+pub fn render_empty_create_form(
     providers: &[Provider],
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationCreateFormTemplate {
-        values: FormFieldValues::new(
-            "new",
-            &values.name,
-            &values.interaction_method,
-            &values.url,
-            &values.model_id,
-            &values.system_text,
-        ),
+        values: FormFieldValues::new("new", "", "", "", "", ""),
         providers: providers
             .iter()
             .map(|provider| ProviderOption {
@@ -402,15 +374,23 @@ pub fn render_created_configuration(
     Ok(ConfigurationCreateSuccessTemplate { configuration }.render()?)
 }
 
-pub fn render_edit_form(values: EditFormValues, error: &str) -> Result<String, RenderError> {
+pub fn render_edit_form(
+    id: &str,
+    name: &str,
+    interaction_method: &str,
+    url: &str,
+    model_id: &str,
+    system_text: &str,
+    error: &str,
+) -> Result<String, RenderError> {
     Ok(ConfigurationEditFormTemplate {
         values: FormFieldValues::new(
-            &values.id,
-            &values.name,
-            &values.interaction_method,
-            &values.url,
-            &values.model_id,
-            &values.system_text,
+            &id,
+            &name,
+            &interaction_method,
+            &url,
+            &model_id,
+            &system_text,
         ),
         error,
     }
@@ -596,15 +576,15 @@ mod test {
 
     #[test]
     fn create_form_has_no_api_key_field() {
-        let rendered =
-            render_create_form(CreateFormValues::default(), &[], "").expect("form should render");
+        let rendered = render_empty_create_form(&[], "").expect("form should render");
 
         assert!(!rendered.contains("name=\"api_key\""));
     }
 
     #[test]
     fn edit_form_has_no_api_key_field() {
-        let rendered = render_edit_form(EditFormValues::default(), "").expect("form should render");
+        let rendered = render_edit_form("edit-id", "My config", "", "", "", "", "")
+            .expect("form should render");
 
         assert!(!rendered.contains("name=\"api_key\""));
     }
@@ -633,24 +613,15 @@ mod test {
 
     #[test]
     fn create_form_prefills_values_and_shows_error() {
-        let values = CreateFormValues {
-            name: "My config".to_owned(),
-            ..Default::default()
-        };
-        let rendered = render_create_form(values, &[], "Bad key").expect("form should render");
+        let rendered = render_empty_create_form(&[], "Bad key").expect("form should render");
 
-        assert!(rendered.contains("value=\"My config\""));
         assert!(rendered.contains("Bad key"));
     }
 
     #[test]
     fn edit_form_prefills_values_and_shows_error() {
-        let values = EditFormValues {
-            id: "edit-id".to_owned(),
-            name: "My config".to_owned(),
-            ..Default::default()
-        };
-        let rendered = render_edit_form(values, "Bad key").expect("form should render");
+        let rendered = render_edit_form("edit-id", "My config", "", "", "", "", "Bad key")
+            .expect("form should render");
 
         assert!(rendered.contains("value=\"My config\""));
         assert!(rendered.contains("Bad key"));

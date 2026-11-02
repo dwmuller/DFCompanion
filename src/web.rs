@@ -23,8 +23,8 @@ use crate::{
     },
     ai_providers::built_in_providers,
     web_templates::{
-        self as templates, render_configuration_form_error, ConfigurationListItem,
-        CreateFormValues, EditFormValues, Notification, RenderError,
+        self as templates, render_configuration_form_error, ConfigurationListItem, Notification,
+        RenderError,
     },
     AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
@@ -290,7 +290,7 @@ async fn new_configuration_form_fragment(State(_state): State<AppState>) -> Resp
     };
     fragment_response(
         StatusCode::OK,
-        templates::render_create_form(CreateFormValues::default(), &providers, ""),
+        templates::render_empty_create_form(&providers, ""),
         "new configuration form",
     )
 }
@@ -314,17 +314,17 @@ async fn edit_configuration_form_fragment(
                 .into_response()
         }
     };
-    let values = EditFormValues {
-        id: id,
-        name: config.name.clone(),
-        url: config.url.clone(),
-        interaction_method: method_name,
-        model_id: config.model_id.clone(),
-        system_text: config.system_text.clone(),
-    };
     fragment_response(
         StatusCode::OK,
-        templates::render_edit_form(values, ""),
+        templates::render_edit_form(
+            &id,
+            &config.name,
+            &method_name,
+            &config.url,
+            &config.model_id,
+            &config.system_text,
+            "",
+        ),
         "edit configuration form",
     )
 }
