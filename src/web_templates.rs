@@ -4,10 +4,9 @@
 use std::fmt;
 
 use askama::Template;
-use genai::adapter::AdapterKind;
 
 use crate::{
-    ai_config::{supported_interaction_method_label, AiConfiguration},
+    ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
 };
 
@@ -113,13 +112,10 @@ impl FormFieldValues {
             url: url.to_owned(),
             model_id: model_id.to_owned(),
             system_text: system_text.to_owned(),
-            interaction_methods: AdapterKind::all()
-                .iter()
-                .filter_map(|kind| {
-                    supported_interaction_method_label(*kind).map(|label| InteractionMethodOption {
-                        value: kind.as_str().to_owned(),
-                        label: label.to_owned(),
-                    })
+            interaction_methods: supported_interaction_methods()
+                .map(|method| InteractionMethodOption {
+                    value: method.name.to_owned(),
+                    label: method.label.to_owned(),
                 })
                 .collect(),
         }
@@ -491,7 +487,7 @@ mod test {
             &AiConfiguration {
                 id: "one".to_owned(),
                 name: "First".to_owned(),
-                interaction_method: AdapterKind::OpenAI,
+                interaction_method: genai::adapter::AdapterKind::OpenAI,
                 model_id: "m".to_owned(),
                 url: "https://api.openai.com/v1/".to_owned(),
                 system_text: "s".to_owned(),

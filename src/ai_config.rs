@@ -19,7 +19,7 @@ pub const MAX_SYSTEM_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_API_KEY_BYTES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug)]
-struct SupportedAdapter {
+pub struct SupportedAdapter {
     pub kind: AdapterKind,
     pub label: &'static str,
     pub name: &'static str,
@@ -68,6 +68,10 @@ pub fn supported_interaction_method_from_name(name: &str) -> Option<AdapterKind>
         Some(adapter) => Some(adapter.kind),
         None => None,
     }
+}
+
+pub fn supported_interaction_methods() -> std::slice::Iter<'static, SupportedAdapter> {
+    SUPPORTED_ADAPTERS.iter()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

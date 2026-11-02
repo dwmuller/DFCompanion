@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
-    ai_config::{supported_interaction_method_from_name, AiConfiguration, ConfigurationRepository},
+    ai_config::{
+        supported_interaction_method_from_name, supported_interaction_method_name, AiConfiguration,
+        ConfigurationRepository,
+    },
     ai_providers::built_in_providers,
     web_templates::{
         self as templates, render_configuration_form_error, ConfigurationListItem,
@@ -301,11 +304,21 @@ async fn edit_configuration_form_fragment(
         Ok(config) => config,
         Err(response) => return (StatusCode::NOT_FOUND, response).into_response(),
     };
+    let method_name = match supported_interaction_method_name(config.interaction_method) {
+        Some(name) => name.to_owned(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unsupported interaction method stored",
+            )
+                .into_response()
+        }
+    };
     let values = EditFormValues {
         id: id,
         name: config.name.clone(),
         url: config.url.clone(),
-        interaction_method: config.interaction_method.to_string(),
+        interaction_method: method_name,
         model_id: config.model_id.clone(),
         system_text: config.system_text.clone(),
     };
