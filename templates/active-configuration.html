@@ -1,6 +1,7 @@
 <div id="active-configuration"{% if oob %} hx-swap-oob="true"{% endif %}>
   <details>
-    <summary>AI configuration: {% for configuration in configurations %}{% if configuration.active %}{{ configuration.name }}{% endif %}{% endfor %}{% if !has_active %}none selected{% endif %}</summary>
+    {$ let active_id = active_id; $}
+    <summary>AI configuration: {% if let Some(active_id) = active_id %}{% for configuration in configurations %}{% if active_id == &configuration.id %}{{ configuration.name }}{% endif %}{% endfor %}{% else %}none selected{% endif %}</summary>
     <form class="popup"
         hx-put="/fragments/ai-configurations/active"
         hx-trigger="change"
@@ -8,12 +9,12 @@
         hx-swap="outerHTML"
         hx-disable="find input">
       <p>
-        <input type="radio" id="active-configuration-none" name="id" value=""{% if !has_active %} checked{% endif %}>
+        <input type="radio" id="active-configuration-none" name="id" value=""{% if active_id.is_none() %} checked{% endif %}>
         <label for="active-configuration-none">{% if configurations.is_empty() %}No AI configurations{% else %}None{% endif %}</label>
       </p>
       {% for configuration in configurations %}
       <p>
-        <input type="radio" id="active-configuration-{{ configuration.id }}" name="id" value="{{ configuration.id }}"{% if configuration.active %} checked{% endif %}>
+        <input type="radio" id="active-configuration-{{ configuration.id }}" name="id" value="{{ configuration.id }}"{% if configuration.id == active_id.unwrap_or("none") %} checked{% endif %}>
         <label for="active-configuration-{{ configuration.id }}">{{ configuration.name }} — {{ configuration.interaction_method }}{% if !configuration.api_key_saved %} (API key needed){% endif %}</label>
       </p>
       {% endfor %}

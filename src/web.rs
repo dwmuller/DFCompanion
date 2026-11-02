@@ -224,7 +224,17 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
 /// Handles GET requests for the index page.
 async fn index(State(state): State<AppState>) -> Response {
     match current_items(&state) {
-        Ok(items) => fragment_response(StatusCode::OK, templates::render_index(&items), "page"),
+        Ok(items) => {
+            let active_id = match get_active_id(&state) {
+                Ok(id) => id,
+                Err(response) => return response,
+            };
+            fragment_response(
+                StatusCode::OK,
+                templates::render_index(&items, active_id.as_deref()),
+                "page",
+            )
+        }
         Err(response) => response,
     }
 }
@@ -232,11 +242,17 @@ async fn index(State(state): State<AppState>) -> Response {
 /// Handles GET requests for the AI configurations page.
 async fn configurations_page(State(state): State<AppState>) -> Response {
     match current_items(&state) {
-        Ok(items) => fragment_response(
-            StatusCode::OK,
-            templates::render_configurations_page(&items),
-            "page",
-        ),
+        Ok(items) => {
+            let active_id = match get_active_id(&state) {
+                Ok(id) => id,
+                Err(response) => return response,
+            };
+            fragment_response(
+                StatusCode::OK,
+                templates::render_configurations_page(&items, active_id.as_deref()),
+                "page",
+            )
+        }
         Err(response) => response,
     }
 }
@@ -477,14 +493,30 @@ async fn select_configuration_fragment(
     active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
+fn get_active_id(state: &AppState) -> Result<Option<String>, Response> {
+    match state.ai.configurations.active() {
+        Ok(active) => Ok(active.map(|c| c.id.clone())),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            eprintln!("Could not get active configuration: {error}"),
+        )
+            .into_response()),
+    }
+}
+
 fn active_configuration_response(state: &AppState, status: StatusCode, error: String) -> Response {
     let items = match configuration_list(&state.ai.configurations) {
         Ok(response) => list_items(&response),
         Err(response) => return response,
     };
+    let active_id = match get_active_id(state) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+
     fragment_response(
         status,
-        templates::render_active_configuration(&items, false, &error),
+        templates::render_active_configuration(&items, active_id.as_deref(), false, &error),
         "active AI configuration",
     )
 }
@@ -499,16 +531,9 @@ fn configuration_item(
         .configurations
         .has_api_key(&configuration.id)
         .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?;
-    let active = state
-        .ai
-        .configurations
-        .active()
-        .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?
-        .is_some_and(|active| active.id == configuration.id);
     Ok(ConfigurationListItem::from_configuration(
         configuration,
         has_api_key,
-        active,
     ))
 }
 
@@ -529,9 +554,14 @@ fn existing_configuration_item(
 fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> {
     let items = match configuration_list(&state.ai.configurations) {
         Ok(response) => list_items(&response),
-        Err(_) => return Ok(html),
+        Err(_) => return Ok(html), // TODO
     };
-    templates::render_active_configuration(&items, true, "").map(|selector| html + &selector)
+    let active_id = match state.ai.configurations.active() {
+        Ok(active) => active.map(|c| c.id.clone()),
+        Err(_) => return Ok(html), // TODO
+    };
+    templates::render_active_configuration(&items, active_id.as_deref(), false, "")
+        .map(|selector| html + &selector)
 }
 
 fn summary_response(state: &AppState, item: &ConfigurationListItem) -> Response {
@@ -715,11 +745,7 @@ fn list_items(response: &ConfigurationListResponse) -> Vec<ConfigurationListItem
         .configurations
         .iter()
         .map(|summary| {
-            ConfigurationListItem::from_configuration(
-                &summary.configuration,
-                summary.api_key_saved,
-                response.active_id.as_ref() == Some(&summary.configuration.id),
-            )
+            ConfigurationListItem::from_configuration(&summary.configuration, summary.api_key_saved)
         })
         .collect()
 }
@@ -1020,7 +1046,7 @@ mod test {
 
         let items = list_items(&response);
         let list = templates::render_configuration_list(&items).expect("list should render");
-        let selector = templates::render_active_configuration(&items, false, "")
+        let selector = templates::render_active_configuration(&items, Some("test-id-1"), false, "")
             .expect("selector should render");
 
         assert!(list.contains("Test configuration 2"));

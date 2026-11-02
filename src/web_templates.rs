@@ -33,15 +33,10 @@ pub struct ConfigurationListItem {
     interaction_method: String,
     model_id: String,
     api_key_saved: bool,
-    active: bool,
 }
 
 impl ConfigurationListItem {
-    pub fn from_configuration(
-        configuration: &AiConfiguration,
-        api_key_saved: bool,
-        active: bool,
-    ) -> Self {
+    pub fn from_configuration(configuration: &AiConfiguration, api_key_saved: bool) -> Self {
         Self {
             id: configuration.id.clone(),
             name: configuration.name.clone(),
@@ -52,7 +47,6 @@ impl ConfigurationListItem {
             .to_owned(),
             model_id: configuration.model_id.clone(),
             api_key_saved,
-            active,
         }
     }
 }
@@ -133,7 +127,7 @@ struct ChatSentTemplate {
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
     configurations: &'a [ConfigurationListItem],
-    has_active: bool,
+    active_id: Option<&'a str>,
     oob: bool,
     error: &'a str,
 }
@@ -142,7 +136,7 @@ struct IndexTemplate<'a> {
 #[template(path = "ai-configurations.html")]
 struct ConfigurationsPageTemplate<'a> {
     configurations: &'a [ConfigurationListItem],
-    has_active: bool,
+    active_id: Option<&'a str>,
     oob: bool,
     error: &'a str,
 }
@@ -157,7 +151,7 @@ struct ConfigurationListTemplate<'a> {
 #[template(path = "active-configuration.html")]
 struct ActiveConfigurationTemplate<'a> {
     configurations: &'a [ConfigurationListItem],
-    has_active: bool,
+    active_id: Option<&'a str>,
     oob: bool,
     error: &'a str,
 }
@@ -274,10 +268,13 @@ pub fn render_chat_sent() -> Result<String, RenderError> {
 }
 
 /// Renders the main page with the configuration selector already in place.
-pub fn render_index(configurations: &[ConfigurationListItem]) -> Result<String, RenderError> {
+pub fn render_index(
+    configurations: &[ConfigurationListItem],
+    active_id: Option<&str>,
+) -> Result<String, RenderError> {
     Ok(IndexTemplate {
         configurations,
-        has_active: has_active(configurations),
+        active_id,
         oob: false,
         error: "",
     }
@@ -288,20 +285,15 @@ pub fn render_index(configurations: &[ConfigurationListItem]) -> Result<String, 
 /// of configurations already in place.
 pub fn render_configurations_page(
     configurations: &[ConfigurationListItem],
+    active_id: Option<&str>,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationsPageTemplate {
         configurations,
-        has_active: has_active(configurations),
+        active_id: active_id,
         oob: false,
         error: "",
     }
     .render()?)
-}
-
-fn has_active(configurations: &[ConfigurationListItem]) -> bool {
-    configurations
-        .iter()
-        .any(|configuration| configuration.active)
 }
 
 pub fn render_configuration_list(
@@ -314,12 +306,13 @@ pub fn render_configuration_list(
 /// marked to replace the selector already on the page.
 pub fn render_active_configuration(
     configurations: &[ConfigurationListItem],
+    active_id: Option<&str>,
     oob: bool,
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ActiveConfigurationTemplate {
         configurations,
-        has_active: has_active(configurations),
+        active_id,
         oob,
         error,
     }
@@ -412,14 +405,13 @@ pub fn render_configuration_form_error(
 mod test {
     use super::*;
 
-    fn item(id: &str, name: &str, key_saved: bool, active: bool) -> ConfigurationListItem {
+    fn item(id: &str, name: &str, key_saved: bool) -> ConfigurationListItem {
         ConfigurationListItem {
             id: id.to_owned(),
             name: name.to_owned(),
             interaction_method: "Anthropic".to_owned(),
             model_id: "test-model".to_owned(),
             api_key_saved: key_saved,
-            active,
         }
     }
 
@@ -473,10 +465,9 @@ mod test {
                 system_text: "s".to_owned(),
             },
             true,
-            true,
         )];
 
-        let index = render_index(&configurations).expect("index should render");
+        let index = render_index(&configurations, Some("one")).expect("index should render");
         assert!(index.contains("id=\"active-configuration\""));
         assert!(index.contains("value=\"one\" checked"));
         assert!(index.contains("htmx-config"));
@@ -484,7 +475,8 @@ mod test {
         assert!(!index.contains("hx-trigger=\"load\"\n           hx-swap"));
         assert!(!index.contains("hx-swap-oob"));
 
-        let page = render_configurations_page(&configurations).expect("page should render");
+        let page =
+            render_configurations_page(&configurations, Some("one")).expect("page should render");
         assert!(page.contains("id=\"configuration-list\""));
         assert!(page.contains("First"));
         assert!(!page.contains("Loading configurations"));
@@ -525,7 +517,7 @@ mod test {
 
     #[test]
     fn configuration_list_renders_and_escapes_configuration() {
-        let mut configuration = item("test-id", "<script>bad</script>", true, true);
+        let mut configuration = item("test-id", "<script>bad</script>", true);
         configuration.interaction_method = "OpenAI Responses".to_owned();
         configuration.model_id = "deepseek-flash".to_owned();
         let rendered = render_configuration_list(&[configuration]).expect("list should render");
@@ -541,7 +533,7 @@ mod test {
 
     #[test]
     fn configuration_list_renders_forget_key_for_saved_key() {
-        let rendered = render_configuration_list(&[item("configuration-id", "Test", true, true)])
+        let rendered = render_configuration_list(&[item("configuration-id", "Test", true)])
             .expect("list should render");
 
         assert!(
@@ -554,7 +546,7 @@ mod test {
 
     #[test]
     fn configuration_list_offers_add_key_when_key_is_missing() {
-        let rendered = render_configuration_list(&[item("configuration-id", "Test", false, true)])
+        let rendered = render_configuration_list(&[item("configuration-id", "Test", false)])
             .expect("list should render");
 
         assert!(!rendered.contains("Forget API key"));
@@ -564,7 +556,7 @@ mod test {
 
     #[test]
     fn api_key_form_submits_a_password_field_and_shows_error() {
-        let rendered = render_api_key_form(&item("configuration-id", "Test", false, true), "Nope")
+        let rendered = render_api_key_form(&item("configuration-id", "Test", false), "Nope")
             .expect("form should render");
 
         assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/configuration-id/key\""));
@@ -591,13 +583,10 @@ mod test {
 
     #[test]
     fn active_configuration_marks_active_and_flags_missing_key() {
-        let configurations = [
-            item("id-1", "First", false, false),
-            item("id-2", "Second", true, true),
-        ];
+        let configurations = [item("id-1", "First", false), item("id-2", "Second", true)];
 
-        let rendered =
-            render_active_configuration(&configurations, true, "").expect("selector should render");
+        let rendered = render_active_configuration(&configurations, Some("id-2"), true, "")
+            .expect("selector should render");
 
         assert!(rendered.contains("hx-swap-oob=\"true\""));
         assert!(rendered.contains("hx-put=\"/fragments/ai-configurations/active\""));
@@ -605,7 +594,7 @@ mod test {
         assert!(rendered.contains("value=\"id-2\" checked"));
         assert!(rendered.contains("(API key needed)"));
 
-        let plain = render_active_configuration(&configurations, false, "Oops")
+        let plain = render_active_configuration(&configurations, Some("id-2"), false, "Oops")
             .expect("selector should render");
         assert!(!plain.contains("hx-swap-oob"));
         assert!(plain.contains("Oops"));
@@ -629,7 +618,7 @@ mod test {
 
     #[test]
     fn created_configuration_includes_closed_create_row() {
-        let rendered = render_created_configuration(&item("new-id", "New", false, false))
+        let rendered = render_created_configuration(&item("new-id", "New", false))
             .expect("success should render");
 
         assert!(rendered.contains("id=\"configuration-new-id\""));
