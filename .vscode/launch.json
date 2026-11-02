@@ -10,11 +10,6 @@
       "args": [],
       "preLaunchTask": "Build and Install DFCompanion (Debug)",
       "terminal": "integrated",
-      "serverReadyAction": {
-        "pattern": "DFCompanion web UI listening on (http://\\S+)",
-        "uriFormat": "%s/",
-        "action": "openExternally"
-      }
     }
   ]
 }
