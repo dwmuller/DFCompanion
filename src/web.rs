@@ -46,19 +46,6 @@ struct ConfigurationForm {
     system_text: String,
 }
 
-#[derive(Serialize)]
-struct ConfigurationSummary {
-    #[serde(flatten)]
-    configuration: AiConfiguration,
-    api_key_saved: bool,
-}
-
-#[derive(Serialize)]
-struct ConfigurationListResponse {
-    configurations: Vec<ConfigurationSummary>,
-    active_id: Option<String>,
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApiKeyForm {
@@ -221,44 +208,51 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
         .into_response()
 }
 
+fn configuration_items(
+    repository: &ConfigurationRepository,
+) -> Result<(Vec<ConfigurationListItem>, Option<String>), Response> {
+    let (configurations, active_id) = repository
+        .list()
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())?;
+
+    let items = configurations
+        .into_iter()
+        .map(|configuration| {
+            let api_key_saved = repository
+                .has_api_key(&configuration.id)
+                .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?;
+
+            Ok(ConfigurationListItem::from_configuration(
+                &configuration,
+                api_key_saved,
+            ))
+        })
+        .collect::<Result<Vec<_>, Response>>()?;
+    Ok((items, active_id))
+}
+
 /// Handles GET requests for the index page.
 async fn index(State(state): State<AppState>) -> Response {
-    match current_items(&state) {
-        Ok(items) => {
-            let active_id = match get_active_id(&state) {
-                Ok(id) => id,
-                Err(response) => return response,
-            };
-            fragment_response(
-                StatusCode::OK,
-                templates::render_index(&items, active_id.as_deref()),
-                "page",
-            )
-        }
+    match configuration_items(&state.ai.configurations) {
+        Ok((items, active_id)) => fragment_response(
+            StatusCode::OK,
+            templates::render_index(&items, active_id.as_deref()),
+            "page",
+        ),
         Err(response) => response,
     }
 }
 
 /// Handles GET requests for the AI configurations page.
 async fn configurations_page(State(state): State<AppState>) -> Response {
-    match current_items(&state) {
-        Ok(items) => {
-            let active_id = match get_active_id(&state) {
-                Ok(id) => id,
-                Err(response) => return response,
-            };
-            fragment_response(
-                StatusCode::OK,
-                templates::render_configurations_page(&items, active_id.as_deref()),
-                "page",
-            )
-        }
+    match configuration_items(&state.ai.configurations) {
+        Ok((items, active_id)) => fragment_response(
+            StatusCode::OK,
+            templates::render_configurations_page(&items, active_id.as_deref()),
+            "page",
+        ),
         Err(response) => response,
     }
-}
-
-fn current_items(state: &AppState) -> Result<Vec<ConfigurationListItem>, Response> {
-    configuration_list(&state.ai.configurations).map(|response| list_items(&response))
 }
 
 fn fragment_response(
@@ -281,8 +275,8 @@ fn fragment_response(
 
 /// Handles GET requests for the AI configuration list fragment
 async fn configuration_list_fragment(State(state): State<AppState>) -> Response {
-    let items = match configuration_list(&state.ai.configurations) {
-        Ok(response) => list_items(&response),
+    let (items, _active_id) = match configuration_items(&state.ai.configurations) {
+        Ok(items) => items,
         Err(response) => return response,
     };
 
@@ -493,27 +487,11 @@ async fn select_configuration_fragment(
     active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
-fn get_active_id(state: &AppState) -> Result<Option<String>, Response> {
-    match state.ai.configurations.active() {
-        Ok(active) => Ok(active.map(|c| c.id.clone())),
-        Err(error) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            eprintln!("Could not get active configuration: {error}"),
-        )
-            .into_response()),
-    }
-}
-
 fn active_configuration_response(state: &AppState, status: StatusCode, error: String) -> Response {
-    let items = match configuration_list(&state.ai.configurations) {
-        Ok(response) => list_items(&response),
+    let (items, active_id) = match configuration_items(&state.ai.configurations) {
+        Ok(items) => items,
         Err(response) => return response,
     };
-    let active_id = match get_active_id(state) {
-        Ok(id) => id,
-        Err(response) => return response,
-    };
-
     fragment_response(
         status,
         templates::render_active_configuration(&items, active_id.as_deref(), false, &error),
@@ -552,12 +530,8 @@ fn existing_configuration_item(
 /// Appends the active-configuration selector as an out-of-band swap, because
 /// it shows which configurations still need an API key.
 fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> {
-    let items = match configuration_list(&state.ai.configurations) {
-        Ok(response) => list_items(&response),
-        Err(_) => return Ok(html), // TODO
-    };
-    let active_id = match state.ai.configurations.active() {
-        Ok(active) => active.map(|c| c.id.clone()),
+    let (items, active_id) = match configuration_items(&state.ai.configurations) {
+        Ok(items) => items,
         Err(_) => return Ok(html), // TODO
     };
     templates::render_active_configuration(&items, active_id.as_deref(), false, "")
@@ -714,40 +688,6 @@ async fn delete_configuration(
     }
     let rendered = with_selector(&state, String::new());
     fragment_response(StatusCode::OK, rendered, "deleted configuration")
-}
-
-fn configuration_list(
-    repository: &ConfigurationRepository,
-) -> Result<ConfigurationListResponse, Response> {
-    let (configurations, active_id) = repository
-        .list()
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())?;
-    let configurations = configurations
-        .into_iter()
-        .map(|configuration| {
-            let api_key_saved = repository
-                .has_api_key(&configuration.id)
-                .map_err(|error| (StatusCode::SERVICE_UNAVAILABLE, error).into_response())?;
-            Ok(ConfigurationSummary {
-                configuration,
-                api_key_saved,
-            })
-        })
-        .collect::<Result<Vec<_>, Response>>()?;
-    Ok(ConfigurationListResponse {
-        configurations,
-        active_id,
-    })
-}
-
-fn list_items(response: &ConfigurationListResponse) -> Vec<ConfigurationListItem> {
-    response
-        .configurations
-        .iter()
-        .map(|summary| {
-            ConfigurationListItem::from_configuration(&summary.configuration, summary.api_key_saved)
-        })
-        .collect()
 }
 
 /// Handles GET requests for configuration page JavaScript.
@@ -1020,31 +960,30 @@ fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
 mod test {
     use super::*;
 
-    fn summary(id: &str, name: &str) -> ConfigurationSummary {
-        ConfigurationSummary {
-            configuration: AiConfiguration {
-                id: id.to_owned(),
-                name: name.to_owned(),
-                interaction_method: genai::adapter::AdapterKind::OpenAIResp,
-                model_id: "test-model".to_owned(),
-                url: "https://example.com/".to_owned(),
-                system_text: "Test system text".to_owned(),
-            },
-            api_key_saved: true,
-        }
-    }
-
     #[test]
     fn list_items_maps_summaries_and_marks_the_active_configuration() {
-        let response = ConfigurationListResponse {
-            configurations: vec![
-                summary("test-id-1", "Test configuration 1"),
-                summary("test-id-2", "Test configuration 2"),
-            ],
-            active_id: Some("test-id-1".to_owned()),
-        };
+        let items = vec![
+            AiConfiguration {
+                id: "test-id-1".to_owned(),
+                name: "Test configuration 1".to_owned(),
+                interaction_method: genai::adapter::AdapterKind::OpenAIResp,
+                model_id: String::new(),
+                url: String::new(),
+                system_text: String::new(),
+            },
+            AiConfiguration {
+                id: "test-id-2".to_owned(),
+                name: "Test configuration 2".to_owned(),
+                interaction_method: genai::adapter::AdapterKind::OpenAIResp,
+                model_id: String::new(),
+                url: String::new(),
+                system_text: String::new(),
+            },
+        ]
+        .into_iter()
+        .map(|c| ConfigurationListItem::from_configuration(&c, false))
+        .collect::<Vec<_>>();
 
-        let items = list_items(&response);
         let list = templates::render_configuration_list(&items).expect("list should render");
         let selector = templates::render_active_configuration(&items, Some("test-id-1"), false, "")
             .expect("selector should render");
