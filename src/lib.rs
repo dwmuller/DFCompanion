@@ -800,7 +800,7 @@ mod tests {
     #[tokio::test]
     async fn chat_without_api_key_retains_context_for_retry() {
         let (state, queue_rx) = AppState::new();
-        state
+        let config = state
             .ai
             .configurations
             .create(
@@ -810,6 +810,11 @@ mod tests {
                 "https://api.openai.com/v1/",
                 crate::ai::DEFAULT_SYSTEM_TEXT,
             )
+            .unwrap();
+        state
+            .ai
+            .configurations
+            .set_active(Some(&config.id))
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
         state
@@ -864,7 +869,7 @@ mod tests {
     async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure()
     {
         let (state, queue_rx) = AppState::new();
-        state
+        let config = state
             .ai
             .configurations
             .create(
@@ -874,6 +879,11 @@ mod tests {
                 "https://api.openai.com/v1/",
                 crate::ai::DEFAULT_SYSTEM_TEXT,
             )
+            .unwrap();
+        state
+            .ai
+            .configurations
+            .set_active(Some(&config.id))
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
         state

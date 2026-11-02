@@ -206,9 +206,6 @@ impl ConfigurationRepository {
             system_text: system_text.trim().to_owned(),
         };
         let mut next = current.clone();
-        if next.active_id.is_none() {
-            next.active_id = Some(configuration.id.clone());
-        }
         next.configurations.push(configuration.clone());
         self.persist(&next)?;
         *current = next;
@@ -503,6 +500,7 @@ mod tests {
         let repository = ConfigurationRepository::in_memory();
         let first = create(&repository, "Primary");
         let second = create(&repository, "Secondary");
+        repository.set_active(Some(&first.id)).unwrap();
 
         assert_eq!(repository.active().unwrap().unwrap().id, first.id);
         repository.set_active(Some(&second.id)).unwrap();
@@ -578,6 +576,7 @@ mod tests {
         let repository = ConfigurationRepository::in_memory();
         let first = create(&repository, "First");
         let second = create(&repository, "Second");
+        repository.set_active(Some(&first.id)).unwrap();
 
         assert!(!repository.delete(&second.id).unwrap());
         assert_eq!(repository.active().unwrap().unwrap().id, first.id);
