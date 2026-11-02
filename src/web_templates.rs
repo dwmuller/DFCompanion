@@ -213,6 +213,15 @@ struct ConfigurationEditFormTemplate<'a> {
     error: &'a str,
 }
 
+#[derive(Template)]
+#[template(path = "configuration-form-error.html")] 
+struct ConfigurationFormErrorTemplate {
+    id: String,
+    error_message: String,
+}
+
+
+
 pub fn render_notification(notification: &Notification) -> Result<String, RenderError> {
     let rendered = match notification {
         Notification::Speech { speaker, markdown } => {
@@ -399,6 +408,14 @@ pub fn render_edit_form(values: EditFormValues, error: &str) -> Result<String, R
             &values.system_text,
         ),
         error,
+    }
+    .render()?)
+}
+
+pub fn render_configuration_form_error(id: &str, error_message: &str) -> Result<String, RenderError> {
+    Ok(ConfigurationFormErrorTemplate {
+        id: id.to_owned(),
+        error_message: error_message.to_owned(),
     }
     .render()?)
 }

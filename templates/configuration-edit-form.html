@@ -12,13 +12,21 @@
       type="button"
       hx-get="/fragments/ai-configurations/{{ values.id }}/closed"
       hx-target="#configuration-{{ values.id }}"
-      hx-swap="outerHTML">
+      hx-swap="outerHTML"
+      hx-confirm="Are you sure you want to discard any unsaved edits?">
       Cancel
     </button>
+    <button
+      type="button"
+      hx-delete="/fragments/ai-configurations/{{ values.id }}"
+      hx-target="#configuration-{{ values.id }}"
+      hx-swap="outerHTML"
+      hx-confirm="Are you sure you want to delete this configuration?">
+      Delete
+    </button>
     <br>
-    {% if !error.is_empty() %}
-    <p role="alert">{{ error }}</p>
-    {% endif %}
+    <br>
+    <p id="{{ values.id }}-configuration-form-error" role="alert">{{ error }}</p>
     <br>
     {% include "configuration-form-fields.html" %}
 

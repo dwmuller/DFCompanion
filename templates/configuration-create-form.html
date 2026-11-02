@@ -16,9 +16,7 @@
       Cancel
     </button>
     <br>
-    {% if !error.is_empty() %}
-    <p role="alert">{{ error }}</p>
-    {% endif %}
+    <p id="new-configuration-form-error" role="alert">{{ error }}</p>
     <br>
     <label for="new-provider-preset">Provider preset</label>
     <select id="new-provider-preset" data-configuration-provider>

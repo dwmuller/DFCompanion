@@ -9,7 +9,7 @@ use axum::{
         sse::{Event, KeepAlive},
         Html, IntoResponse, Response, Sse,
     },
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Router,
 };
 use futures_util::StreamExt as _;
@@ -19,8 +19,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
     AppState, GAME_EVENT_PREFIX, GameEvent, QueueItem, ai_config::{AiConfiguration, ConfigurationRepository}, ai_providers::built_in_providers, web_templates::{
-        self as templates, ConfigurationListItem, CreateFormValues,
-        EditFormValues, Notification, RenderError,
+        self as templates, ConfigurationListItem, CreateFormValues, EditFormValues, Notification, RenderError, render_configuration_form_error,
     },
 };
 
@@ -120,7 +119,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/fragments/ai-configurations/:id",
-            get(edit_configuration_form_fragment).put(update_configuration_fragment),
+            get(edit_configuration_form_fragment)
+            .put(update_configuration_fragment)
+            .delete(delete_configuration)
         )
         .route(
             "/fragments/ai-configurations/:id/closed",
@@ -138,10 +139,6 @@ pub fn router(state: AppState) -> Router {
             get(active_configuration_fragment)
                 .put(select_configuration_fragment)
                 .layer(DefaultBodyLimit::max(8_192)),
-        )
-        .route(
-            "/api/ai-configurations/:id",
-            delete(delete_configuration).layer(DefaultBodyLimit::max(32_768)),
         )
         .route("/api/ai-providers", get(list_providers))
         .route(
@@ -242,15 +239,6 @@ fn current_items(state: &AppState) -> Result<Vec<ConfigurationListItem>, Respons
     configuration_list(&state.ai.configurations).map(|response| list_items(&response))
 }
 
-async fn list_configurations(State(state): State<AppState>) -> Response {
-    match configuration_list(&state.ai.configurations) {
-        Ok(response) => {
-            ([(header::CACHE_CONTROL, "no-store")], axum::Json(response)).into_response()
-        }
-        Err(response) => response,
-    }
-}
-
 fn fragment_response(
     status: StatusCode,
     rendered: Result<String, RenderError>,
@@ -284,12 +272,23 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
 /// Handles GET requests for the new AI configuration form fragment
 async fn new_configuration_form_fragment(
     State(_state): State<AppState>,
-    headers: HeaderMap,
 ) -> Response {
-    if let Err(status) = validate_local_origin(&headers) {
-        return (status, "Request origin not allowed.").into_response();
-    }
-    create_form_response(StatusCode::OK, CreateFormValues::default(), "")
+    let providers = match built_in_providers() {
+        Ok(providers) => providers,
+        Err(error) => {
+            eprintln!("Could not retrieve built-in providers: {error}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not retrieve built-in providers.",
+            )
+                .into_response();
+        }
+    };
+    fragment_response(
+        StatusCode::OK,
+        templates::render_create_form(CreateFormValues::default(), &providers, ""),
+        "new configuration form",
+    )
 }
 
 /// Handles GET requests for the edit AI configuration form fragment
@@ -309,7 +308,11 @@ async fn edit_configuration_form_fragment(
         model_id: config.model_id.clone(),
         system_text: config.system_text.clone(),
     };
-    edit_form_response(StatusCode::OK, values, "")
+    fragment_response(
+        StatusCode::OK,
+        templates::render_edit_form(values, ""),
+        "edit configuration form",
+    )
 }
 
 /// Handles GET requests for the closed AI configuration form fragment
@@ -318,25 +321,6 @@ async fn closed_new_configuration_form_fragment(State(_state): State<AppState>) 
         StatusCode::OK,
         templates::render_create_closed(),
         "closed configuration form",
-    )
-}
-
-fn create_form_response(status: StatusCode, values: CreateFormValues, error: &str) -> Response {
-    let providers = match built_in_providers() {
-        Ok(providers) => providers,
-        Err(error) => {
-            eprintln!("Could not retrieve built-in providers: {error}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not retrieve built-in providers.",
-            )
-                .into_response();
-        }
-    };
-    fragment_response(
-        status,
-        templates::render_create_form(values, &providers, error),
-        "new configuration form",
     )
 }
 
@@ -351,18 +335,12 @@ async fn create_configuration_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    let method = match AdapterKind::from_lower_str(&form.interaction_method) {
+    let method = match AdapterKind::from_lower_str(&form.interaction_method.to_lowercase()) {
         Some(method) => method,
         None => {
-            return create_form_response(
+            return configuration_form_error_response(
                 StatusCode::BAD_REQUEST,
-                CreateFormValues {
-                    name: form.name,
-                    interaction_method: form.interaction_method,
-                    url: form.url,
-                    model_id: form.model_id,
-                    system_text: form.system_text,
-                },
+                "new",
                 "Invalid interaction method",
             );
         }
@@ -376,15 +354,9 @@ async fn create_configuration_fragment(
     ) {
         Ok(configuration) => configuration,
         Err(error) => {
-            return create_form_response(
+            return configuration_form_error_response(
                 StatusCode::BAD_REQUEST,
-                CreateFormValues {
-                    name: form.name,
-                    interaction_method: form.interaction_method,
-                    url: form.url,
-                    model_id: form.model_id,
-                    system_text: form.system_text,
-                },
+                "new",
                 &error,
             )
         }
@@ -415,12 +387,8 @@ async fn list_providers() -> Response {
     }
 }
 
-fn edit_form_response(status: StatusCode, values: EditFormValues, error: &str) -> Response {
-    fragment_response(
-        status,
-        templates::render_edit_form(values, error),
-        "edit configuration form",
-    )
+fn configuration_form_error_response(status: StatusCode,id: &str, error_message: &str) -> Response {
+    fragment_response(status, render_configuration_form_error(id, error_message), error_message)
 }
 
 /// Handles PUT requests for updating an AI configuration
@@ -436,16 +404,9 @@ async fn update_configuration_fragment(
     let method = match AdapterKind::from_lower_str(&form.interaction_method.to_lowercase()) {
         Some(method) => method,
         None => {
-            return edit_form_response(
+            return configuration_form_error_response(
                 StatusCode::BAD_REQUEST,
-                EditFormValues {
-                    id: id.clone(),
-                    name: form.name,
-                    interaction_method: form.interaction_method,
-                    url: form.url,
-                    model_id: form.model_id,
-                    system_text: form.system_text,
-                },
+                &id,
                 "Invalid interaction method",
             );
         }
@@ -460,15 +421,7 @@ async fn update_configuration_fragment(
     ) {
         Ok(configuration) => configuration,
         Err(error) => {
-            let values = EditFormValues {
-                id: id.clone(),
-                name: form.name,
-                interaction_method: form.interaction_method,
-                url: form.url,
-                model_id: form.model_id,
-                system_text: form.system_text,
-            };
-            return edit_form_response(StatusCode::BAD_REQUEST, values, &error);
+            return configuration_form_error_response(StatusCode::BAD_REQUEST, &id, &error);
         }
     };
     let item = match configuration_item(&state, &configuration) {
@@ -667,36 +620,43 @@ async fn delete_configuration(
     Path(id): Path<String>,
 ) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
-        return (status, "Request origin not allowed.").into_response();
+        return configuration_form_error_response(status, &id, "Request origin not allowed.");
     }
+
+    // The delete request comes only from the AI configuration edit form. On
+    // success, we return a response that omits the now-gone summary line, and
+    // includes an out-of-band fragment to update the active configuration list
+    // control. On failure, we an out-of-band form error and don't swap the form out.
+
     if let Err(error) = state.ai.configurations.get(&id) {
-        return (StatusCode::NOT_FOUND, error).into_response();
+        return configuration_form_error_response(StatusCode::NOT_FOUND, &id, &error);
     }
     let previous_key = match state.ai.configurations.has_api_key(&id) {
         Ok(true) => match state.ai.configurations.get_api_key(&id) {
             Ok(key) => Some(key),
-            Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+            Err(error) => return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error),
         },
         Ok(false) => None,
-        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+        Err(error) => return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error),
     };
     if let Err(error) = state.ai.configurations.forget_api_key(&id) {
-        return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
+        return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error);
     }
     if let Err(error) = state.ai.configurations.delete(&id) {
         let rollback = previous_key.map_or(Ok(()), |key| {
             state.ai.configurations.save_api_key(&id, &key)
         });
         if let Err(rollback_error) = rollback {
-            return (
+            return configuration_form_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("{error} API key rollback also failed: {rollback_error}"),
-            )
-                .into_response();
+                &id,
+                &format!("{error} API key rollback also failed: {rollback_error}"),
+            );
         }
-        return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+        return configuration_form_error_response(StatusCode::INTERNAL_SERVER_ERROR, &id, &error);
     }
-    list_configurations(State(state)).await
+    let rendered = with_selector(&state, String::new());
+    fragment_response(StatusCode::OK, rendered, "deleted configuration")
 }
 
 fn configuration_list(
@@ -988,6 +948,9 @@ async fn validate_local_request(request: Request<Body>, next: Next) -> Response 
     response
 }
 
+/// If an Origin header is present, validates that it matches the expected local origin.
+/// Returns an error status code if the origin is not allowed.
+/// Should be used on POST, PUT, PATCH, and DELETE requests to ensure they originate from the local origin.
 fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
     let origin = headers
         .get(header::ORIGIN)
