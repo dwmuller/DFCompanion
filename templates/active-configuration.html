@@ -1,6 +1,5 @@
 <div id="active-configuration"{% if oob %} hx-swap-oob="true"{% endif %}>
   <details>
-    {$ let active_id = active_id; $}
     <summary>AI configuration: {% if let Some(active_id) = active_id %}{% for configuration in configurations %}{% if active_id == &configuration.id %}{{ configuration.name }}{% endif %}{% endfor %}{% else %}none selected{% endif %}</summary>
     <form class="popup"
         hx-put="/fragments/ai-configurations/active"

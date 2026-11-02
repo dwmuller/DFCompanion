@@ -310,9 +310,12 @@ async fn edit_configuration_form_fragment(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    let config = match state.ai.configurations.get(&id) {
-        Ok(config) => config,
-        Err(response) => return (StatusCode::NOT_FOUND, response).into_response(),
+    let config = match state.ai.configurations.try_get(&id) {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "AI configuration was not found.").into_response()
+        }
+        Err(response) => return (StatusCode::INTERNAL_SERVER_ERROR, response).into_response(),
     };
     let method_name = match supported_interaction_method_name(config.interaction_method) {
         Some(name) => name.to_owned(),
@@ -522,8 +525,14 @@ fn existing_configuration_item(
     let configuration = state
         .ai
         .configurations
-        .get(id)
-        .map_err(|error| (StatusCode::NOT_FOUND, error).into_response())?;
+        .try_get(id)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error).into_response())?;
+    let configuration = match configuration {
+        Some(config) => config,
+        None => {
+            return Err((StatusCode::NOT_FOUND, "AI configuration was not found.").into_response())
+        }
+    };
     configuration_item(state, &configuration)
 }
 
@@ -534,7 +543,7 @@ fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> 
         Ok(items) => items,
         Err(_) => return Ok(html), // TODO
     };
-    templates::render_active_configuration(&items, active_id.as_deref(), false, "")
+    templates::render_active_configuration(&items, active_id.as_deref(), true, "")
         .map(|selector| html + &selector)
 }
 
@@ -651,40 +660,55 @@ async fn delete_configuration(
     // control. On failure, we return an out-of-band form error and don't swap
     // the form out.
 
-    if let Err(error) = state.ai.configurations.get(&id) {
-        return configuration_form_error_response(StatusCode::NOT_FOUND, &id, &error);
-    }
-    let previous_key = match state.ai.configurations.has_api_key(&id) {
-        Ok(true) => match state.ai.configurations.get_api_key(&id) {
-            Ok(key) => Some(key),
-            Err(error) => {
+    match state.ai.configurations.try_get(&id) {
+        Err(error) => return configuration_form_error_response(StatusCode::NOT_FOUND, &id, &error),
+        Ok(None) => (),
+        Ok(Some(_)) => {
+            let previous_key = match state.ai.configurations.has_api_key(&id) {
+                Ok(true) => match state.ai.configurations.get_api_key(&id) {
+                    Ok(key) => Some(key),
+                    Err(error) => {
+                        return configuration_form_error_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            &id,
+                            &error,
+                        )
+                    }
+                },
+                Ok(false) => None,
+                Err(error) => {
+                    return configuration_form_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &id,
+                        &error,
+                    )
+                }
+            };
+            if let Err(error) = state.ai.configurations.forget_api_key(&id) {
                 return configuration_form_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     &id,
                     &error,
-                )
+                );
             }
-        },
-        Ok(false) => None,
-        Err(error) => {
-            return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error)
+            if let Err(error) = state.ai.configurations.delete(&id) {
+                let rollback = previous_key.map_or(Ok(()), |key| {
+                    state.ai.configurations.save_api_key(&id, &key)
+                });
+                if let Err(rollback_error) = rollback {
+                    return configuration_form_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &id,
+                        &format!("{error} API key rollback also failed: {rollback_error}"),
+                    );
+                }
+                return configuration_form_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &id,
+                    &error,
+                );
+            }
         }
-    };
-    if let Err(error) = state.ai.configurations.forget_api_key(&id) {
-        return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error);
-    }
-    if let Err(error) = state.ai.configurations.delete(&id) {
-        let rollback = previous_key.map_or(Ok(()), |key| {
-            state.ai.configurations.save_api_key(&id, &key)
-        });
-        if let Err(rollback_error) = rollback {
-            return configuration_form_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &id,
-                &format!("{error} API key rollback also failed: {rollback_error}"),
-            );
-        }
-        return configuration_form_error_response(StatusCode::INTERNAL_SERVER_ERROR, &id, &error);
     }
     let rendered = with_selector(&state, String::new());
     fragment_response(StatusCode::OK, rendered, "deleted configuration")

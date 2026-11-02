@@ -160,13 +160,13 @@ impl ConfigurationRepository {
         ))
     }
 
-    pub fn get(&self, id: &str) -> Result<AiConfiguration, String> {
-        self.read()?
+    pub fn try_get(&self, id: &str) -> Result<Option<AiConfiguration>, String> {
+        Ok(self
+            .read()?
             .configurations
             .iter()
             .find(|configuration| configuration.id == id)
-            .cloned()
-            .ok_or_else(|| "AI configuration was not found.".to_owned())
+            .cloned())
     }
 
     pub fn active(&self) -> Result<Option<AiConfiguration>, String> {
