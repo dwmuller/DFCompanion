@@ -581,4 +581,22 @@ mod tests {
         assert!(!repository.delete(&second.id).unwrap());
         assert_eq!(repository.active().unwrap().unwrap().id, first.id);
     }
+
+    #[test]
+    fn supported_interaction_method_names_round_trip() {
+        for adapter in supported_interaction_methods() {
+            assert_eq!(
+                supported_interaction_method_from_name(adapter.name),
+                Some(adapter.kind),
+                "interaction method {} did not round-trip",
+                adapter.name
+            );
+            assert_eq!(
+                supported_interaction_method_name(adapter.kind),
+                Some(adapter.name),
+                "interaction method {:?} did not round-trip",
+                adapter.kind
+            );
+        }
+    }
 }
