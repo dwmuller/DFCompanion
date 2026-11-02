@@ -731,7 +731,7 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .method("DELETE")
-                    .uri(format!("/api/ai-configurations/{second_id}"))
+                    .uri(format!("/fragments/ai-configurations/{second_id}"))
                     .header(header::HOST, "127.0.0.1:3000")
                     .header(header::ORIGIN, "http://127.0.0.1:3000")
                     .body(Body::empty())
@@ -740,12 +740,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(delete.status(), StatusCode::OK);
-        let delete_body = axum::body::to_bytes(delete.into_body(), 32_768)
-            .await
-            .unwrap();
-        let delete_result: serde_json::Value = serde_json::from_slice(&delete_body).unwrap();
-        assert!(delete_result["active_id"].is_null());
-        assert_eq!(delete_result["configurations"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]

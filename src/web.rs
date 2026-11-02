@@ -18,9 +18,13 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
-    AppState, GAME_EVENT_PREFIX, GameEvent, QueueItem, ai_config::{AiConfiguration, ConfigurationRepository}, ai_providers::built_in_providers, web_templates::{
-        self as templates, ConfigurationListItem, CreateFormValues, EditFormValues, Notification, RenderError, render_configuration_form_error,
+    ai_config::{AiConfiguration, ConfigurationRepository},
+    ai_providers::built_in_providers,
+    web_templates::{
+        self as templates, render_configuration_form_error, ConfigurationListItem,
+        CreateFormValues, EditFormValues, Notification, RenderError,
     },
+    AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
 };
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
@@ -120,8 +124,8 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/fragments/ai-configurations/:id",
             get(edit_configuration_form_fragment)
-            .put(update_configuration_fragment)
-            .delete(delete_configuration)
+                .put(update_configuration_fragment)
+                .delete(delete_configuration),
         )
         .route(
             "/fragments/ai-configurations/:id/closed",
@@ -270,9 +274,7 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
 }
 
 /// Handles GET requests for the new AI configuration form fragment
-async fn new_configuration_form_fragment(
-    State(_state): State<AppState>,
-) -> Response {
+async fn new_configuration_form_fragment(State(_state): State<AppState>) -> Response {
     let providers = match built_in_providers() {
         Ok(providers) => providers,
         Err(error) => {
@@ -354,11 +356,7 @@ async fn create_configuration_fragment(
     ) {
         Ok(configuration) => configuration,
         Err(error) => {
-            return configuration_form_error_response(
-                StatusCode::BAD_REQUEST,
-                "new",
-                &error,
-            )
+            return configuration_form_error_response(StatusCode::BAD_REQUEST, "new", &error)
         }
     };
     let item = match configuration_item(&state, &configuration) {
@@ -387,8 +385,16 @@ async fn list_providers() -> Response {
     }
 }
 
-fn configuration_form_error_response(status: StatusCode,id: &str, error_message: &str) -> Response {
-    fragment_response(status, render_configuration_form_error(id, error_message), error_message)
+fn configuration_form_error_response(
+    status: StatusCode,
+    id: &str,
+    error_message: &str,
+) -> Response {
+    fragment_response(
+        status,
+        render_configuration_form_error(id, error_message),
+        error_message,
+    )
 }
 
 /// Handles PUT requests for updating an AI configuration
@@ -626,7 +632,8 @@ async fn delete_configuration(
     // The delete request comes only from the AI configuration edit form. On
     // success, we return a response that omits the now-gone summary line, and
     // includes an out-of-band fragment to update the active configuration list
-    // control. On failure, we an out-of-band form error and don't swap the form out.
+    // control. On failure, we return an out-of-band form error and don't swap
+    // the form out.
 
     if let Err(error) = state.ai.configurations.get(&id) {
         return configuration_form_error_response(StatusCode::NOT_FOUND, &id, &error);
@@ -634,10 +641,18 @@ async fn delete_configuration(
     let previous_key = match state.ai.configurations.has_api_key(&id) {
         Ok(true) => match state.ai.configurations.get_api_key(&id) {
             Ok(key) => Some(key),
-            Err(error) => return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error),
+            Err(error) => {
+                return configuration_form_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    &id,
+                    &error,
+                )
+            }
         },
         Ok(false) => None,
-        Err(error) => return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error),
+        Err(error) => {
+            return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error)
+        }
     };
     if let Err(error) = state.ai.configurations.forget_api_key(&id) {
         return configuration_form_error_response(StatusCode::SERVICE_UNAVAILABLE, &id, &error);

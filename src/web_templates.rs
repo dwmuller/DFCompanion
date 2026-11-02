@@ -94,7 +94,14 @@ struct FormFieldValues {
 }
 
 impl FormFieldValues {
-    fn new(id: &str, name: &str, interaction_method: &str, url: &str, model_id: &str, system_text: &str) -> Self {
+    fn new(
+        id: &str,
+        name: &str,
+        interaction_method: &str,
+        url: &str,
+        model_id: &str,
+        system_text: &str,
+    ) -> Self {
         Self {
             id: id.to_owned(),
             name: name.to_owned(),
@@ -214,13 +221,11 @@ struct ConfigurationEditFormTemplate<'a> {
 }
 
 #[derive(Template)]
-#[template(path = "configuration-form-error.html")] 
+#[template(path = "configuration-form-error.html")]
 struct ConfigurationFormErrorTemplate {
     id: String,
     error_message: String,
 }
-
-
 
 pub fn render_notification(notification: &Notification) -> Result<String, RenderError> {
     let rendered = match notification {
@@ -412,7 +417,10 @@ pub fn render_edit_form(values: EditFormValues, error: &str) -> Result<String, R
     .render()?)
 }
 
-pub fn render_configuration_form_error(id: &str, error_message: &str) -> Result<String, RenderError> {
+pub fn render_configuration_form_error(
+    id: &str,
+    error_message: &str,
+) -> Result<String, RenderError> {
     Ok(ConfigurationFormErrorTemplate {
         id: id.to_owned(),
         error_message: error_message.to_owned(),
