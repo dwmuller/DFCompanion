@@ -3,7 +3,7 @@
 
 ## Pure UI improvements
 
-- Copying text from the Conversations control should yield markup, not plain
+- Copying text from the Conversations control should yield markdown, not plain
   text.
 - The Conversations control should be scrollable independent of the Web page.
 - Arrange config mgmt list as a table.
