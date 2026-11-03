@@ -272,6 +272,77 @@ end
 
 local mind_of -- defined below, with the need and thought tables it uses
 
+local WORK_DETAIL_MODES = {
+    [df.work_detail_mode.Default] = 'default',
+    [df.work_detail_mode.EverybodyDoesThis] = 'everybody',
+    [df.work_detail_mode.NobodyDoesThis] = 'nobody',
+    [df.work_detail_mode.OnlySelectedDoesThis] = 'selected_workers',
+}
+
+local function work_details_vector()
+    local plotinfo = df.global.plotinfo
+    local labor_info = plotinfo and plotinfo.labor_info
+    return labor_info and labor_info.work_details or nil
+end
+
+local function work_detail_labors(detail)
+    local labors = {}
+    for id = math.max(0, df.unit_labor._first_item), df.unit_labor._last_item do
+        if detail.allowed_labors[id] then
+            local attr = df.unit_labor.attrs[id]
+            local name = attr and attr.caption or df.unit_labor[id] or tostring(id)
+            name = name:gsub('(%l)(%u)', '%1_%2')
+                :gsub('[^%w]+', '_'):gsub('^_+', ''):gsub('_+$', ''):lower()
+            table.insert(labors, name)
+        end
+    end
+    table.sort(labors)
+    return labors
+end
+
+local function work_detail_summary(detail, index)
+    local flags = detail.flags
+    return {
+        index = index,
+        name = text(detail.name),
+        assignment_mode = WORK_DETAIL_MODES[flags.mode] or 'unknown',
+        built_in = flags.no_modify,
+        cannot_be_everybody = flags.cannot_be_everybody,
+        labors = work_detail_labors(detail),
+    }
+end
+
+local function unit_work(unit)
+    if U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
+        return {applicable = false, work_details = {}}
+    end
+    local work_details = work_details_vector()
+    if not work_details then
+        error('Work details are unavailable outside fortress mode.', 0)
+    end
+    local rows = {}
+    for index, detail in ipairs(work_details) do
+        local row = work_detail_summary(detail, index)
+        local explicit_member = false
+        for _, assigned_id in ipairs(detail.assigned_units) do
+            if assigned_id == unit.id then
+                explicit_member = true
+                break
+            end
+        end
+        if explicit_member or row.assignment_mode == 'everybody' then
+            row.explicit_member = explicit_member
+            table.insert(rows, row)
+        end
+    end
+    table.sort(rows, function(a, b)
+        local a_name, b_name = a.name:lower(), b.name:lower()
+        if a_name ~= b_name then return a_name < b_name end
+        return a.index < b.index
+    end)
+    return {applicable = true, work_details = rows}
+end
+
 local MAX_UNIT_INVENTORY_ITEMS = 20
 
 local function enum_key(name)
@@ -346,6 +417,9 @@ local function add_details(row, unit, options)
     if parts.inventory then
         row.inventory = inventory_of(unit)
     end
+    if parts.work then
+        row.work = unit_work(unit)
+    end
     row.carried_item_count = #unit.inventory
     local rider = unit.relationship_ids[df.unit_relationship_type.RiderMount]
     row.rider_id = rider and rider >= 0 and rider or nil
@@ -396,6 +470,35 @@ end
 function known_creatures(options_json)
     local options = options_json and options_json ~= '' and json.decode(options_json) or nil
     return json.encode(known_creatures_data(options), {pretty = false})
+end
+
+local function known_residents_by_id()
+    local known = {}
+    for _, row in ipairs(known_creatures_data(nil).residents) do
+        known[row.id] = {id = row.id, name = row.name}
+    end
+    return known
+end
+
+local function work_detail_row(detail, index, known_residents)
+    local row = work_detail_summary(detail, index)
+    local assigned_ids = {}
+    for _, id in ipairs(detail.assigned_units) do
+        if known_residents[id] then
+            assigned_ids[id] = true
+        end
+    end
+    local ids = {}
+    for id in pairs(assigned_ids) do
+        table.insert(ids, id)
+    end
+    table.sort(ids)
+    row.assigned_count = #ids
+    row.assigned_units = {}
+    for _, id in ipairs(ids) do
+        table.insert(row.assigned_units, known_residents[id])
+    end
+    return row, assigned_ids
 end
 
 local MAX_CANDIDATES = 25
@@ -1211,6 +1314,53 @@ end
 
 local function reply(data)
     return json.encode(data, {pretty = false})
+end
+
+-- Returns work-detail configuration, not effective labor permissions or
+-- current jobs. unit_id is restricted to residents in the known-creature list.
+function list_work_details(search_filter, unit_id, offset, limit)
+    local work_details = work_details_vector()
+    if not work_details then
+        return reply({error = 'Work details are unavailable outside fortress mode.'})
+    end
+    local known_residents = known_residents_by_id()
+    local filter_id
+    if unit_id ~= '' then
+        filter_id = tonumber(unit_id)
+        if not filter_id or filter_id < 0 or filter_id % 1 ~= 0
+                or not known_residents[filter_id] then
+            return reply({error = 'unit_id must identify a known living resident.'})
+        end
+    end
+    search_filter = (search_filter or ''):lower()
+    local rows = {}
+    for index, detail in ipairs(work_details) do
+        local row, assigned_ids = work_detail_row(detail, index, known_residents)
+        local relevant = not filter_id or assigned_ids[filter_id]
+            or row.assignment_mode == 'everybody'
+        local matches_search = search_filter == '' or row.name:lower():find(search_filter, 1, true)
+        if not matches_search then
+            for _, labor in ipairs(row.labors) do
+                local readable_labor = labor:gsub('_', ' ')
+                if labor:find(search_filter, 1, true)
+                        or readable_labor:find(search_filter, 1, true) then
+                    matches_search = true
+                    break
+                end
+            end
+        end
+        if relevant and matches_search then
+            table.insert(rows, row)
+        end
+    end
+    table.sort(rows, function(a, b)
+        local a_name, b_name = a.name:lower(), b.name:lower()
+        if a_name ~= b_name then return a_name < b_name end
+        return a.index < b.index
+    end)
+    return reply(paged({
+        notes = 'assigned_units lists explicit membership among known residents. assignment_mode is the stored work-detail policy; effective labor permissions are not inferred.',
+    }, 'work_details', rows, offset, limit))
 end
 
 -- Housing summary with per-floor counts and one paged list: `list` is

@@ -28,6 +28,7 @@ const MAX_CREATURE_REPLY_BYTES: usize = 12 * 1024;
 const LUA_MODULE: &str = "rpc.dfcompanion";
 pub const MAX_DETAIL_UNITS: usize = 10;
 pub const MAX_CANDIDATES: usize = 25;
+const MAX_WORK_DETAIL_OFFSET: usize = 5_000;
 
 /// Filters for `find_candidates`; all are optional and combined with AND.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -46,7 +47,14 @@ pub struct CandidateQuery {
     pub sort_by: Option<String>,
     pub limit: Option<usize>,
 }
-pub const DETAIL_PARTS: [&str; 5] = ["skills", "attributes", "health", "mind", "inventory"];
+pub const DETAIL_PARTS: [&str; 6] = [
+    "skills",
+    "attributes",
+    "health",
+    "mind",
+    "inventory",
+    "work",
+];
 pub const SKILL_CLASSES: [&str; 10] = [
     "normal",
     "medical",
@@ -159,6 +167,7 @@ fn restore_empty_lists(details: &mut Value) {
         &["mind", "recent_thoughts"],
         &["mind", "unmet_needs"],
         &["inventory", "items"],
+        &["work", "work_details"],
     ] {
         let mut node = Some(&mut *details);
         for key in path {
@@ -167,6 +176,37 @@ fn restore_empty_lists(details: &mut Value) {
         if let Some(node) = node {
             if node.as_object().is_some_and(|map| map.is_empty()) {
                 *node = json!([]);
+            }
+        }
+    }
+    if let Some(work_details) = details
+        .get_mut("work")
+        .and_then(|work| work.get_mut("work_details"))
+        .and_then(Value::as_array_mut)
+    {
+        for detail in work_details {
+            if let Some(labors) = detail.get_mut("labors") {
+                restore_empty_list(labors);
+            }
+        }
+    }
+}
+
+fn restore_empty_list(value: &mut Value) {
+    if value.as_object().is_some_and(|map| map.is_empty()) {
+        *value = json!([]);
+    }
+}
+
+fn restore_work_detail_lists(value: &mut Value) {
+    restore_empty_list(&mut value["work_details"]);
+    if let Some(work_details) = value["work_details"].as_array_mut() {
+        for detail in work_details {
+            if let Some(labors) = detail.get_mut("labors") {
+                restore_empty_list(labors);
+            }
+            if let Some(assigned_units) = detail.get_mut("assigned_units") {
+                restore_empty_list(assigned_units);
             }
         }
     }
@@ -708,6 +748,36 @@ impl GameState {
         self.call_lua_json("list locations", "list_locations", Vec::new())
     }
 
+    /// Work-detail assignment configuration, optionally filtered by name/labor
+    /// or restricted to details relevant to a known resident.
+    pub fn list_work_details(
+        &self,
+        search: Option<&str>,
+        unit_id: Option<i32>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        check_page(limit)?;
+        if offset > MAX_WORK_DETAIL_OFFSET {
+            return Err("offset exceeds the maximum supported list index.".to_owned());
+        }
+        if unit_id.is_some_and(|id| id < 0) {
+            return Err("unit_id must be a non-negative known resident ID.".to_owned());
+        }
+        let mut result = self.call_lua_json(
+            "list work details",
+            "list_work_details",
+            vec![
+                search.unwrap_or_default().to_owned(),
+                unit_id.map(|id| id.to_string()).unwrap_or_default(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
+        )?;
+        restore_work_detail_lists(&mut result);
+        Ok(result)
+    }
+
     /// A page of workshops and furnaces (see `list_workshops` in the Lua module).
     pub fn list_workshops(
         &self,
@@ -982,12 +1052,18 @@ mod tests {
 
     #[test]
     fn empty_detail_lists_are_restored() {
-        let mut details = json!({"skills": {}, "mind": {"recent_thoughts": {}, "unmet_needs": [1]}, "inventory": {"items": {}}});
+        let mut details = json!({
+            "skills": {},
+            "mind": {"recent_thoughts": {}, "unmet_needs": [1]},
+            "inventory": {"items": {}},
+            "work": {"work_details": {}}
+        });
         restore_empty_lists(&mut details);
         assert_eq!(details["skills"], json!([]));
         assert_eq!(details["mind"]["recent_thoughts"], json!([]));
         assert_eq!(details["mind"]["unmet_needs"], json!([1]));
         assert_eq!(details["inventory"]["items"], json!([]));
+        assert_eq!(details["work"]["work_details"], json!([]));
         let mut plain = json!({"id": 1});
         restore_empty_lists(&mut plain);
         assert_eq!(plain, json!({"id": 1}));
@@ -998,6 +1074,36 @@ mod tests {
         assert!(validate_detail_parts(&["inventory".to_owned()]).is_ok());
         let error = validate_detail_parts(&["unknown".to_owned()]).unwrap_err();
         assert!(error.contains("Unknown part \"unknown\""));
+    }
+
+    #[test]
+    fn work_is_a_supported_detail_part_and_unknown_parts_are_rejected() {
+        assert!(validate_detail_parts(&["work".to_owned()]).is_ok());
+        let error = validate_detail_parts(&["unknown".to_owned()]).unwrap_err();
+        assert!(error.contains("Unknown part \"unknown\""));
+    }
+
+    #[test]
+    fn empty_work_detail_lists_are_restored() {
+        let mut result = json!({"work_details": {}, "notes": "unchanged"});
+        restore_work_detail_lists(&mut result);
+        assert_eq!(result["work_details"], json!([]));
+        assert_eq!(result["notes"], "unchanged");
+
+        let mut details = json!({
+            "work": {
+                "work_details": [
+                    {"labors": {}, "explicit_member": false},
+                    {"labors": ["mining"]}
+                ]
+            }
+        });
+        restore_empty_lists(&mut details);
+        assert_eq!(details["work"]["work_details"][0]["labors"], json!([]));
+        assert_eq!(
+            details["work"]["work_details"][1]["labors"],
+            json!(["mining"])
+        );
     }
 
     #[test]

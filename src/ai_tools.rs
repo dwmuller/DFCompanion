@@ -179,6 +179,17 @@ struct ListWorkshopsArgs {
     limit: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListWorkDetailsArgs {
+    search: Option<String>,
+    unit_id: Option<i32>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
 /// Adds the shared `offset` and `limit` paging properties to a schema's properties.
 fn with_paging(mut properties: Value) -> Value {
     properties["offset"] = json!({
@@ -255,7 +266,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_unit_details",
-                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
+                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode), work (work-detail configuration relevant to living fortress residents; not skills, current work, or inferred effective labor permissions). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
                 json!({
                     "unit_ids": {
                         "type": "array",
@@ -264,7 +275,7 @@ fn registry() -> &'static [ToolSpec] {
                     },
                     "include": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind", "inventory"]},
+                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind", "inventory", "work"]},
                         "description": "Detail parts to add. Default: none."
                     },
                     "skill_class": {
@@ -288,6 +299,32 @@ fn registry() -> &'static [ToolSpec] {
                 },
             )
             .required(&["unit_ids"]),
+            tool(
+                "list_work_details",
+                "List fortress work details, covered labors, and explicitly assigned known residents. assignment_mode distinguishes everybody, nobody, selected_workers, or default; assigned_units always lists explicit membership only. Use search by detail name/labor or unit_id for details relevant to a known resident. This is configuration, not current jobs, skills, or inferred effective labor permissions; use get_dfhack_automation separately to check autolabor. This is read-only.",
+                with_paging(json!({
+                    "search": {
+                        "type": "string",
+                        "description": "Only include details whose name or labor contains this text (case-insensitive)."
+                    },
+                    "unit_id": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Only include details relevant to this known living resident."
+                    }
+                })),
+                |game, args: ListWorkDetailsArgs| {
+                    if args.offset > MAX_CREATURE_OFFSET {
+                        return Err("offset exceeds the maximum supported list index.".to_owned());
+                    }
+                    game.list_work_details(
+                        args.search.as_deref(),
+                        args.unit_id,
+                        args.offset,
+                        args.limit,
+                    )
+                },
+            ),
             tool(
                 "find_candidates",
                 "Search the fortress's living residents for those matching ALL the given filters, ranked best first, with compact evidence per match (matching skills, mood, squad, current status). Use it instead of checking residents one by one, e.g. squad candidates: skill_class military_weapon, min_skill_level 1, unassigned_to_squad, adults_only, healthy. Returns total_matching and up to limit candidates. Skill filters need at least one skill to qualify (default min level 1). Use get_unit_details for more on the shortlist. This is read-only.",
@@ -713,6 +750,9 @@ mod tests {
             ("list_dead_missing", json!({"offset": -1})),
             ("list_residents", json!({"query": "dwarf"})),
             ("get_unit_details", json!({})),
+            ("list_work_details", json!({"offset": 5001})),
+            ("list_work_details", json!({"unit_id": -1})),
+            ("list_work_details", json!({"unrecognized": true})),
             ("find_candidates", json!({"limit": 26})),
             ("find_candidates", json!({"skill_class": "combat"})),
             ("find_candidates", json!({"unknown": true})),
@@ -741,11 +781,18 @@ mod tests {
             .contains("get_unit_details(unit_ids, [include], [skill_class], [min_skill_level])"));
         assert!(list.contains("list_residents([offset], [limit], [search])"));
         assert!(list.contains("get_fortress_overview()"));
+        assert!(list.contains("list_work_details"));
 
         let text = describe_tool("get_unit_details").unwrap();
         assert!(text.contains("unit_ids (array, required)"));
         assert!(text.contains("attributes"));
         assert!(text.contains("inventory"));
+        assert!(text.contains("work"));
+        let text = describe_tool("list_work_details").unwrap();
+        assert!(text.contains("search"));
+        assert!(text.contains("unit_id"));
+        assert!(text.contains("assignment_mode"));
+        assert!(text.contains("selected_workers"));
         let text = describe_tool("list_residents").unwrap();
         assert!(text.contains("limit (integer, optional) [1..50]"));
         assert!(describe_tool("get_fortress_overview")
@@ -764,6 +811,31 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(include_parts.contains(&json!("inventory")));
+    }
+
+    #[test]
+    fn get_unit_details_schema_advertises_work() {
+        let spec = registry()
+            .iter()
+            .find(|spec| spec.name == "get_unit_details")
+            .unwrap();
+        let include_parts = spec.schema["properties"]["include"]["items"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(include_parts.contains(&json!("work")));
+    }
+
+    #[test]
+    fn list_work_details_schema_is_strict_and_has_expected_arguments() {
+        let spec = registry()
+            .iter()
+            .find(|spec| spec.name == "list_work_details")
+            .unwrap();
+        assert_eq!(spec.schema["additionalProperties"], false);
+        assert_eq!(spec.schema["properties"]["unit_id"]["minimum"], 0);
+        assert!(spec.schema["properties"].get("search").is_some());
+        assert!(spec.schema["properties"].get("offset").is_some());
+        assert!(spec.schema["properties"].get("limit").is_some());
     }
 
     #[test]

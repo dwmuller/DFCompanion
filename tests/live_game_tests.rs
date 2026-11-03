@@ -204,6 +204,7 @@ async fn ai_tools_end_to_end() {
     let overview = call("get_fortress_overview", serde_json::json!({})).await;
     assert!(overview.get("error").is_none(), "{overview}");
     let mut first_id = None;
+    let mut first_pet_id = None;
     for tool in [
         "list_residents",
         "list_pets_livestock",
@@ -215,11 +216,67 @@ async fn ai_tools_end_to_end() {
         if first_id.is_none() {
             first_id = list["creatures"][0]["id"].as_i64();
         }
+        if tool == "list_pets_livestock" && first_pet_id.is_none() {
+            first_pet_id = list["creatures"][0]["id"].as_i64();
+        }
+    }
+    let work_details = call("list_work_details", serde_json::json!({"limit": 50})).await;
+    assert!(work_details.get("error").is_none(), "{work_details}");
+    assert!(work_details["work_details"].is_array(), "{work_details}");
+    for detail in work_details["work_details"].as_array().unwrap() {
+        assert!(detail["index"].is_u64(), "{detail}");
+        assert!(detail["name"].is_string(), "{detail}");
+        assert!(detail["assignment_mode"].is_string(), "{detail}");
+        assert!(detail["labors"].is_array(), "{detail}");
+        assert!(detail["assigned_count"].is_u64(), "{detail}");
+        assert!(detail["assigned_units"].is_array(), "{detail}");
+        assert_eq!(
+            detail["assigned_count"].as_u64().unwrap() as usize,
+            detail["assigned_units"].as_array().unwrap().len(),
+            "{detail}"
+        );
+    }
+    let first_work_page = call("list_work_details", serde_json::json!({"limit": 1})).await;
+    assert_eq!(
+        first_work_page["work_details"].as_array().unwrap().len(),
+        1,
+        "{first_work_page}"
+    );
+    if work_details["total_matching"].as_u64().unwrap() > 1 {
+        assert_eq!(first_work_page["next_offset"], 1, "{first_work_page}");
+    }
+    if let Some(labor) = work_details["work_details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|detail| detail["labors"].as_array()?.first()?.as_str())
+    {
+        let search = labor.replace('_', " ");
+        let matches = call(
+            "list_work_details",
+            serde_json::json!({"search": search, "limit": 50}),
+        )
+        .await;
+        assert!(matches.get("error").is_none(), "{matches}");
+        assert!(
+            matches["work_details"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|detail| {
+                    detail["labors"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|value| value.as_str() == Some(labor))
+                }),
+            "{matches}"
+        );
     }
     if let Some(id) = first_id {
         let reply = call(
             "get_unit_details",
-            serde_json::json!({"unit_ids": [id, 999_999_999], "include": ["skills", "attributes", "health", "mind", "inventory"]}),
+            serde_json::json!({"unit_ids": [id, 999_999_999], "include": ["skills", "attributes", "health", "mind", "inventory", "work"]}),
         )
         .await;
         assert!(reply.get("error").is_none(), "{reply}");
@@ -259,6 +316,53 @@ async fn ai_tools_end_to_end() {
             assert!(item["item_type"].is_string(), "{item}");
             assert!(item["mode"].is_string(), "{item}");
         }
+        let work = &details["work"];
+        assert_eq!(work["applicable"], true, "{work}");
+        assert!(work["work_details"].is_array(), "{work}");
+        for detail in work["work_details"].as_array().unwrap() {
+            assert!(detail["index"].is_u64(), "{detail}");
+            assert!(detail["name"].is_string(), "{detail}");
+            assert!(detail["assignment_mode"].is_string(), "{detail}");
+            assert!(detail["labors"].is_array(), "{detail}");
+            assert!(detail["explicit_member"].is_boolean(), "{detail}");
+        }
+        let resident_work = call(
+            "list_work_details",
+            serde_json::json!({"unit_id": id, "limit": 50}),
+        )
+        .await;
+        assert!(resident_work.get("error").is_none(), "{resident_work}");
+        let resident_work_details = resident_work["work_details"].as_array().unwrap();
+        assert!(
+            resident_work_details.iter().all(|listed| {
+                work["work_details"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|unit_detail| unit_detail["index"] == listed["index"])
+                    .is_some_and(|unit_detail| {
+                        unit_detail["explicit_member"]
+                            == serde_json::json!(listed["assigned_units"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|member| member["id"].as_i64() == Some(id)))
+                    })
+            }),
+            "{resident_work} {work}"
+        );
+        let unknown_resident = call(
+            "list_work_details",
+            serde_json::json!({"unit_id": 999_999_999}),
+        )
+        .await;
+        assert!(
+            unknown_resident["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("known living resident"),
+            "{unknown_resident}"
+        );
         for skill in details["skills"].as_array().unwrap() {
             assert!(
                 skill["name"].is_string() && skill["class"].is_string(),
@@ -284,6 +388,21 @@ async fn ai_tools_end_to_end() {
         .await;
         for skill in filtered["units"][0]["skills"].as_array().unwrap() {
             assert_eq!(skill["class"], "military_weapon", "{skill}");
+        }
+        if let Some(id) = first_pet_id {
+            let details = call(
+                "get_unit_details",
+                serde_json::json!({"unit_ids": [id], "include": ["work"]}),
+            )
+            .await;
+            assert_eq!(
+                details["units"][0]["work"]["applicable"], false,
+                "{details}"
+            );
+            assert!(
+                details["units"][0]["work"]["work_details"].is_array(),
+                "{details}"
+            );
         }
     }
     let unknown = call(
