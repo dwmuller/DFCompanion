@@ -14,9 +14,9 @@
 
 - Provide a toggle to turn on/off AI on main page. Should have same effect as
   setting active config to "None".
-- Move API key morphing buttong into edit/create forms.
+- Move API key morphing button into edit/create forms.
     - Make API key optional per configuration with a toggle.
-- Provide a method of editing default system text. Prepopulate with app
-  app-provided text, and provide a button to restore that text.
-- Provide a per-config toggle to use default system text, or custom per-config
-  text.
+- Provide a method of editing default system text.
+- Provide a per-config toggle to use default system text.
+- Provide per-config optional system text. If default system text is used, this
+  is appended to it.
