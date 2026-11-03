@@ -236,6 +236,115 @@ async fn ai_tools_end_to_end() {
             "{detail}"
         );
     }
+    let work_orders = call("list_work_orders", serde_json::json!({"limit": 50})).await;
+    assert!(work_orders.get("error").is_none(), "{work_orders}");
+    assert!(work_orders["work_orders"].is_array(), "{work_orders}");
+    for order in work_orders["work_orders"].as_array().unwrap() {
+        assert!(order["id"].is_i64(), "{order}");
+        assert!(order["name"].is_string(), "{order}");
+        assert!(order["amount_left"].is_i64(), "{order}");
+        assert!(order["amount_total"].is_i64(), "{order}");
+        assert!(order["is_active"].is_boolean(), "{order}");
+        assert!(order["is_validated"].is_boolean(), "{order}");
+        assert!(order["frequency"].is_string(), "{order}");
+        assert!(order["item_condition_count"].is_u64(), "{order}");
+        assert!(order["order_condition_count"].is_u64(), "{order}");
+        assert!(order["item_conditions"].is_array(), "{order}");
+        assert!(order["order_conditions"].is_array(), "{order}");
+        assert!(order["item_conditions_truncated"].is_boolean(), "{order}");
+        assert!(order["order_conditions_truncated"].is_boolean(), "{order}");
+        assert!(
+            order["item_conditions"].as_array().unwrap().len() <= 10,
+            "{order}"
+        );
+        assert!(
+            order["order_conditions"].as_array().unwrap().len() <= 10,
+            "{order}"
+        );
+        assert_eq!(
+            order["item_conditions_truncated"],
+            serde_json::json!(
+                order["item_condition_count"].as_u64().unwrap()
+                    > order["item_conditions"].as_array().unwrap().len() as u64
+            ),
+            "{order}"
+        );
+        for condition in order["item_conditions"].as_array().unwrap() {
+            assert!(condition["comparison"].is_string(), "{condition}");
+            assert!(condition["quantity"].is_i64(), "{condition}");
+            assert!(condition["flags"].is_array(), "{condition}");
+            if let Some(contains) = condition.get("contains") {
+                assert!(contains.is_array(), "{condition}");
+                assert!(contains.as_array().unwrap().len() <= 10, "{condition}");
+            }
+        }
+        for condition in order["order_conditions"].as_array().unwrap() {
+            assert!(condition["order_id"].is_i64(), "{condition}");
+            assert!(condition["condition"].is_string(), "{condition}");
+            assert!(condition["satisfied"].is_boolean(), "{condition}");
+        }
+    }
+    let first_work_order_page = call("list_work_orders", serde_json::json!({"limit": 1})).await;
+    assert!(
+        first_work_order_page["work_orders"]
+            .as_array()
+            .unwrap()
+            .len()
+            <= 1,
+        "{first_work_order_page}"
+    );
+    if work_orders["total_matching"].as_u64().unwrap() > 1 {
+        assert_eq!(
+            first_work_order_page["next_offset"], 1,
+            "{first_work_order_page}"
+        );
+    }
+    if let Some(name) = work_orders["work_orders"][0]["name"].as_str() {
+        let matches = call(
+            "list_work_orders",
+            serde_json::json!({"search": name, "limit": 50}),
+        )
+        .await;
+        assert!(matches.get("error").is_none(), "{matches}");
+        assert!(
+            matches["work_orders"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|order| order["name"] == name),
+            "{matches}"
+        );
+    }
+    if let Some(item_type) = work_orders["work_orders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|order| {
+            order["item_conditions"]
+                .as_array()?
+                .iter()
+                .find_map(|condition| condition["item_type"].as_str())
+        })
+    {
+        let matches = call(
+            "list_work_orders",
+            serde_json::json!({"search": item_type, "limit": 50}),
+        )
+        .await;
+        assert!(matches.get("error").is_none(), "{matches}");
+        assert!(
+            matches["work_orders"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|order| order["item_conditions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|condition| condition["item_type"] == item_type)),
+            "{matches}"
+        );
+    }
     let first_work_page = call("list_work_details", serde_json::json!({"limit": 1})).await;
     assert_eq!(
         first_work_page["work_details"].as_array().unwrap().len(),

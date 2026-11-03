@@ -19,6 +19,7 @@ use crate::game_state::{
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 20;
 
 const MAX_CREATURE_OFFSET: usize = 5_000;
+const MAX_WORK_ORDER_OFFSET: usize = 5_000;
 const DEFAULT_CREATURE_LIMIT: usize = 25;
 const DEFAULT_REPORT_LIMIT: usize = 10;
 
@@ -190,6 +191,16 @@ struct ListWorkDetailsArgs {
     limit: usize,
 }
 
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ListWorkOrdersArgs {
+    search: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
 /// Adds the shared `offset` and `limit` paging properties to a schema's properties.
 fn with_paging(mut properties: Value) -> Value {
     properties["offset"] = json!({
@@ -325,6 +336,30 @@ fn registry() -> &'static [ToolSpec] {
                     )
                 },
             ),
+            {
+                let mut properties = with_paging(json!({
+                    "search": {
+                        "type": "string",
+                        "description": "Only include orders whose description or item/material constraints contain this text (case-insensitive)."
+                    }
+                }));
+                properties["offset"]["maximum"] = json!(MAX_WORK_ORDER_OFFSET);
+                tool(
+                    "list_work_orders",
+                    "List fortress manager/work orders and their quantities, stored activity flags, recurrence, workshop restrictions, and conditions. Prefer this to determine whether production has already been ordered. This is distinct from workshop job queues (list_workshops), a resident's current job/status, and labor/work-detail assignments. Conditions are reported, not independently evaluated. This is read-only.",
+                    properties,
+                    |game, args: ListWorkOrdersArgs| {
+                        if args.offset > MAX_WORK_ORDER_OFFSET {
+                            return Err("offset exceeds the maximum supported list index.".to_owned());
+                        }
+                        game.list_work_orders(
+                            args.search.as_deref(),
+                            args.offset,
+                            args.limit,
+                        )
+                    },
+                )
+            },
             tool(
                 "find_candidates",
                 "Search the fortress's living residents for those matching ALL the given filters, ranked best first, with compact evidence per match (matching skills, mood, squad, current status). Use it instead of checking residents one by one, e.g. squad candidates: skill_class military_weapon, min_skill_level 1, unassigned_to_squad, adults_only, healthy. Returns total_matching and up to limit candidates. Skill filters need at least one skill to qualify (default min level 1). Use get_unit_details for more on the shortlist. This is read-only.",
@@ -753,6 +788,10 @@ mod tests {
             ("list_work_details", json!({"offset": 5001})),
             ("list_work_details", json!({"unit_id": -1})),
             ("list_work_details", json!({"unrecognized": true})),
+            ("list_work_orders", json!({"offset": 5001})),
+            ("list_work_orders", json!({"limit": 0})),
+            ("list_work_orders", json!({"search": 1})),
+            ("list_work_orders", json!({"unrecognized": true})),
             ("find_candidates", json!({"limit": 26})),
             ("find_candidates", json!({"skill_class": "combat"})),
             ("find_candidates", json!({"unknown": true})),
@@ -782,6 +821,7 @@ mod tests {
         assert!(list.contains("list_residents([offset], [limit], [search])"));
         assert!(list.contains("get_fortress_overview()"));
         assert!(list.contains("list_work_details"));
+        assert!(list.contains("list_work_orders"));
 
         let text = describe_tool("get_unit_details").unwrap();
         assert!(text.contains("unit_ids (array, required)"));
@@ -793,6 +833,20 @@ mod tests {
         assert!(text.contains("unit_id"));
         assert!(text.contains("assignment_mode"));
         assert!(text.contains("selected_workers"));
+        let text = describe_tool("list_work_orders").unwrap();
+        assert!(text.contains("search"));
+        assert!(text.contains("offset"));
+        assert!(text.contains("limit"));
+        let description = &registry()
+            .iter()
+            .find(|spec| spec.name == "list_work_orders")
+            .unwrap()
+            .description;
+        assert!(description
+            .contains("Prefer this to determine whether production has already been ordered"));
+        assert!(description.contains("list_workshops"));
+        assert!(description.contains("resident's current job/status"));
+        assert!(description.contains("labor/work-detail assignments"));
         let text = describe_tool("list_residents").unwrap();
         assert!(text.contains("limit (integer, optional) [1..50]"));
         assert!(describe_tool("get_fortress_overview")
@@ -836,6 +890,35 @@ mod tests {
         assert!(spec.schema["properties"].get("search").is_some());
         assert!(spec.schema["properties"].get("offset").is_some());
         assert!(spec.schema["properties"].get("limit").is_some());
+    }
+
+    #[test]
+    fn list_work_orders_schema_is_strict_and_has_expected_arguments() {
+        let spec = registry()
+            .iter()
+            .find(|spec| spec.name == "list_work_orders")
+            .unwrap();
+        assert_eq!(spec.schema["additionalProperties"], false);
+        assert_eq!(
+            spec.schema["properties"]["offset"]["maximum"],
+            MAX_WORK_ORDER_OFFSET
+        );
+        assert_eq!(spec.schema["properties"]["limit"]["minimum"], 1);
+        assert_eq!(
+            spec.schema["properties"]["limit"]["maximum"],
+            MAX_ITEM_PAGE_SIZE
+        );
+        assert!(spec.schema["properties"].get("search").is_some());
+
+        let args: ListWorkOrdersArgs = parse_args(json!({})).unwrap();
+        assert_eq!(
+            args,
+            ListWorkOrdersArgs {
+                search: None,
+                offset: 0,
+                limit: DEFAULT_CREATURE_LIMIT,
+            }
+        );
     }
 
     #[test]

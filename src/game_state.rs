@@ -29,6 +29,7 @@ const LUA_MODULE: &str = "rpc.dfcompanion";
 pub const MAX_DETAIL_UNITS: usize = 10;
 pub const MAX_CANDIDATES: usize = 25;
 const MAX_WORK_DETAIL_OFFSET: usize = 5_000;
+const MAX_WORK_ORDER_OFFSET: usize = 5_000;
 
 /// Filters for `find_candidates`; all are optional and combined with AND.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -207,6 +208,23 @@ fn restore_work_detail_lists(value: &mut Value) {
             }
             if let Some(assigned_units) = detail.get_mut("assigned_units") {
                 restore_empty_list(assigned_units);
+            }
+        }
+    }
+}
+
+fn restore_work_order_lists(value: &mut Value) {
+    restore_empty_list(&mut value["work_orders"]);
+    if let Some(work_orders) = value["work_orders"].as_array_mut() {
+        for order in work_orders {
+            restore_empty_list(&mut order["item_conditions"]);
+            restore_empty_list(&mut order["order_conditions"]);
+            if let Some(conditions) = order["item_conditions"].as_array_mut() {
+                for condition in conditions {
+                    if condition.get("contains").is_some() {
+                        restore_empty_list(&mut condition["contains"]);
+                    }
+                }
             }
         }
     }
@@ -778,6 +796,30 @@ impl GameState {
         Ok(result)
     }
 
+    /// A page of fortress manager/work orders and their stored conditions.
+    pub fn list_work_orders(
+        &self,
+        search: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        check_page(limit)?;
+        if offset > MAX_WORK_ORDER_OFFSET {
+            return Err("offset exceeds the maximum supported list index.".to_owned());
+        }
+        let mut result = self.call_lua_json(
+            "list work orders",
+            "list_work_orders",
+            vec![
+                search.unwrap_or_default().to_owned(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
+        )?;
+        restore_work_order_lists(&mut result);
+        Ok(result)
+    }
+
     /// A page of workshops and furnaces (see `list_workshops` in the Lua module).
     pub fn list_workshops(
         &self,
@@ -1104,6 +1146,34 @@ mod tests {
             details["work"]["work_details"][1]["labors"],
             json!(["mining"])
         );
+    }
+
+    #[test]
+    fn empty_work_order_lists_are_restored() {
+        let mut result = json!({
+            "work_orders": [
+                {
+                    "item_conditions": [{"contains": {}}],
+                    "order_conditions": {}
+                },
+                {"item_conditions": [{"comparison": "at_least"}], "order_conditions": []}
+            ]
+        });
+        restore_work_order_lists(&mut result);
+        assert_eq!(
+            result["work_orders"][0]["item_conditions"][0]["contains"],
+            json!([])
+        );
+        assert_eq!(result["work_orders"][0]["order_conditions"], json!([]));
+        assert_eq!(
+            result["work_orders"][1]["item_conditions"],
+            json!([{"comparison": "at_least"}])
+        );
+        assert_eq!(result["work_orders"][1]["order_conditions"], json!([]));
+
+        let mut empty = json!({"work_orders": {}});
+        restore_work_order_lists(&mut empty);
+        assert_eq!(empty["work_orders"], json!([]));
     }
 
     #[test]
