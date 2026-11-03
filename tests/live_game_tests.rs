@@ -475,6 +475,14 @@ async fn ai_tools_end_to_end() {
     );
     let locations = call("list_locations", serde_json::json!({})).await;
     assert!(locations["locations"].is_array(), "{locations}");
+    assert!(
+        locations["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|location| location["zone_count"].as_u64().unwrap_or(0) > 0),
+        "{locations}"
+    );
     let workshops = call("list_workshops", serde_json::json!({"limit": 50})).await;
     assert!(
         workshops["workshops"]

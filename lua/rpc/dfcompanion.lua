@@ -1123,6 +1123,12 @@ local function collect_places()
     local zone_type_list = {}
     for _, summary in pairs(zone_types) do table.insert(zone_type_list, summary) end
     table.sort(zone_type_list, function(a, b) return a.type < b.type end)
+    local locations_with_zones = {}
+    for _, location in ipairs(location_list) do
+        if location.zone_count > 0 then
+            table.insert(locations_with_zones, location)
+        end
+    end
 
     -- A bed is spoken for when it lies in a bedroom zone with an owner. Beds
     -- in a dormitory or in an unowned bedroom are free for the taking.
@@ -1183,7 +1189,7 @@ local function collect_places()
         },
         unhoused = without_bedroom,
         free_beds = free_beds,
-        locations = location_list,
+        locations = locations_with_zones,
         zone_types = zone_type_list,
         zones = zones,
         workshops = workshops,
@@ -1258,10 +1264,9 @@ function list_zones(type_filter, offset, limit)
     return reply(paged(result, 'zones', rows, offset, limit))
 end
 
--- Named locations (temples, hospitals, guildhalls...) with zone counts and area.
+-- Named locations (temples, hospitals, guildhalls...) with at least one zone.
 function list_locations()
-    return reply({locations = collect_places().locations,
-        notes = 'A location with zone_count 0 has no zone assigned, so it cannot function yet.'})
+    return reply({locations = collect_places().locations})
 end
 
 -- Workshops and furnaces, optionally only those with `name_filter` in their
