@@ -46,7 +46,7 @@ pub struct CandidateQuery {
     pub sort_by: Option<String>,
     pub limit: Option<usize>,
 }
-pub const DETAIL_PARTS: [&str; 4] = ["skills", "attributes", "health", "mind"];
+pub const DETAIL_PARTS: [&str; 5] = ["skills", "attributes", "health", "mind", "inventory"];
 pub const SKILL_CLASSES: [&str; 10] = [
     "normal",
     "medical",
@@ -158,6 +158,7 @@ fn restore_empty_lists(details: &mut Value) {
         &["skills"][..],
         &["mind", "recent_thoughts"],
         &["mind", "unmet_needs"],
+        &["inventory", "items"],
     ] {
         let mut node = Some(&mut *details);
         for key in path {
@@ -169,6 +170,16 @@ fn restore_empty_lists(details: &mut Value) {
             }
         }
     }
+}
+
+fn validate_detail_parts(include: &[String]) -> Result<(), String> {
+    if let Some(part) = include.iter().find(|p| !DETAIL_PARTS.contains(&p.as_str())) {
+        return Err(format!(
+            "Unknown part \"{part}\"; use any of: {}.",
+            DETAIL_PARTS.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 fn count_by_race(rows: &[Value]) -> BTreeMap<String, usize> {
@@ -437,12 +448,7 @@ impl GameState {
         if !(1..=MAX_DETAIL_UNITS).contains(&unit_ids.len()) {
             return Err(format!("Give between 1 and {MAX_DETAIL_UNITS} unit IDs."));
         }
-        if let Some(part) = include.iter().find(|p| !DETAIL_PARTS.contains(&p.as_str())) {
-            return Err(format!(
-                "Unknown part \"{part}\"; use any of: {}.",
-                DETAIL_PARTS.join(", ")
-            ));
-        }
+        validate_detail_parts(include)?;
         if let Some(class) = skill_class {
             if !SKILL_CLASSES.contains(&class) {
                 return Err(format!(
@@ -976,15 +982,22 @@ mod tests {
 
     #[test]
     fn empty_detail_lists_are_restored() {
-        let mut details =
-            json!({"skills": {}, "mind": {"recent_thoughts": {}, "unmet_needs": [1]}});
+        let mut details = json!({"skills": {}, "mind": {"recent_thoughts": {}, "unmet_needs": [1]}, "inventory": {"items": {}}});
         restore_empty_lists(&mut details);
         assert_eq!(details["skills"], json!([]));
         assert_eq!(details["mind"]["recent_thoughts"], json!([]));
         assert_eq!(details["mind"]["unmet_needs"], json!([1]));
+        assert_eq!(details["inventory"]["items"], json!([]));
         let mut plain = json!({"id": 1});
         restore_empty_lists(&mut plain);
         assert_eq!(plain, json!({"id": 1}));
+    }
+
+    #[test]
+    fn inventory_is_a_supported_detail_part_and_unknown_parts_are_rejected() {
+        assert!(validate_detail_parts(&["inventory".to_owned()]).is_ok());
+        let error = validate_detail_parts(&["unknown".to_owned()]).unwrap_err();
+        assert!(error.contains("Unknown part \"unknown\""));
     }
 
     #[test]

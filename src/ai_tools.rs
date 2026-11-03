@@ -255,7 +255,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_unit_details",
-                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
+                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
                 json!({
                     "unit_ids": {
                         "type": "array",
@@ -264,7 +264,7 @@ fn registry() -> &'static [ToolSpec] {
                     },
                     "include": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind"]},
+                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind", "inventory"]},
                         "description": "Detail parts to add. Default: none."
                     },
                     "skill_class": {
@@ -745,12 +745,25 @@ mod tests {
         let text = describe_tool("get_unit_details").unwrap();
         assert!(text.contains("unit_ids (array, required)"));
         assert!(text.contains("attributes"));
+        assert!(text.contains("inventory"));
         let text = describe_tool("list_residents").unwrap();
         assert!(text.contains("limit (integer, optional) [1..50]"));
         assert!(describe_tool("get_fortress_overview")
             .unwrap()
             .contains("Arguments: none"));
         assert!(describe_tool("nope").is_err());
+    }
+
+    #[test]
+    fn get_unit_details_schema_advertises_inventory() {
+        let spec = registry()
+            .iter()
+            .find(|spec| spec.name == "get_unit_details")
+            .unwrap();
+        let include_parts = spec.schema["properties"]["include"]["items"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(include_parts.contains(&json!("inventory")));
     }
 
     #[test]

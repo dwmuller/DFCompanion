@@ -272,9 +272,56 @@ end
 
 local mind_of -- defined below, with the need and thought tables it uses
 
+local MAX_UNIT_INVENTORY_ITEMS = 20
+
+local function enum_key(name)
+    return name:gsub('(%l)(%u)', '%1_%2'):lower()
+end
+
+local function inventory_item_type(item)
+    return df.item_type[item:getType()] or 'NONE'
+end
+
+local function inventory_item_wear(item)
+    return item.getWear and item:getWear() or 0
+end
+
+local function inventory_of(unit)
+    local total = #unit.inventory
+    local items = {}
+    for _, entry in ipairs(unit.inventory) do
+        if #items >= MAX_UNIT_INVENTORY_ITEMS then
+            break
+        end
+        local item = entry.item
+        local mode = df.inv_item_role_type[entry.mode] or 'UNKNOWN'
+        local item_row = {
+            id = item.id,
+            description = text(dfhack.items.getDescription(item, 0)),
+            item_type = enum_key(inventory_item_type(item)),
+            mode = enum_key(mode),
+        }
+        local stack_size = item:getStackSize()
+        if stack_size > 1 then
+            item_row.stack_size = stack_size
+        end
+        local wear = inventory_item_wear(item)
+        if wear > 0 then
+            item_row.wear = wear
+        end
+        table.insert(items, item_row)
+    end
+    return {
+        total_items = total,
+        returned_items = #items,
+        truncated = total > #items,
+        items = items,
+    }
+end
+
 -- Adds the detail parts the caller asked for (options.parts is a set of
--- skills, attributes, health, mind). Skills can be limited to one class and a
--- minimum level.
+-- skills, attributes, health, mind, inventory). Skills can be limited to one
+-- class and a minimum level.
 local function add_details(row, unit, options)
     local parts = options.parts
     if parts.skills then
@@ -295,6 +342,9 @@ local function add_details(row, unit, options)
     end
     if parts.mind then
         row.mind = mind_of(unit)
+    end
+    if parts.inventory then
+        row.inventory = inventory_of(unit)
     end
     row.carried_item_count = #unit.inventory
     local rider = unit.relationship_ids[df.unit_relationship_type.RiderMount]
@@ -1321,12 +1371,12 @@ local function squad_member_row(position, index)
     local worn = {}
     local weapons, damaged = {}, 0
     for _, entry in ipairs(unit.inventory) do
-        local kind = df.item_type[entry.item:getType()]
+        local kind = inventory_item_type(entry.item)
         worn[kind] = (worn[kind] or 0) + 1
         if kind == 'WEAPON' then
             table.insert(weapons, dfhack.items.getDescription(entry.item, 0))
         end
-        if entry.item.getWear and entry.item:getWear() > 0 then
+        if inventory_item_wear(entry.item) > 0 then
             damaged = damaged + 1
         end
     end

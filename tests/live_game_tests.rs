@@ -219,7 +219,7 @@ async fn ai_tools_end_to_end() {
     if let Some(id) = first_id {
         let reply = call(
             "get_unit_details",
-            serde_json::json!({"unit_ids": [id, 999_999_999], "include": ["skills", "attributes", "health", "mind"]}),
+            serde_json::json!({"unit_ids": [id, 999_999_999], "include": ["skills", "attributes", "health", "mind", "inventory"]}),
         )
         .await;
         assert!(reply.get("error").is_none(), "{reply}");
@@ -236,6 +236,29 @@ async fn ai_tools_end_to_end() {
             "{details}"
         );
         assert!(details["health"]["wound_count"].is_i64(), "{details}");
+        let inventory = &details["inventory"];
+        assert!(inventory["total_items"].is_u64(), "{inventory}");
+        assert!(inventory["returned_items"].is_u64(), "{inventory}");
+        assert!(inventory["truncated"].is_boolean(), "{inventory}");
+        assert!(inventory["items"].is_array(), "{inventory}");
+        assert!(
+            inventory["items"].as_array().unwrap().len() <= 20,
+            "{inventory}"
+        );
+        assert_eq!(
+            inventory["truncated"],
+            serde_json::json!(
+                inventory["total_items"].as_u64().unwrap()
+                    > inventory["returned_items"].as_u64().unwrap()
+            ),
+            "{inventory}"
+        );
+        for item in inventory["items"].as_array().unwrap() {
+            assert!(item["id"].is_i64(), "{item}");
+            assert!(item["description"].is_string(), "{item}");
+            assert!(item["item_type"].is_string(), "{item}");
+            assert!(item["mode"].is_string(), "{item}");
+        }
         for skill in details["skills"].as_array().unwrap() {
             assert!(
                 skill["name"].is_string() && skill["class"].is_string(),
