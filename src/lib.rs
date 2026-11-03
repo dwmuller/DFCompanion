@@ -338,23 +338,12 @@ pub async fn check_game_at_startup(state: AppState) {
     }
 }
 
-/// Lays out tool output for reading: one top-level field per line, and one
-/// line per array element, with everything else compact.
-fn format_tool_result(result: &str) -> String {
-    let Ok(serde_json::Value::Object(fields)) = serde_json::from_str(result) else {
-        return result.to_owned();
-    };
-    let mut lines = Vec::new();
-    for (key, value) in fields {
-        match value {
-            serde_json::Value::Array(items) if !items.is_empty() => {
-                lines.push(format!("{key}:"));
-                lines.extend(items.iter().map(|item| format!("  {item}")));
-            }
-            other => lines.push(format!("{key}: {other}")),
-        }
+/// Lays out tool output for reading.
+fn format_tool_result(result: &str) -> Result<String, String> {
+    match serde_json::from_str::<serde_json::Value>(result) {
+        Ok(value) => Ok(serde_json_pretty::to_string(&value).unwrap()),
+        Err(error) => Err(format!("Failed to parse JSON: {error}")),
     }
-    lines.join("\n")
 }
 
 async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatCommand, String>) {
@@ -363,7 +352,10 @@ async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatC
             let result = state.ai.call_tool(&name, arguments).await;
             state.notify(format!(
                 "Tool {name} result:\n{}",
-                format_tool_result(&result)
+                format_tool_result(&result).unwrap_or_else(|error| {
+                    eprintln!("Error formatting tool result: {error}");
+                    result
+                })
             ));
         }
         Ok(chat_commands::ChatCommand::ListTools) => state.notify(ai_tools::describe_tools()),

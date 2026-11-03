@@ -693,6 +693,7 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "serde_json",
+ "serde_json_pretty",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -2899,6 +2900,16 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_json_pretty"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98753bdc6e2bb9b409312d42935829f68d1c27567f8186f50f22adc9508db6a7"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
