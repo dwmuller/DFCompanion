@@ -509,7 +509,7 @@ fn registry() -> &'static [ToolSpec] {
                     "category": {
                         "type": "string",
                         "enum": ["death", "combat", "mood", "arrivals", "jobs", "mining", "population", "environment", "other"],
-                        "description": "Only return reports of this category: death (citizen/pet deaths), combat (ambushes, sieges, attacks, thefts), mood (strange moods, berserk, stress), arrivals (migrants, caravans, visitors), jobs (cancelled jobs, quotas, masterworks, artifacts), mining (ore and gem strikes, discoveries), population (births, military and noble changes), environment (weather, seasons)."
+                        "description": "Only return reports of this category: death (citizen/pet deaths), combat (ambushes, sieges, attacks, thefts), mood (strange moods, berserk, stress), arrivals (migrants, caravans, visitors), jobs (cancelled jobs, quotas, masterworks, artifacts), mining (ore and gem strikes, discoveries), population (births, military and noble changes), environment (weather, seasons). Additional categories may appear in automatic periodic checks, but are not returned by this tool."
                     }
                 }),
                 |game, args: ReportsArgs| {
