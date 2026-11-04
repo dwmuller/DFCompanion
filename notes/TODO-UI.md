@@ -3,18 +3,16 @@
 
 ## Pure UI improvements
 
-- Copying text from the Conversations control should yield markdown, not plain
-  text.
-- The Conversations control should be scrollable independent of the Web page.
+- Arrange various options as a top-of-page menu?
+  - Sort of did this, but it's not beautiful yet.
 - Arrange config mgmt list as a table.
     - Open forms will probably span all columns.
 - Do some styling to get away from the drear black and white.
-- Arrange various options as a top-of-page menu?
 
 ## Usability improvements for AI config
 
 - Provide a toggle to turn on/off AI on main page. Should have same effect as
-  setting active config to "None".
+  setting active config to "None", without changing selected config.
 - Move API key morphing button into edit/create forms.
     - Make API key optional per configuration with a toggle.
 - Provide a method of editing global system text.
