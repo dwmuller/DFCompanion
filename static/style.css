@@ -8,7 +8,7 @@ body {
 #notifications {
   border: 1px solid #888;
   box-sizing: border-box;
-  height: 24rem;
+  height: 36rem;
   min-height: 10rem;
   overflow-y: auto;
   overflow-x: hidden;
@@ -111,26 +111,26 @@ body:has(#show-ai-usage:not(:checked)) .ai-usage {
   display: none;
 }
 
-.filter-bar {
+.header-bar {
   display: flex;
   gap: 1.5rem;
 }
 
-.filter-bar {
+.header-bar {
   align-items: flex-start;
   flex-wrap: wrap;
 }
 
-.filter-bar #active-configuration p[role="alert"] {
+.header-bar #active-configuration p[role="alert"] {
   margin: 0.2rem 0;
 }
 
-.filter-bar details,
+.header-bar details,
 #active-configuration details {
   position: relative;
 }
 
-.filter-bar .popup,
+.header-bar .popup,
 #active-configuration .popup {
   max-width: 24rem;
   width: max-content;
@@ -142,7 +142,7 @@ body:has(#show-ai-usage:not(:checked)) .ai-usage {
   z-index: 1;
 }
 
-.filter-bar .popup p,
+.header-bar .popup p,
 #active-configuration .popup p {
   margin: 0.2rem 0;
 }
