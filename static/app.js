@@ -65,3 +65,24 @@ document.getElementById("copy-dfhack-command").addEventListener("click", async (
     status.textContent = `Could not copy command: ${error.message}`;
   }
 });
+
+document.getElementById("copy-conversation").addEventListener("click", async () => {
+  const entries = notifications.querySelectorAll(
+    "[data-conversation-role][data-original-markdown]",
+  );
+  const transcript = Array.from(entries, (entry) => {
+    const speaker = entry.dataset.conversationRole === "user" ? "You" : "Companion";
+    return `**${speaker}:**\n\n${entry.dataset.originalMarkdown}`;
+  }).join("\n\n");
+  const status = document.getElementById("copy-conversation-status");
+  if (entries.length === 0) {
+    status.textContent = "There is no conversation to copy.";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(transcript);
+    status.textContent = "Conversation copied as Markdown.";
+  } catch (error) {
+    status.textContent = `Could not copy conversation: ${error.message}`;
+  }
+});

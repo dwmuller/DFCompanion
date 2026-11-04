@@ -25,7 +25,13 @@
       </button>
       <span id="copy-status" role="status" aria-live="polite"></span>
     </p>
-    <h2>Conversation and notifications</h2>
+    <div class="conversation-heading">
+      <h2>Conversation and notifications</h2>
+      <div>
+        <button id="copy-conversation" type="button" aria-label="Copy conversation as Markdown">Copy conversation as Markdown</button>
+        <span id="copy-conversation-status" role="status" aria-live="polite"></span>
+      </div>
+    </div>
     <div class="filter-bar">
     <details id="notification-filters">
       <summary>Show or hide notifications</summary>
@@ -59,7 +65,7 @@
     </details>
     {% include "active-configuration.html" %}
     </div>
-    <ol id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></ol>
+    <div id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></div>
     <h2>Chat</h2>
     <form id="chat-form"
         hx-post="/chat"

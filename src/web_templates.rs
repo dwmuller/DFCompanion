@@ -121,6 +121,8 @@ struct NotificationTemplate<'a> {
     label: &'a str,
     body: &'a str,
     markdown: bool,
+    transcript_role: &'a str,
+    original_markdown: &'a str,
 }
 
 #[derive(Template)]
@@ -216,6 +218,12 @@ pub fn render_notification(notification: &Notification) -> Result<String, Render
                 label: speaker,
                 body: &body,
                 markdown: true,
+                transcript_role: match *speaker {
+                    "You:" => "user",
+                    "Companion:" => "companion",
+                    _ => "",
+                },
+                original_markdown: markdown,
             }
             .render()?
         }
@@ -224,6 +232,8 @@ pub fn render_notification(notification: &Notification) -> Result<String, Render
             label: "Game event:",
             body: text,
             markdown: false,
+            transcript_role: "",
+            original_markdown: "",
         }
         .render()?,
         Notification::AiUsage(text) => NotificationTemplate {
@@ -231,6 +241,8 @@ pub fn render_notification(notification: &Notification) -> Result<String, Render
             label: "AI usage:",
             body: text,
             markdown: false,
+            transcript_role: "",
+            original_markdown: "",
         }
         .render()?,
         Notification::Text(text) => NotificationTemplate {
@@ -238,6 +250,8 @@ pub fn render_notification(notification: &Notification) -> Result<String, Render
             label: "",
             body: text,
             markdown: false,
+            transcript_role: "",
+            original_markdown: "",
         }
         .render()?,
     };
@@ -429,9 +443,29 @@ mod test {
         })
         .expect("notification should render");
 
-        assert!(rendered.starts_with("<li class=\"markdown\"><strong>Companion: </strong>"));
+        assert!(rendered.starts_with(
+            "<div class=\"markdown\" data-conversation-role=\"companion\" data-original-markdown=\"**Hello**\nthere\"><strong>Companion: </strong>"
+        ));
         assert!(rendered.contains("<strong>Hello</strong><br>"));
-        assert!(!rendered.contains("\n</li>"));
+        assert!(rendered.ends_with("</div>"));
+    }
+
+    #[test]
+    fn speech_keeps_original_markdown_for_transcript_copy() {
+        let rendered = render_notification(&Notification::Speech {
+            speaker: "You:",
+            markdown: "**Hello** & `code`\n- first",
+        })
+        .expect("notification should render");
+
+        assert!(rendered.contains("data-conversation-role=\"user\""));
+        assert!(
+            rendered.contains("data-original-markdown=\"**Hello** &#38; `code`"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("- first\""), "{rendered}");
+        assert!(rendered.contains("<strong>Hello</strong>"));
+        assert!(rendered.contains("<code>code</code>"));
     }
 
     #[test]
@@ -478,6 +512,11 @@ mod test {
         assert!(index.contains("value=\"one\" checked"));
         assert!(index.contains("htmx-config"));
         assert!(index.contains("name=\"message\""));
+        assert!(index.contains("<div id=\"notifications\""));
+        assert!(!index.contains("<ol id=\"notifications\""));
+        assert!(index.contains("id=\"copy-conversation\""));
+        assert!(index.contains("Copy conversation as Markdown"));
+        assert!(index.contains("id=\"copy-conversation-status\" role=\"status\""));
         assert!(!index.contains("hx-trigger=\"load\"\n           hx-swap"));
         assert!(!index.contains("hx-swap-oob"));
 
@@ -495,7 +534,7 @@ mod test {
 
         assert_eq!(
             usage,
-            "<li class=\"ai-usage\"><strong>AI usage: </strong>This turn: 1 API request</li>"
+            "<div class=\"ai-usage\"><strong>AI usage: </strong>This turn: 1 API request</div>"
         );
     }
 
@@ -506,10 +545,12 @@ mod test {
         let text =
             render_notification(&Notification::Text("a < b")).expect("notification should render");
 
-        assert!(game.starts_with("<li class=\"game-event\">"));
+        assert!(game.starts_with("<div class=\"game-event\">"));
         assert!(game.contains("Game event: "));
         assert!(!game.contains("<b>"));
-        assert_eq!(text, "<li>a &#60; b</li>");
+        assert!(!game.contains("data-conversation-role"));
+        assert_eq!(text, "<div>a &#60; b</div>");
+        assert!(!text.contains("data-original-markdown"));
     }
 
     #[test]
