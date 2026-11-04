@@ -1,0 +1,180 @@
+**Companion:**
+
+Greetings, overseer. The fortress is paused at **254-08-06**, mid-afternoon.
+
+**"new squad" — The Dimensions of Soul**
+
+- **111 dwarves**, plus 67 tame animals (a lot of yaks — 12 — and llamas, 11). Also 20 other creatures visible and 58 dead/missing on record.
+- **Plenty in the larder**: 462 food units (~173 days) and 237 drinks (~44 days) across wine, beer and rum; nothing rotten or forbidden.
+- **12 idle dwarves** right now; no strange moods in progress.
+- **Sleeping arrangements are the weak spot**: 35 bedrooms for 111 dwarves — **77 citizens have no owned bedroom**, with 36 free beds sitting around (30 of them on z=45).
+- **Military**: two squads. "The Royal Roads" has 1 member and 9 vacancies, and that lone militia commander is missing a helmet, shield and weapon. "The Dishes of Trade (Therapy Squad)" is off duty with 3 members and nobody carrying a weapon — swords into ploughshares, apparently literally.
+- **Recent news**: sapphire struck on 07-27; a smelting job cancelled for lack of limonite in a linked stockpile; five dwarves "joined the merchants" today (all at once, which smells like a caravan escort detail).
+
+Where would you like to look next?)
+
+**You:**
+
+Any obvious labor assignment problems that you suggest addressing?
+
+**Companion:**
+
+Short answer: yes — the biggest problem isn't who's assigned, it's that the details are either gigantic or missing entirely. Facts first, then what I'd poke at.
+
+**Observed (game state)**
+
+- The fort has only **12 work details.** Five are set to `everybody`: Stonecutters, Planters, Plant gatherers, Siege operators, Orderlies — plus a custom "Wall/floor construction" detail, also everybody. So all 111 dwarves, nobles included, are on farming and stonecutting.
+- **Haulers has 58 explicit members** — over half the fortress, and it includes people with actual trades (Tulon Bisólmörul, Armorer, and Datan Oshuriden, Fisherdwarf). That's why so many current statuses read "Store item in stockpile."
+- **Fisherdwarves is contradictory**: mode `nobody`, yet Datan Oshuriden is listed as an explicit member. The stored policy says nobody may fish. (autofish is on, so fishing may be handled outside the detail anyway.)
+- **No detail covers smithing, smelting or any crafting labor at all.** Meanwhile: an **armorsmithing-4 Armorer sitting idle**, **zero weapon or armor entries among the 55 work orders** (all furniture, rock goods, food, ore and bar orders; the steel order #266 is inactive), and the militia commander is missing **head, shield and weapon** while The Royal Roads shows **9 vacant positions** (16 vacant across both squads, 4 soldiers in 111 dwarves).
+- **Small specialist pools**: 4 miners, 3 woodcutters, 1 hunter, 2 engravers — these are the only tight, sensible details.
+- **Idle adults (7)**: militia commander Zaneg, bookkeeper Endok Tadingish (**growing 12**, record keeping 8), Tulon Bisólmörul (armorer 4), mayor Rith Gusilzafal (**weaving 14**), Stukos Oddomotung (fish cleaning 7), Rigòth Tobulkurel (glazer), Vucar Domasrithlut (siege operation 2). Remaining 5 idle are babies.
+
+**What I'd address, in order**
+
+1. **Take Stonecutters / Planters / Plant gatherers off `everybody`** and give each a short explicit list. A legendary weaver and a legendary grower both showing "Plant seeds" is the symptom.
+2. **Cut Haulers from 58 to a real hauling crew** (10–15). It's currently the default career of the fortress.
+3. **Resolve the Fisherdwarves detail** — either switch it to `selected_workers` with Datan or clear the stale assignment.
+4. **Close the military production gap**: a smithing/armoring detail plus work orders for at least helmet, shield and weapon. The idle level-4 armorer next to an unarmed militia commander is the clearest waste in the fort.
+5. **Give "The Dishes of Trade" a uniform** — it has none defined, so no weapons are ever issued to its 3 members regardless of squad routine.
+
+One caveat: I can read which details cover which labors, but not each dwarf's individual labor toggles, so anything *not* in a detail (smithing, cooking, weaving, gem work) is a black box to me — that's exactly where the gap in point 4 might be hiding. Also worth knowing: **autotraining is on**, so some profession churn is the automation shuffling dwarves in and out of squads, not a mistake.)
+
+**You:**
+
+Note that I'm testing this app, which includes all the tools you're using, so pointing out anomalies in the data is useful. That said, the odd fisherdwarves configuration is actually reflected in the game UI, and is apparently my fault. I changed it.
+
+I updated Stonecutters, Planters, Plant gatherers. Hopefully I made good choice. Do I have to designate zones for the plant gatherers?
+
+I'm tempted to make Hauling "everyone", and lock the assigned specialists so they do only their assigned tasks. The fort has some vertical distance challenges and no minecarts yet, so there's a fair amount of hauling to do.
+
+For squads, note that most of the game UI shows the nickname, not the generated name, so I'll be using nicknames. Therapy Squad's membership is managed by autotraining, it swaps members in and out to satisfy martial training needs of dwarves. So it's not intended to be used for combat, hence has no uniform defines. You'll see frequent profession swap notices as dwarves move in and out of it.
+
+**Companion:**
+
+## Zones for plant gathering
+
+**No — nothing to designate.** Plant gathering (herbalism) needs no zone and no designation: any dwarf whose labors include plant gathering simply picks wild shrubs and plants wherever they can reach them. The fort currently has 26 zones, none of them a gathering zone — pens, meeting halls, offices, dormitories, dining halls, tombs, a dump, a dungeon, a barracks — and your gatherers are already working (Cerol Atheldanman is on "Plant seeds", and both are getting "satisfied at work" thoughts), so it's functioning without one.
+
+The one thing that *does* want a zone is **fruit gathering from trees** (a "gather fruit" zone in v50). I'm flagging that as my recollection of the game, not something the reports confirm.
+
+## How the picks look
+
+**Plant gatherers — best available, genuinely.** Doren Ninurònul and Cerol Atheldanman are both **herbalism 2**, and a search for anyone at herbalism ≥3 returned **zero** in the whole fort. Nothing better existed. The catch is what else those two are: Doren is **brewing 7** and Cerol is **butchery 10** with level 6 spear/armor/shield/dodge — so the squad-grade butcher is now on shrub duty.
+
+**Planters — stronger dwarves exist.** Your two are growing **3** and **4**. Still on the roster: Endok Tadingish **growing 12** (bookkeeper, currently idle), Sazir ïtebidos **7** (on "Construct building"), Rakust Zonken **7**, Zon Solozlitast **7**, Shem Tholestavuz **5**. 13 dwarves have growing ≥3. ùshrir Libashog at 4 is already "Harvest plants", so the detail is working — it's just not the best field you could pick from.
+
+**Stonecutters — mixed.** Bëmbul Osodmörul's strongest skill is **animal training 6**; his cut stone is 4. Tholtig Endokudib is a generalist (carpentry 4, carve stone 4, potash 4, spinning 4, masonry 3, engraving 3) and is **currently "Make wooden bin"** despite being in the Stonecutters detail — direct evidence that being in a detail doesn't suppress other labors, which matters for your "lock the specialists" plan. Only three dwarves in the fort have masonry ≥3: Zasit Vúshgoden (5, a miner), Tholtig (3), Olin Isonèrith (3).
+
+## App-testing notes
+
+- **Your Fisherdwarves edit is reflected** — now `selected_workers` with Datan Oshuriden and Lòr Luslemtosid. Reads are live, not cached.
+- **`find_candidates` does no fuzzy matching.** `skill: "grower"` returned **0 matches** while `"growing"` returned 13. Silent zero, no hint that the name was wrong. The stored names are "growing", "herbalism", "masonry".
+- **`autogather` is missing from the automation list entirely** — not in `enabled`, not in `available_but_off`, even though its neighbours autochop/autofish/autolabor are all accounted for. Either it doesn't exist as a plugin or it's being filtered out.
+- **No "hospital" zone type.** The hospital (id 618, "Hospital z44", location The Creative Home, 504 tiles) is reported with `type: "meeting hall"`. That may be how DF stores it or a mapping quirk worth a look.
+- **Zero `assigned_count` on `everybody`-mode details is correct, not a bug** — Orderlies, Siege operators and Wall/floor construction show 0 because only explicit membership is listed. Haulers has `cannot_be_everybody: false`, so switching it to everyone is permitted.
+
+Two limits on your hauling plan: I can't see per-dwarf labor toggles, so I can't verify from here whether someone is actually "locked" to their detail. And `autolabor` is off (good — nothing will fight your details), but **autofish, autochop, autofarm, seedwatch and tailor all still flip labors directly**, outside the detail system.)
+
+**You:**
+
+Nope, there's no autogather plugin. Do you want to write one? :D (Just kidding.)
+
+find_candidates docs do say that the skill option looks for skills *containing* the provided text. No fuzzy matching. I believe we chose not to list all the specific skills because there were too many, and it would bloat the tool description. Tokens aren't free. :)
+
+The "locking" aspect is actually a toggle on a person in the work detail lists, described in the game thus: "This worker is specialized and will only do tasks that match their workshop assignments, work details, and occupations." If that's really not available from the current tools I'll make a note of it as a bug.
+
+**Companion:**
+
+## Verdict: the specialization toggle is not exposed anywhere
+
+I sampled 12 dwarves across every detail (Tholtig, Tulon the armorer, the militia commander, plus ten more spanning Miners→Haulers→Planter→Hunters membership) and checked the work payload field by field.
+
+**Every per-detail entry carries exactly these keys:** `index`, `name`, `labors`, `assignment_mode`, `built_in`, `cannot_be_everybody`, `explicit_member`. No boolean anywhere resembling "specialized", "locked", "focused" or "mode".
+
+**More damning: `assigned_units` entries carry only `{id, name}`.** In `list_work_details` the 58 hauler entries, all 2 engravings entries, all 4 miners — every one is just id plus name. That's the exact place I'd expect a per-worker toggle to surface, since the flag is per-worker-within-a-detail in the game UI, and there's nothing there.
+
+So: **not reported, and not inferable.** Since there are also no per-dwarf labor toggles in the toolset, I can't derive it by elimination either. Your bug note is warranted — and I'd describe it as a missing field on the `assigned_units` entry plus a note in the `list_work_details` documentation, not a formatting issue.
+
+## One self-correction from earlier
+
+I cited Tholtig Endokudib as "direct evidence that being in a detail doesn't suppress other labors" — he's an explicit Stonecutters member doing "Make wooden bin". **That's weaker than I made it sound.** His profession is Carpenter, and per the toggle's own description specialization still permits occupation-matching tasks, so bin-making is consistent with the toggle being *on* or *off*. I overclaimed; treat it as no evidence either way. Every "who's doing what" inference I made earlier has that same hole, which is presumably why the tool deliberately refuses to infer effective labor permissions.
+
+## Other data notes from this sweep
+
+- **`cannot_be_everybody` is meaningfully populated** — `true` for Miners, Woodcutters, Hunters and Fisherdwarves; `false` for the rest. So your Haulers→everyone plan reads as permitted, and the field does vary rather than defaulting.
+- **Your Fisherdwarves edit is confirmed live**: now `selected_workers`, 2 members (Datan Oshuriden, Lòr Luslemtosid), `cannot_be_everybody: true`. Both are also explicit Haulers — worth knowing since you're reworking hauling.
+- **`assigned_count: 0` on the three `everybody`-mode details is consistent**, not a bug: only explicit membership is counted, and everybody-mode by definition has none. Wall/floor construction is `built_in: false` while the others are `built_in: true` — presumably correct for a custom detail, but flagging in case you expected a different marker for user-made ones.
+- **Minor cosmetic oddity**: names beginning with accented letters render with a lowercase first character throughout — ùshrir, èzum, îton, ås, âbirkel, ùshrir åblelonrel. Consistent enough that it's probably name-generation rather than a tool bug, but if you ever sort case-sensitively it will look like a naming inconsistency.)
+
+**You:**
+
+/tool list_work_details
+
+**You:**
+
+/call list_work_details search=Tobulag
+
+**You:**
+
+/tools
+
+**You:**
+
+/call list_work_details search=Miner
+
+**You:**
+
+/tool list_residents
+
+**You:**
+
+/call list_residents search=Tobulag
+
+**You:**
+
+/call list_residents search=Tobulag
+
+**You:**
+
+/call list_work_details
+
+**You:**
+
+I logged the lack of the specialization toggle as an issue.
+
+I'm not sure how professions are assigned, except that I know they change when someone joins or leaves a squad. The profession is independent of the specialization toggle, or assignment to a work detail.
+
+I believe that the way these settings work is that someone who is "specialized" only does work as described in the toggle. People who are not so marked will do any task, except for work details with assignment_mode "selected_workers" or "nobody". The cannot_be_everybody property is a bit confusing: It simply indicates that in the game the "Everybody does this" choice (assignment_mode=everybody) is not available. I'm not sure how that value is determined, I don't think it's set by the player.
+
+Regarding the cosmetic oddity: It sort of works that way in the game UI as well, although the game uses an old PC code page with oddities. I see an accented capital A, which renders in UTF-8 as a lowercase accented a. But I also see a lowercase accented U where you would expect a capital, rendered similarly in UTF-8 and in-game. Hard to tell what's going on without digging into the code page and the font being used by the game, which is likely custom.
+
+**Companion:**
+
+Confirmed live: all four of your edits landed in the same read. **Stonecutters, Planters and Plant gatherers are now `selected_workers` with explicit lists** (2 members each, the same dwarves I flagged earlier). Fishing is `selected_workers` with Datan Oshuriden and Lòr Luslemtosid.
+
+**That means every detail except three is now gated.** Nine are `selected_workers`; only Orderlies, Siege operators and Wall/floor construction are `everybody`. Under the model you describe, those nine labors are now closed to non-specialists who aren't explicitly listed — so the "everybody" default that was covering farming and stonecutting is gone. Everything not covered by any detail at all (masonry, carpentry, smithing, cooking, weaving, gem cutting) has no detail to gate it, and I can't see per-dwarf toggles, so that's still the black box.
+
+**Haulers is still `selected_workers`, 58 members.** Its labor list includes `push_haul_vehicles`, `water_hauling` and `trade_good_hauling` — so under your model, narrowing it to 10–15 people also narrows who fills wells and pushes minecarts; "everyone" does not. Worth knowing given the minecart remark.
+
+**Ten dwarves sit in two details at once, and all ten are specialist + Haulers:**
+
+- Rakust Zonken, Thob Mistêmlek — Engravers
+- Datan Oshuriden, Lòr Luslemtosid — Fisherdwarves
+- Logem Tobulag, Solon ìnaldomas — Miners
+- Asën Nogleshmörul, Onget Ulinglikot, Ilral Zulbangeshud — Woodcutters
+- Likot Idònul — Hunters
+
+**Conversely, four specialists are already *not* haulers**: Planters Vutok Semoravuz and ùshrir Libashog, Plant gatherers Doren Ninurònul and Cerol Atheldanman. So if you go "everyone" plus specialization, the gated-list approach and the toggle approach would give different answers for exactly these dwarves — which is presumably the test you're running.
+
+**`cannot_be_everybody` is `true` for exactly the four that can't plausibly be fort-wide** — Miners, Woodcutters, Hunters, Fisherdwarves — and `false` for everything else including your three new edits. Your read that it's game-determined rather than player-set fits: you didn't touch it, and it changed on none of the details you edited.
+
+**Automation still enabled** (12 items): autobutcher, autochop, autofarm, autofish, automilk, autoshear, autotraining, seedwatch, tailor, plus combine, dwarfvet, emigration. autolabor is off. autotraining matches your profession-churn explanation exactly; autofish alters the fishing labor outside your now-gated Fisherdwarves detail.
+
+On the encoding: that's consistent with what I see — capital accented vowels collapse into the lowercase-accented forms, while å/Å and others don't follow the same rule, which points at the code page mapping rather than the tool. And no, no autogather plugin in the list — I'd have to write my own, and I'm told it would cost tokens.)
+
+**You:**
+
+Oh, interesting. Rakust for example is in fact assigned to engraving and hauling. For most of the work details, if you assign a dwarf, then he's unassigned from other details. The game must make an exception for hauling. That's important to know if you're assigning people specifically to hauling.
+
+Anyway, back to the game. Without the specialist toggle, can you still make good guesses on best assignments to work details? Take into account that I want to fully populate The Royal Roads as a full-time squad, so I need good candidates there, though I fully expect that they will need a lot of training. So reserve some citizens for that. Inherent suitability rather than current martial skill is important there.
