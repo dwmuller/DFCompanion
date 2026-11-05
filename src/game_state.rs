@@ -266,11 +266,11 @@ struct Connection {
 #[derive(Clone)]
 pub struct GameState {
     connection: Arc<Mutex<Connection>>,
-    notifications_tx: tokio::sync::broadcast::Sender<String>,
+    notifications_tx: tokio::sync::broadcast::Sender<crate::DisplayMessage>,
 }
 
 impl GameState {
-    pub fn new(notifications_tx: tokio::sync::broadcast::Sender<String>) -> Self {
+    pub fn new(notifications_tx: tokio::sync::broadcast::Sender<crate::DisplayMessage>) -> Self {
         Self {
             connection: Arc::default(),
             notifications_tx,
@@ -989,14 +989,20 @@ fn is_link_failure(error: &dfhack_remote::Error) -> bool {
 fn notify_version_warning(
     warning: Option<String>,
     previous_warning: &mut Option<String>,
-    notifications_tx: &tokio::sync::broadcast::Sender<String>,
+    notifications_tx: &tokio::sync::broadcast::Sender<crate::DisplayMessage>,
 ) {
     if warning == *previous_warning {
         return;
     }
     match warning {
         Some(warning) => {
-            if notifications_tx.send(warning.clone()).is_ok() {
+            if notifications_tx
+                .send(crate::DisplayMessage::new(
+                    crate::DisplayMessageKind::Warning,
+                    warning.clone(),
+                ))
+                .is_ok()
+            {
                 *previous_warning = Some(warning);
             }
         }
@@ -1204,7 +1210,10 @@ mod tests {
             &mut previous_warning,
             &notifications_tx,
         );
-        assert_eq!(notifications_rx.try_recv().unwrap(), "first warning");
+        assert_eq!(
+            notifications_rx.try_recv().unwrap(),
+            crate::DisplayMessage::new(crate::DisplayMessageKind::Warning, "first warning")
+        );
 
         notify_version_warning(
             first_warning.clone(),
@@ -1215,10 +1224,16 @@ mod tests {
 
         let changed_warning = Some("changed warning".to_owned());
         notify_version_warning(changed_warning, &mut previous_warning, &notifications_tx);
-        assert_eq!(notifications_rx.try_recv().unwrap(), "changed warning");
+        assert_eq!(
+            notifications_rx.try_recv().unwrap(),
+            crate::DisplayMessage::new(crate::DisplayMessageKind::Warning, "changed warning")
+        );
 
         notify_version_warning(None, &mut previous_warning, &notifications_tx);
         notify_version_warning(first_warning, &mut previous_warning, &notifications_tx);
-        assert_eq!(notifications_rx.try_recv().unwrap(), "first warning");
+        assert_eq!(
+            notifications_rx.try_recv().unwrap(),
+            crate::DisplayMessage::new(crate::DisplayMessageKind::Warning, "first warning")
+        );
     }
 }

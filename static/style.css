@@ -17,24 +17,30 @@ body {
   width: 100%;
 }
 
-#notifications > div {
+.notification {
   margin: 0.5rem 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-#notifications > div.markdown {
+.notification-header {
+  display: block;
+  font-weight: 600;
+}
+
+.notification-body {
+  margin-left: 1rem;
+}
+
+[data-kind="user"] .notification-body,
+[data-kind="companion"] .notification-body {
   white-space: normal;
 }
 
-/* Compact Markdown: tight margins, and the speaker's label shares the first line. */
+/* Compact Markdown: tight margins within each conversation entry. */
 .markdown-body {
   max-width: 100%;
   overflow-wrap: anywhere;
-}
-
-.markdown-body > p:first-child {
-  display: inline;
 }
 
 .markdown-body p,
@@ -97,17 +103,14 @@ body {
   padding: 0.1rem 0.4rem;
 }
 
-.game-event {
-  color: #666;
-}
-
-.ai-usage {
+[data-kind="game-event"],
+[data-kind="ai-usage"] {
   color: #666;
 }
 
 /* The filter checkboxes live in a popup; the list follows their state. */
-body:has(#show-game-events:not(:checked)) .game-event,
-body:has(#show-ai-usage:not(:checked)) .ai-usage {
+body:has(#show-game-events:not(:checked)) [data-kind="game-event"],
+body:has(#show-ai-usage:not(:checked)) [data-kind="ai-usage"] {
   display: none;
 }
 

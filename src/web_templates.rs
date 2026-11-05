@@ -8,6 +8,7 @@ use askama::Template;
 use crate::{
     ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
+    DisplayMessage,
 };
 
 #[derive(Debug)]
@@ -102,27 +103,13 @@ impl FormFieldValues {
     }
 }
 
-/// An entry in the conversation and notifications list.
-pub enum Notification<'a> {
-    /// Text from the player or the companion; rendered as sanitized Markdown.
-    Speech { speaker: &'a str, markdown: &'a str },
-    /// An echo of a game event, which the page can hide.
-    GameEvent(&'a str),
-    /// A summary of the AI tokens a turn used, which the page can hide.
-    AiUsage(&'a str),
-    /// Any other notice, shown as plain text.
-    Text(&'a str),
-}
-
 #[derive(Template)]
 #[template(path = "notification.html")]
 struct NotificationTemplate<'a> {
-    class: &'a str,
+    kind: &'a str,
     label: &'a str,
     body: &'a str,
     markdown: bool,
-    transcript_role: &'a str,
-    original_markdown: &'a str,
 }
 
 #[derive(Template)]
@@ -209,53 +196,22 @@ struct ConfigurationFormErrorTemplate {
     error_message: String,
 }
 
-pub fn render_notification(notification: &Notification) -> Result<String, RenderError> {
-    let rendered = match notification {
-        Notification::Speech { speaker, markdown } => {
-            let body = markdown_to_safe_html(markdown);
-            NotificationTemplate {
-                class: "markdown",
-                label: speaker,
-                body: &body,
-                markdown: true,
-                transcript_role: match *speaker {
-                    "You:" => "user",
-                    "Companion:" => "companion",
-                    _ => "",
-                },
-                original_markdown: markdown,
-            }
-            .render()?
-        }
-        Notification::GameEvent(text) => NotificationTemplate {
-            class: "game-event",
-            label: "Game event:",
-            body: text,
-            markdown: false,
-            transcript_role: "",
-            original_markdown: "",
-        }
-        .render()?,
-        Notification::AiUsage(text) => NotificationTemplate {
-            class: "ai-usage",
-            label: "AI usage:",
-            body: text,
-            markdown: false,
-            transcript_role: "",
-            original_markdown: "",
-        }
-        .render()?,
-        Notification::Text(text) => NotificationTemplate {
-            class: "",
-            label: "",
-            body: text,
-            markdown: false,
-            transcript_role: "",
-            original_markdown: "",
-        }
-        .render()?,
+pub fn render_notification(message: &DisplayMessage) -> Result<String, RenderError> {
+    let transcript_label = message.kind.transcript_label();
+    let body = if transcript_label.is_some() {
+        markdown_to_safe_html(&message.text)
+    } else {
+        message.text.clone()
     };
-    Ok(rendered.trim().to_owned())
+    Ok(NotificationTemplate {
+        kind: message.kind.key(),
+        label: message.kind.label(),
+        body: &body,
+        markdown: transcript_label.is_some(),
+    }
+    .render()?
+    .trim()
+    .to_owned())
 }
 
 /// Companion and player text is untrusted Markdown (model output, game
@@ -424,6 +380,7 @@ pub fn render_configuration_form_error(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::DisplayMessageKind;
 
     fn item(id: &str, name: &str, key_saved: bool) -> ConfigurationListItem {
         ConfigurationListItem {
@@ -437,43 +394,41 @@ mod test {
 
     #[test]
     fn speech_is_rendered_as_markdown_with_a_label() {
-        let rendered = render_notification(&Notification::Speech {
-            speaker: "Companion:",
-            markdown: "**Hello**\nthere",
-        })
+        let rendered = render_notification(&DisplayMessage::new(
+            DisplayMessageKind::Companion,
+            "**Hello**\nthere",
+        ))
         .expect("notification should render");
 
         assert!(rendered.starts_with(
-            "<div class=\"markdown\" data-conversation-role=\"companion\" data-original-markdown=\"**Hello**\nthere\"><strong>Companion: </strong>"
+            "<div class=\"notification\" data-kind=\"companion\"><strong class=\"notification-header\">Companion:</strong><div class=\"notification-body\"><div class=\"markdown-body\">"
         ));
         assert!(rendered.contains("<strong>Hello</strong><br>"));
-        assert!(rendered.ends_with("</div>"));
+        assert!(rendered.ends_with("</div></div></div>"));
     }
 
     #[test]
-    fn speech_keeps_original_markdown_for_transcript_copy() {
-        let rendered = render_notification(&Notification::Speech {
-            speaker: "You:",
-            markdown: "**Hello** & `code`\n- first",
-        })
+    fn speech_categories_render_markdown_and_have_stable_kinds() {
+        let rendered = render_notification(&DisplayMessage::new(
+            DisplayMessageKind::User,
+            "**Hello** & `code`\n- first",
+        ))
         .expect("notification should render");
 
-        assert!(rendered.contains("data-conversation-role=\"user\""));
-        assert!(
-            rendered.contains("data-original-markdown=\"**Hello** &#38; `code`"),
-            "{rendered}"
-        );
-        assert!(rendered.contains("- first\""), "{rendered}");
+        assert!(rendered.contains("data-kind=\"user\""));
+        assert!(rendered.contains("You:</strong>"));
         assert!(rendered.contains("<strong>Hello</strong>"));
         assert!(rendered.contains("<code>code</code>"));
+        assert!(rendered.contains("<li>first</li>"));
+        assert!(!rendered.contains("data-original-markdown"));
     }
 
     #[test]
     fn speech_markdown_is_sanitized() {
-        let rendered = render_notification(&Notification::Speech {
-            speaker: "Companion:",
-            markdown: "<script>alert(1)</script>\n\n![x](http://e/x.png) [a](https://example.com) <img src=x onerror=alert(1)>[b](javascript:alert(1))",
-        })
+        let rendered = render_notification(&DisplayMessage::new(
+            DisplayMessageKind::Companion,
+            "<script>alert(1)</script>\n\n![x](http://e/x.png) [a](https://example.com) <img src=x onerror=alert(1)>[b](javascript:alert(1))",
+        ))
         .expect("notification should render");
 
         assert!(!rendered.contains("<script"));
@@ -528,29 +483,28 @@ mod test {
     }
 
     #[test]
-    fn ai_usage_notifications_have_their_own_class() {
-        let usage = render_notification(&Notification::AiUsage("This turn: 1 API request"))
-            .expect("notification should render");
-
-        assert_eq!(
-            usage,
-            "<div class=\"ai-usage\"><strong>AI usage: </strong>This turn: 1 API request</div>"
-        );
-    }
-
-    #[test]
-    fn plain_and_game_event_notifications_are_escaped_text() {
-        let game = render_notification(&Notification::GameEvent("<b>x</b>"))
-            .expect("notification should render");
-        let text =
-            render_notification(&Notification::Text("a < b")).expect("notification should render");
-
-        assert!(game.starts_with("<div class=\"game-event\">"));
-        assert!(game.contains("Game event: "));
-        assert!(!game.contains("<b>"));
-        assert!(!game.contains("data-conversation-role"));
-        assert_eq!(text, "<div>a &#60; b</div>");
-        assert!(!text.contains("data-original-markdown"));
+    fn all_categories_render_standard_headers_and_escape_plain_text() {
+        let cases = [
+            (DisplayMessageKind::GameEvent, "Game event", "game-event"),
+            (DisplayMessageKind::AiUsage, "AI usage", "ai-usage"),
+            (DisplayMessageKind::Status, "Status", "status"),
+            (DisplayMessageKind::Warning, "Warning", "warning"),
+            (DisplayMessageKind::Diagnostic, "Diagnostic", "diagnostic"),
+        ];
+        for (kind, label, key) in cases {
+            let rendered = render_notification(&DisplayMessage::new(kind, "a < b"))
+                .expect("notification should render");
+            assert!(
+                rendered.contains(&format!("data-kind=\"{key}\"")),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains(&format!("{label}:</strong>")),
+                "{rendered}"
+            );
+            assert!(rendered.contains("a &#60; b"), "{rendered}");
+            assert!(!rendered.contains("<b>"), "{rendered}");
+        }
     }
 
     #[test]

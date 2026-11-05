@@ -21,13 +21,73 @@ pub mod web;
 pub mod web_templates;
 
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
-/// Marks UI notifications that echo game events, so the browser can hide them.
-pub const GAME_EVENT_PREFIX: &str = "Game event: ";
-/// Marks a companion comment the player did not ask for (from a timed turn),
-/// so the page can beep.
-/// Marks token-usage notices so the page can hide them.
-pub const AI_USAGE_PREFIX: &str = "AI usage: ";
-pub const UNSOLICITED_PREFIX: &str = "Unsolicited companion comment: ";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayMessageKind {
+    User,
+    Companion,
+    GameEvent,
+    AiUsage,
+    Status,
+    Warning,
+    Diagnostic,
+}
+
+impl DisplayMessageKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "You",
+            Self::Companion => "Companion",
+            Self::GameEvent => "Game event",
+            Self::AiUsage => "AI usage",
+            Self::Status => "Status",
+            Self::Warning => "Warning",
+            Self::Diagnostic => "Diagnostic",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Companion => "companion",
+            Self::GameEvent => "game-event",
+            Self::AiUsage => "ai-usage",
+            Self::Status => "status",
+            Self::Warning => "warning",
+            Self::Diagnostic => "diagnostic",
+        }
+    }
+
+    pub fn transcript_label(self) -> Option<&'static str> {
+        match self {
+            Self::User => Some("You"),
+            Self::Companion => Some("Companion"),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisplayMessage {
+    pub kind: DisplayMessageKind,
+    pub text: String,
+    pub beep: bool,
+}
+
+impl DisplayMessage {
+    pub fn new(kind: DisplayMessageKind, text: impl Into<String>) -> Self {
+        Self {
+            kind,
+            text: text.into(),
+            beep: false,
+        }
+    }
+
+    pub fn with_beep(mut self) -> Self {
+        self.beep = true;
+        self
+    }
+}
 
 /// A game event in the format of the `get_recent_reports` tool.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -81,19 +141,19 @@ const NOTIFICATION_HISTORY_LIMIT: usize = 500;
 #[derive(Clone)]
 pub struct NotificationHistory {
     inner: std::sync::Arc<std::sync::Mutex<HistoryState>>,
-    live_tx: broadcast::Sender<(u64, String)>,
+    live_tx: broadcast::Sender<(u64, DisplayMessage)>,
 }
 
 #[derive(Default)]
 struct HistoryState {
-    entries: VecDeque<(u64, String)>,
+    entries: VecDeque<(u64, DisplayMessage)>,
     last_id: u64,
 }
 
 impl NotificationHistory {
     /// Records everything sent on `notifications_tx`. Without a Tokio runtime
     /// nothing is recorded.
-    fn record(notifications_tx: &broadcast::Sender<String>) -> Self {
+    fn record(notifications_tx: &broadcast::Sender<DisplayMessage>) -> Self {
         let history = Self {
             inner: Default::default(),
             live_tx: broadcast::channel(128).0,
@@ -106,7 +166,10 @@ impl NotificationHistory {
                     match rx.recv().await {
                         Ok(message) => recorder.push(message),
                         Err(broadcast::error::RecvError::Lagged(count)) => {
-                            recorder.push(format!("{count} notifications were missed."))
+                            recorder.push(DisplayMessage::new(
+                                DisplayMessageKind::Warning,
+                                format!("{count} notifications were missed."),
+                            ))
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
@@ -116,7 +179,7 @@ impl NotificationHistory {
         history
     }
 
-    fn push(&self, message: String) {
+    fn push(&self, message: DisplayMessage) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.entries.len() == NOTIFICATION_HISTORY_LIMIT {
             inner.entries.pop_front();
@@ -135,7 +198,10 @@ impl NotificationHistory {
     pub fn subscribe(
         &self,
         after: Option<u64>,
-    ) -> (Vec<(u64, String)>, broadcast::Receiver<(u64, String)>) {
+    ) -> (
+        Vec<(u64, DisplayMessage)>,
+        broadcast::Receiver<(u64, DisplayMessage)>,
+    ) {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let backlog = inner
             .entries
@@ -145,12 +211,27 @@ impl NotificationHistory {
             .collect();
         (backlog, self.live_tx.subscribe())
     }
+
+    pub fn conversation_markdown(&self) -> String {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .entries
+            .iter()
+            .filter_map(|(_, message)| {
+                message
+                    .kind
+                    .transcript_label()
+                    .map(|label| format!("**{label}:**\n\n{}", message.text))
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub queue_tx: mpsc::Sender<QueueItem>,
-    pub notifications_tx: broadcast::Sender<String>,
+    pub notifications_tx: broadcast::Sender<DisplayMessage>,
     pub history: NotificationHistory,
     pub ai: std::sync::Arc<ai::AiRuntime>,
     /// Whether the AI gets a turn shortly after game events arrive. Off by
@@ -205,9 +286,9 @@ impl AppState {
     /// Sends a notification to clients.
     ///
     /// This is a best-effort operation; if no clients are connected, the message is simply dropped.
-    pub fn notify(&self, message: impl Into<String>) {
+    pub fn notify(&self, message: DisplayMessage) {
         // No connected browser is a normal state; notifications are best-effort.
-        let _ = self.notifications_tx.send(message.into());
+        let _ = self.notifications_tx.send(message);
     }
 }
 
@@ -285,13 +366,16 @@ pub fn run_companion_worker(
                     let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
                     let dropped_reports = state.ai.conversation.lock().await.push_report(line);
                     if dropped_reports > 0 {
-                        state.notify(format!(
-                            "{dropped_reports} oldest pending report(s) were discarded to keep the AI context within its input limit."
+                        state.notify(DisplayMessage::new(
+                            DisplayMessageKind::Warning,
+                            format!(
+                                "{dropped_reports} oldest pending report(s) were discarded to keep the AI context within its input limit."
+                            ),
                         ));
                     }
-                    state.notify(format!(
-                        "{GAME_EVENT_PREFIX}{} [{}] {}",
-                        event.date, event.category, event.text
+                    state.notify(DisplayMessage::new(
+                        DisplayMessageKind::GameEvent,
+                        format!("{} [{}] {}", event.date, event.category, event.text),
                     ));
                     flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
                 }
@@ -328,13 +412,14 @@ fn has_active_configuration(state: &AppState) -> bool {
 pub async fn check_game_at_startup(state: AppState) {
     match state.ai.startup_summary().await {
         Ok(summary) => {
-            state.notify(summary);
+            state.notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
             if has_active_configuration(&state) {
                 let _ = state.queue_tx.try_send(QueueItem::Orient);
             }
         }
-        Err(error) => state.notify(format!(
-            "The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"
+        Err(error) => state.notify(DisplayMessage::new(
+            DisplayMessageKind::Warning,
+            format!("The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"),
         )),
     }
 }
@@ -351,19 +436,26 @@ async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatC
     match command {
         Ok(chat_commands::ChatCommand::CallTool { name, arguments }) => {
             let result = state.ai.call_tool(&name, arguments).await;
-            state.notify(format!(
-                "Tool {name} result:\n{}",
-                format_tool_result(&result).unwrap_or_else(|error| {
-                    eprintln!("Error formatting tool result: {error}");
-                    result
-                })
+            state.notify(DisplayMessage::new(
+                DisplayMessageKind::Diagnostic,
+                format!(
+                    "Tool {name} result:\n{}",
+                    format_tool_result(&result).unwrap_or_else(|error| {
+                        eprintln!("Error formatting tool result: {error}");
+                        result
+                    })
+                ),
             ));
         }
-        Ok(chat_commands::ChatCommand::ListTools) => state.notify(ai_tools::describe_tools()),
-        Ok(chat_commands::ChatCommand::DescribeTool { name }) => {
-            state.notify(ai_tools::describe_tool(&name).unwrap_or_else(|error| error))
-        }
-        Err(error) => state.notify(error),
+        Ok(chat_commands::ChatCommand::ListTools) => state.notify(DisplayMessage::new(
+            DisplayMessageKind::Diagnostic,
+            ai_tools::describe_tools(),
+        )),
+        Ok(chat_commands::ChatCommand::DescribeTool { name }) => state.notify(DisplayMessage::new(
+            DisplayMessageKind::Diagnostic,
+            ai_tools::describe_tool(&name).unwrap_or_else(|error| error),
+        )),
+        Err(error) => state.notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, error)),
     }
 }
 
@@ -384,26 +476,35 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
         Ok(Some(configuration)) => configuration,
         Ok(None) => {
             if kind != TurnKind::Periodic {
-                state.notify("Select an AI configuration before sending a chat message.");
+                state.notify(DisplayMessage::new(
+                    DisplayMessageKind::Warning,
+                    "Select an AI configuration before sending a chat message.",
+                ));
             }
             return kind == TurnKind::Periodic;
         }
         Err(error) => {
-            state.notify(error);
+            state.notify(DisplayMessage::new(DisplayMessageKind::Warning, error));
             return false;
         }
     };
     let mut conversation = state.ai.conversation.lock().await;
     if kind != TurnKind::Periodic && conversation.pending_user_messages.is_empty() {
-        state.notify("There is no failed AI request to retry.");
+        state.notify(DisplayMessage::new(
+            DisplayMessageKind::Status,
+            "There is no failed AI request to retry.",
+        ));
         return true;
     }
     loop {
         let prompt = conversation.build_prompt(&configuration.system_text);
         if prompt.omitted_report_count > 0 {
-            state.notify(format!(
-                "{} oldest pending report(s) were left out to fit the AI context limit.",
-                prompt.omitted_report_count
+            state.notify(DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                format!(
+                    "{} oldest pending report(s) were left out to fit the AI context limit.",
+                    prompt.omitted_report_count
+                ),
             ));
         }
         match state.ai.complete(&configuration, &prompt).await {
@@ -411,21 +512,27 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
                 let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&result.answer);
                 conversation.complete(prompt, result.answer.clone());
                 if !uneventful {
-                    let prefix = if kind == TurnKind::Periodic {
-                        UNSOLICITED_PREFIX
+                    let message = DisplayMessage::new(DisplayMessageKind::Companion, result.answer);
+                    state.notify(if kind == TurnKind::Periodic {
+                        message.with_beep()
                     } else {
-                        "Companion: "
-                    };
-                    state.notify(format!("{prefix}{})", result.answer));
-                    state.notify(format!("{AI_USAGE_PREFIX}{}", result.usage.summary()))
+                        message
+                    });
+                    state.notify(DisplayMessage::new(
+                        DisplayMessageKind::AiUsage,
+                        result.usage.summary(),
+                    ));
                 }
                 if kind == TurnKind::Periodic || conversation.pending_user_messages.is_empty() {
                     return true;
                 }
             }
             Err(error) => {
-                state.notify(format!(
+                state.notify(DisplayMessage::new(
+                    DisplayMessageKind::Warning,
+                    format!(
                     "AI request failed. Your chat and collected reports are retained; automatic checks are paused until you send a message or retry. {error}"
+                    ),
                 ));
                 return false;
             }
@@ -440,21 +547,38 @@ mod tests {
     #[tokio::test]
     async fn notification_history_replays_then_streams_live() {
         let (state, _queue_rx) = AppState::new();
-        state.notify("first");
-        state.notify("second");
+        state.notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
+        state.notify(DisplayMessage::new(DisplayMessageKind::User, "hello"));
+        state.notify(DisplayMessage::new(
+            DisplayMessageKind::Diagnostic,
+            "/tools",
+        ));
+        state.notify(DisplayMessage::new(DisplayMessageKind::Companion, "**hi**"));
         for _ in 0..50 {
-            if state.history.subscribe(None).0.len() == 2 {
+            if state.history.subscribe(None).0.len() == 4 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         let (backlog, mut live) = state.history.subscribe(None);
-        assert_eq!(backlog, [(1, "first".to_owned()), (2, "second".to_owned())]);
-        state.notify("third");
-        assert_eq!(live.recv().await.unwrap(), (3, "third".to_owned()));
+        assert_eq!(backlog.len(), 4);
+        assert_eq!(backlog[0].1.kind, DisplayMessageKind::Status);
+        assert_eq!(backlog[1].1.kind, DisplayMessageKind::User);
+        assert_eq!(backlog[2].1.kind, DisplayMessageKind::Diagnostic);
+        assert_eq!(backlog[3].1.kind, DisplayMessageKind::Companion);
+        assert_eq!(
+            state.history.conversation_markdown(),
+            "**You:**\n\nhello\n\n**Companion:**\n\n**hi**"
+        );
+        state.notify(DisplayMessage::new(DisplayMessageKind::Warning, "third"));
+        assert_eq!(
+            live.recv().await.unwrap(),
+            (5, DisplayMessage::new(DisplayMessageKind::Warning, "third"))
+        );
 
-        let (resumed, _) = state.history.subscribe(Some(2));
-        assert_eq!(resumed, [(3, "third".to_owned())]);
+        let (resumed, _) = state.history.subscribe(Some(4));
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].1.kind, DisplayMessageKind::Warning);
     }
     use api::{
         companion_client::CompanionClient, companion_server::CompanionServer,
@@ -559,6 +683,7 @@ mod tests {
             .recv()
             .await
             .unwrap()
+            .text
             .contains("queue is full"));
 
         server_task.abort();
@@ -606,9 +731,17 @@ mod tests {
         }
 
         let result = notifications.recv().await.unwrap();
-        assert!(result.contains("Unknown tool: no_such_tool"), "{result}");
+        assert_eq!(result.kind, DisplayMessageKind::Diagnostic);
+        assert!(
+            result.text.contains("Unknown tool: no_such_tool"),
+            "{result:?}"
+        );
         let error = notifications.recv().await.unwrap();
-        assert!(error.contains("Unknown chat command: /bogus"), "{error}");
+        assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
+        assert!(
+            error.text.contains("Unknown chat command: /bogus"),
+            "{error:?}"
+        );
         assert!(state
             .ai
             .conversation
@@ -616,6 +749,7 @@ mod tests {
             .await
             .pending_user_messages
             .is_empty());
+        assert_eq!(state.history.conversation_markdown(), "");
         worker.abort();
     }
 
@@ -826,15 +960,12 @@ mod tests {
             .unwrap();
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
 
+        assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         assert!(notifications
             .recv()
             .await
             .unwrap()
-            .starts_with(GAME_EVENT_PREFIX));
-        assert!(notifications
-            .recv()
-            .await
-            .unwrap()
+            .text
             .contains("AI request failed"));
         let conversation = state.ai.conversation.lock().await;
         assert_eq!(conversation.pending_reports.len(), 1);
@@ -885,14 +1016,10 @@ mod tests {
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
         state.queue_tx.send(sample_event()).await.unwrap();
 
-        assert!(notifications
-            .recv()
-            .await
-            .unwrap()
-            .starts_with(GAME_EVENT_PREFIX));
+        assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let started = Instant::now();
         let failure = notifications.recv().await.unwrap();
-        assert!(failure.contains("AI request failed"), "{failure}");
+        assert!(failure.text.contains("AI request failed"), "{failure:?}");
         assert_eq!(started.elapsed(), EVENT_FLUSH_DELAY);
 
         // Automatic turns stay paused after the failure, however long we wait.
@@ -919,11 +1046,7 @@ mod tests {
         let mut notifications = state.notifications_tx.subscribe();
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
         state.queue_tx.send(sample_event()).await.unwrap();
-        assert!(notifications
-            .recv()
-            .await
-            .unwrap()
-            .starts_with(GAME_EVENT_PREFIX));
+        assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
         worker.abort();

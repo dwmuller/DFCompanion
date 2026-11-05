@@ -48,7 +48,10 @@ impl Companion for CompanionRpc {
                     "The event queue is full (capacity {}). The plugin was asked to pause the game; this event was not accepted.",
                     crate::EVENT_QUEUE_CAPACITY
                 );
-                self.state.notify(message.clone());
+                self.state.notify(crate::DisplayMessage::new(
+                    crate::DisplayMessageKind::Warning,
+                    message.clone(),
+                ));
                 Ok(Response::new(EventSubmissionResult {
                     status: EventSubmissionStatus::PauseRequestedQueueFull as i32,
                     message,

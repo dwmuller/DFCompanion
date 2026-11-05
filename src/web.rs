@@ -23,10 +23,9 @@ use crate::{
     },
     ai_providers::built_in_providers,
     web_templates::{
-        self as templates, render_configuration_form_error, ConfigurationListItem, Notification,
-        RenderError,
+        self as templates, render_configuration_form_error, ConfigurationListItem, RenderError,
     },
-    AppState, GameEvent, QueueItem, GAME_EVENT_PREFIX,
+    AppState, DisplayMessage, DisplayMessageKind, GameEvent, QueueItem,
 };
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
@@ -97,6 +96,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/ai-configurations", get(configurations_page))
         .route("/chat", post(chat))
+        .route("/conversation.md", get(copy_conversation))
         .route("/retry", post(retry))
         .route(
             "/fragments/ai-configurations",
@@ -186,7 +186,10 @@ async fn plugin_event(
                 "The event queue is full (capacity {}). The event was not accepted; pause the game.",
                 crate::EVENT_QUEUE_CAPACITY
             );
-            state.notify(message.clone());
+            state.notify(DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                message.clone(),
+            ));
             plugin_event_response(StatusCode::TOO_MANY_REQUESTS, "queue_full", &message)
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => plugin_event_response(
@@ -797,40 +800,8 @@ async fn stylesheet() -> impl IntoResponse {
 
 /// Turns a recorded notification into the HTML list item the page appends.
 /// `live` is false while replaying history, so replays never beep.
-fn notification_events(id: u64, message: &str, live: bool) -> Vec<Event> {
-    let (notification, unsolicited) = if let Some(text) = message.strip_prefix(GAME_EVENT_PREFIX) {
-        (Notification::GameEvent(text), false)
-    } else if let Some(text) = message.strip_prefix(crate::AI_USAGE_PREFIX) {
-        (Notification::AiUsage(text), false)
-    } else if let Some(text) = message.strip_prefix(crate::UNSOLICITED_PREFIX) {
-        (
-            Notification::Speech {
-                speaker: "Companion:",
-                markdown: text,
-            },
-            true,
-        )
-    } else if let Some(text) = message.strip_prefix("You: ") {
-        (
-            Notification::Speech {
-                speaker: "You:",
-                markdown: text,
-            },
-            false,
-        )
-    } else if let Some(text) = message.strip_prefix("Companion: ") {
-        (
-            Notification::Speech {
-                speaker: "Companion:",
-                markdown: text,
-            },
-            false,
-        )
-    } else {
-        (Notification::Text(message), false)
-    };
-
-    let html = match templates::render_notification(&notification) {
+fn notification_events(id: u64, message: &DisplayMessage, live: bool) -> Vec<Event> {
+    let html = match templates::render_notification(message) {
         Ok(html) => html,
         Err(error) => {
             eprintln!("Could not render notification: {error}");
@@ -839,7 +810,7 @@ fn notification_events(id: u64, message: &str, live: bool) -> Vec<Event> {
     };
     // Unnamed events are swapped into the page; named ones become DOM events.
     let mut events = vec![Event::default().id(id.to_string()).data(html)];
-    if unsolicited && live {
+    if message.beep && live {
         events.push(Event::default().event("beep").data(""));
     }
     events
@@ -895,9 +866,12 @@ async fn events(
             Ok((id, message)) => notification_events(id, &message, true),
             Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(count)) => {
                 vec![Event::default().data(
-                    templates::render_notification(&Notification::Text(&format!(
-                        "{count} UI notifications were missed while the browser was disconnected."
-                    )))
+                    templates::render_notification(&DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        format!(
+                            "{count} UI notifications were missed while the browser was disconnected."
+                        ),
+                    ))
                     .unwrap_or_default(),
                 )]
             }
@@ -906,6 +880,18 @@ async fn events(
     });
 
     Sse::new(backlog.chain(live)).keep_alive(KeepAlive::default())
+}
+
+/// Serves the user/companion transcript from typed message history, not rendered DOM.
+async fn copy_conversation(State(state): State<AppState>) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        state.history.conversation_markdown(),
+    )
+        .into_response()
 }
 
 /// Handles POST requests for chat messages.
@@ -935,7 +921,12 @@ async fn chat(
         .try_send(QueueItem::UserInput(message.to_owned()))
     {
         Ok(()) => {
-            state.notify(format!("You: {message}"));
+            let kind = if crate::chat_commands::ChatCommand::parse(message).is_some() {
+                DisplayMessageKind::Diagnostic
+            } else {
+                DisplayMessageKind::User
+            };
+            state.notify(DisplayMessage::new(kind, message));
             fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -943,11 +934,17 @@ async fn chat(
                 "The event queue is full (capacity {}). New input was not accepted.",
                 crate::EVENT_QUEUE_CAPACITY
             );
-            state.notify(warning.clone());
+            state.notify(DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                warning.clone(),
+            ));
             (StatusCode::SERVICE_UNAVAILABLE, warning).into_response()
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            state.notify("The Companion queue is unavailable.");
+            state.notify(DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                "The Companion queue is unavailable.",
+            ));
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "The Companion queue is unavailable.",
@@ -1024,6 +1021,9 @@ fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{DisplayMessage, DisplayMessageKind};
+    use axum::body::to_bytes;
+    use tower::ServiceExt;
 
     #[test]
     fn list_items_maps_summaries_and_marks_the_active_configuration() {
@@ -1057,5 +1057,89 @@ mod test {
         assert!(list.contains("OpenAI"));
         assert!(selector.contains("value=\"test-id-1\" checked"));
         assert!(!selector.contains("value=\"test-id-2\" checked"));
+    }
+
+    #[tokio::test]
+    async fn conversation_markdown_endpoint_uses_only_user_and_companion_messages() {
+        let (state, _) = AppState::new();
+        for message in [
+            DisplayMessage::new(DisplayMessageKind::User, "Question"),
+            DisplayMessage::new(DisplayMessageKind::GameEvent, "Arrival"),
+            DisplayMessage::new(DisplayMessageKind::Diagnostic, "/tools"),
+            DisplayMessage::new(DisplayMessageKind::AiUsage, "2 requests"),
+            DisplayMessage::new(DisplayMessageKind::Status, "Connected"),
+            DisplayMessage::new(DisplayMessageKind::Warning, "Heads up"),
+            DisplayMessage::new(DisplayMessageKind::Companion, "**Answer**"),
+        ] {
+            state.notify(message);
+        }
+        for _ in 0..50 {
+            if state.history.subscribe(None).0.len() == 7 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/conversation.md")
+                    .header(header::HOST, HTTP_HOST)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/markdown; charset=utf-8"
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            String::from_utf8(body.to_vec()).unwrap(),
+            "**You:**\n\nQuestion\n\n**Companion:**\n\n**Answer**"
+        );
+    }
+
+    #[tokio::test]
+    async fn slash_chat_input_is_a_diagnostic_not_a_user_turn() {
+        let (state, mut queue_rx) = AppState::new();
+        let mut notifications = state.notifications_tx.subscribe();
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat")
+                    .header(header::HOST, HTTP_HOST)
+                    .header(header::ORIGIN, HTTP_ORIGIN)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("message=%2Ftools"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            queue_rx.recv().await.unwrap(),
+            QueueItem::UserInput("/tools".to_owned())
+        );
+        assert_eq!(
+            notifications.recv().await.unwrap(),
+            DisplayMessage::new(DisplayMessageKind::Diagnostic, "/tools")
+        );
+    }
+
+    #[test]
+    fn replay_and_live_messages_render_identically_and_only_live_beeps() {
+        let message = DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**").with_beep();
+        let replay = notification_events(7, &message, false);
+        let live = notification_events(7, &message, true);
+
+        assert_eq!(replay.len(), 1);
+        assert_eq!(live.len(), 2);
+        assert_eq!(format!("{:?}", replay[0]), format!("{:?}", live[0]));
     }
 }

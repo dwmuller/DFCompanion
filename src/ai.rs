@@ -193,7 +193,7 @@ pub struct AiRuntime {
 impl AiRuntime {
     pub fn new(
         configurations: ConfigurationRepository,
-        notifications_tx: tokio::sync::broadcast::Sender<String>,
+        notifications_tx: tokio::sync::broadcast::Sender<crate::DisplayMessage>,
     ) -> Self {
         Self {
             configurations,
