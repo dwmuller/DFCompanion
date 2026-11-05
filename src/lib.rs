@@ -62,6 +62,7 @@ impl GameEvent {
     }
 }
 
+/// Items that can be queued for processing by the companion AI.
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueItem {
     UserInput(String),

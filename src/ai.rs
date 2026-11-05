@@ -96,6 +96,8 @@ impl Conversation {
                 };
             }
 
+            // Prompt would exceed the token limit, so we need to trim it. We do
+            // so in a particular order until it's small enough.
             if !reports.is_empty() {
                 reports.remove(0);
                 omitted_report_count += 1;
