@@ -277,7 +277,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_unit_details",
-                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode), work (work-detail configuration relevant to living fortress residents; not skills, current work, or inferred effective labor permissions). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
+                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode), work (the per-worker specialized toggle and work-detail configuration for living fortress residents; specialization means the game restricts the worker to tasks matching workshop assignments, work details, and occupations, but does not by itself determine effective labor permissions). Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
                 json!({
                     "unit_ids": {
                         "type": "array",
@@ -312,7 +312,7 @@ fn registry() -> &'static [ToolSpec] {
             .required(&["unit_ids"]),
             tool(
                 "list_work_details",
-                "List fortress work details, covered labors, and explicitly assigned known residents. assignment_mode distinguishes everybody, nobody, selected_workers, or default; assigned_units always lists explicit membership only. Use search by detail name/labor or unit_id for details relevant to a known resident. This is configuration, not current jobs, skills, or inferred effective labor permissions; use get_dfhack_automation separately to check autolabor. This is read-only.",
+                "List fortress work details, covered labors, and explicitly assigned known residents. assignment_mode distinguishes everybody, nobody, selected_workers, or default; assigned_units lists explicit membership only and includes each listed resident's global specialized toggle. For a particular resident, get_unit_details with work is authoritative, including when a detail is in everybody mode. This is configuration, not current jobs, skills, or inferred effective labor permissions; use get_dfhack_automation separately to check autolabor. This is read-only.",
                 with_paging(json!({
                     "search": {
                         "type": "string",
@@ -828,11 +828,13 @@ mod tests {
         assert!(text.contains("attributes"));
         assert!(text.contains("inventory"));
         assert!(text.contains("work"));
+        assert!(text.contains("specialized"));
         let text = describe_tool("list_work_details").unwrap();
         assert!(text.contains("search"));
         assert!(text.contains("unit_id"));
         assert!(text.contains("assignment_mode"));
         assert!(text.contains("selected_workers"));
+        assert!(text.contains("specialized"));
         let text = describe_tool("list_work_orders").unwrap();
         assert!(text.contains("search"));
         assert!(text.contains("offset"));

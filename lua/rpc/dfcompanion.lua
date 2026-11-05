@@ -312,6 +312,10 @@ local function work_detail_summary(detail, index)
     }
 end
 
+local function is_specialized(unit)
+    return unit.flags4.only_do_assigned_jobs
+end
+
 local function unit_work(unit)
     if U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
         return {applicable = false, work_details = {}}
@@ -340,7 +344,11 @@ local function unit_work(unit)
         if a_name ~= b_name then return a_name < b_name end
         return a.index < b.index
     end)
-    return {applicable = true, work_details = rows}
+    return {
+        applicable = true,
+        specialized = is_specialized(unit),
+        work_details = rows,
+    }
 end
 
 local MAX_UNIT_INVENTORY_ITEMS = 20
@@ -391,8 +399,8 @@ local function inventory_of(unit)
 end
 
 -- Adds the detail parts the caller asked for (options.parts is a set of
--- skills, attributes, health, mind, inventory). Skills can be limited to one
--- class and a minimum level.
+-- skills, attributes, health, mind, inventory, and work). Skills can be
+-- limited to one class and a minimum level.
 local function add_details(row, unit, options)
     local parts = options.parts
     if parts.skills then
@@ -475,7 +483,14 @@ end
 local function known_residents_by_id()
     local known = {}
     for _, row in ipairs(known_creatures_data(nil).residents) do
-        known[row.id] = {id = row.id, name = row.name}
+        local unit = df.unit.find(row.id)
+        if unit then
+            known[row.id] = {
+                id = row.id,
+                name = row.name,
+                specialized = is_specialized(unit),
+            }
+        end
     end
     return known
 end
@@ -1558,7 +1573,7 @@ function list_work_details(search_filter, unit_id, offset, limit)
         return a.index < b.index
     end)
     return reply(paged({
-        notes = 'assigned_units lists explicit membership among known residents. assignment_mode is the stored work-detail policy; effective labor permissions are not inferred.',
+        notes = "assigned_units lists explicit membership among known residents and repeats each resident's global specialized flag. Residents in everybody-mode details may not appear in assigned_units; use get_unit_details with work for an individual resident. assignment_mode is the stored work-detail policy; effective labor permissions are not inferred.",
     }, 'work_details', rows, offset, limit))
 end
 

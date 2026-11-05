@@ -235,6 +235,9 @@ async fn ai_tools_end_to_end() {
             detail["assigned_units"].as_array().unwrap().len(),
             "{detail}"
         );
+        for unit in detail["assigned_units"].as_array().unwrap() {
+            assert!(unit["specialized"].is_boolean(), "{unit}");
+        }
     }
     let work_orders = call("list_work_orders", serde_json::json!({"limit": 50})).await;
     assert!(work_orders.get("error").is_none(), "{work_orders}");
@@ -427,6 +430,7 @@ async fn ai_tools_end_to_end() {
         }
         let work = &details["work"];
         assert_eq!(work["applicable"], true, "{work}");
+        assert!(work["specialized"].is_boolean(), "{work}");
         assert!(work["work_details"].is_array(), "{work}");
         for detail in work["work_details"].as_array().unwrap() {
             assert!(detail["index"].is_u64(), "{detail}");
