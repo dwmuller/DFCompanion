@@ -507,6 +507,16 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
                 ),
             ));
         }
+        state.notify(DisplayMessage::new(
+            DisplayMessageKind::Diagnostic,
+            prompt.pre_trim_token_estimates.summary("pre-trim"),
+        ));
+        if let Some(post_trim_token_estimates) = &prompt.post_trim_token_estimates {
+            state.notify(DisplayMessage::new(
+                DisplayMessageKind::Diagnostic,
+                post_trim_token_estimates.summary("post-trim"),
+            ));
+        }
         match state.ai.complete(&configuration, &prompt).await {
             Ok(result) => {
                 let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&result.answer);
@@ -543,6 +553,19 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Find next message of specific kind in the notifications stream.
+    async fn recv_kind(
+        notifications: &mut broadcast::Receiver<DisplayMessage>,
+        kind: DisplayMessageKind,
+    ) -> DisplayMessage {
+        loop {
+            let message = notifications.recv().await.unwrap();
+            if message.kind == kind {
+                return message;
+            }
+        }
+    }
 
     #[tokio::test]
     async fn notification_history_replays_then_streams_live() {
@@ -961,12 +984,8 @@ mod tests {
         let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
-        assert!(notifications
-            .recv()
-            .await
-            .unwrap()
-            .text
-            .contains("AI request failed"));
+        let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
+        assert!(failure.text.contains("AI request failed"));
         let conversation = state.ai.conversation.lock().await;
         assert_eq!(conversation.pending_reports.len(), 1);
         assert_eq!(
@@ -1018,7 +1037,7 @@ mod tests {
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let started = Instant::now();
-        let failure = notifications.recv().await.unwrap();
+        let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
         assert!(failure.text.contains("AI request failed"), "{failure:?}");
         assert_eq!(started.elapsed(), EVENT_FLUSH_DELAY);
 

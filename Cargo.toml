@@ -26,6 +26,7 @@ pulldown-cmark = "0.13.6"
 ammonia = "4.2.4"
 futures-util = "0.3.34"
 serde_json_pretty = "0.1.0"
+tokenx-rs = "0.1.0"
 
 [dev-dependencies]
 # Same prost version that dfhack-proto generates its messages with.

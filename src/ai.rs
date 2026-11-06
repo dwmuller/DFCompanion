@@ -5,8 +5,9 @@ use genai::{
 };
 use tokio::sync::Mutex;
 
-use crate::ai_config::{AiConfiguration, ConfigurationRepository};
-use crate::ai_usage::AiTurnUsage;
+use crate::{
+    ai_config::{AiConfiguration, ConfigurationRepository}, ai_usage::{AiPromptTokenEstimates, AiTurnUsage},
+};
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
 pub const MAX_OUTPUT_TOKENS: u32 = 4096;
@@ -57,6 +58,8 @@ pub struct Prompt {
     pub current_user_content: String,
     pub omitted_report_count: usize,
     pub included_user_message_count: usize,
+    pub pre_trim_token_estimates: AiPromptTokenEstimates,
+    pub post_trim_token_estimates: Option<AiPromptTokenEstimates>,
 }
 
 impl Conversation {
@@ -81,6 +84,17 @@ impl Conversation {
         let mut omitted_report_count = 0;
         let mut included_user_message_count = self.pending_user_messages.len();
 
+        let pre_trim_token_estimates = AiPromptTokenEstimates::new(
+            system_text,
+            &reports,
+            &self.pending_user_messages[..included_user_message_count],
+            &history
+                .iter()
+                .map(|h| h.content.clone())
+                .collect::<Vec<_>>(),
+        );
+        let mut post_trim_token_estimates: Option<AiPromptTokenEstimates> = None;
+
         loop {
             let player_messages =
                 self.pending_user_messages[..included_user_message_count].join("\n");
@@ -93,6 +107,8 @@ impl Conversation {
                     current_user_content,
                     omitted_report_count,
                     included_user_message_count,
+                    pre_trim_token_estimates,
+                    post_trim_token_estimates,
                 };
             }
 
@@ -111,8 +127,19 @@ impl Conversation {
                     current_user_content,
                     omitted_report_count,
                     included_user_message_count,
+                    pre_trim_token_estimates,
+                    post_trim_token_estimates,
                 };
             }
+            post_trim_token_estimates = Some(AiPromptTokenEstimates::new(
+                system_text,
+                &reports,
+                &self.pending_user_messages[..included_user_message_count],
+                &history
+                    .iter()
+                    .map(|h| h.content.clone())
+                    .collect::<Vec<_>>(),
+            ));
         }
     }
 
@@ -522,6 +549,8 @@ mod tests {
             current_user_content: "Hello.".to_owned(),
             omitted_report_count: 0,
             included_user_message_count: 1,
+            pre_trim_token_estimates: AiPromptTokenEstimates::default(),
+            post_trim_token_estimates: None,
         };
         let responses = [
             (
@@ -652,6 +681,8 @@ mod tests {
             current_user_content: "Use tools.".to_owned(),
             omitted_report_count: 0,
             included_user_message_count: 1,
+            pre_trim_token_estimates: AiPromptTokenEstimates::default(),
+            post_trim_token_estimates: None,
         };
 
         let result = runtime
@@ -727,6 +758,8 @@ mod tests {
             current_user_content: "Use a tool.".to_owned(),
             omitted_report_count: 0,
             included_user_message_count: 1,
+            pre_trim_token_estimates: AiPromptTokenEstimates::default(),
+            post_trim_token_estimates: None,
         };
 
         let result = runtime

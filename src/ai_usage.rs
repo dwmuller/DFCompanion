@@ -1,4 +1,68 @@
 use genai::chat::Usage;
+use tokenx_rs::estimate_token_count;
+use crate::ai_tools::definitions;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AiPromptTokenEstimates {
+    pub system_text_tokens: usize,
+    pub reports_tokens: usize,
+    pub user_messages_tokens: usize,
+    pub history_tokens: usize,
+    pub tools_tokens: usize,
+    pub total_tokens: usize,
+}
+
+impl AiPromptTokenEstimates {
+    pub fn new(
+        system_text: &str,
+        reports: &[String],
+        user_messages: &[String],
+        history: &[String],
+    ) -> Self {
+        let system_text_tokens = estimate_token_count(system_text);
+        let reports_tokens = reports
+            .iter()
+            .map(|r| estimate_token_count(&r))
+            .sum::<usize>();
+        let user_messages_tokens = user_messages
+            .iter()
+            .map(|m| estimate_token_count(&m))
+            .sum::<usize>();
+        let history_tokens = history
+            .iter()
+            .map(|hist| estimate_token_count(&hist))
+            .sum::<usize>();
+        let tools_tokens = definitions()
+                    .iter()
+                    .map(|def| {
+                        def.schema.as_ref().map_or(0,|s|  s.as_str().map_or(0, |s| estimate_token_count(s)))
+                        + def.description.as_ref().map_or(0, |d| estimate_token_count(&d))
+                    })
+        .sum();
+        let total_tokens =
+            system_text_tokens + reports_tokens + user_messages_tokens + history_tokens + tools_tokens;
+        AiPromptTokenEstimates {
+            system_text_tokens,
+            reports_tokens,
+            user_messages_tokens,
+            history_tokens,
+            tools_tokens,
+            total_tokens,
+        }
+    }
+    pub fn summary(&self, when: &str) -> String {
+        format!(
+            "Prompt {} token estimates: system {}, reports {}, user {}, history {}, tools {}, total {}",
+            when,
+            self.system_text_tokens,
+            self.reports_tokens,
+            self.user_messages_tokens,
+            self.history_tokens,
+            self.tools_tokens,
+            self.total_tokens
+        )
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AiTurnUsage {
