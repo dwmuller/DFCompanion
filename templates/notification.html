@@ -1,1 +1,1 @@
-<div class="notification" data-kind="{{ kind }}"><strong class="notification-header">{{ label }}:</strong><div class="notification-body">{% if markdown %}<div class="markdown-body">{{ body|safe }}</div>{% else %}{{ body }}{% endif %}</div></div>
+<div class="notification" data-kind="{{ kind }}"><strong class="notification-header">{{ label }}:</strong><div class="notification-body">{% if markdown %}<div class="markdown-body">{{ body|safe }}</div>{% else %}<div class="plaintext-body">{{ body }}</div>{% endif %}</div></div>

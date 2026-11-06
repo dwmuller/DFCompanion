@@ -299,6 +299,7 @@ impl AiRuntime {
         let mut usage: Vec<AiTurnUsage> = Vec::new();
         let mut purpose = "initial request".to_owned();
         loop {
+            let estimated_prompt_tokens = crate::ai_usage::estimate_prompt_tokens(&request);
             let response = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
                 client.exec_chat(&configuration.model_id, request.clone(), Some(&options)),
@@ -311,7 +312,11 @@ impl AiRuntime {
                     configuration.interaction_method
                 )
             })?;
-            usage.push(AiTurnUsage::from_genai_usage(&response.usage, &purpose));
+            usage.push(AiTurnUsage::from_genai_usage(
+                estimated_prompt_tokens,
+                &response.usage,
+                &purpose,
+            ));
 
             let tool_calls = response
                 .tool_calls()
@@ -630,7 +635,7 @@ mod tests {
             assert_eq!(result.usage.len(), 1);
             assert_eq!(result.usage[0].prompt_tokens, Some(1));
             assert_eq!(result.usage[0].completion_tokens, Some(1));
-            assert_eq!(result.usage[0].total_tokens(), Some(2));
+            assert_eq!(result.usage[0].total_reported, Some(2));
             assert_eq!(path, expected_path);
             assert_eq!(auth_header, expected_auth_header);
             assert!(authorization.contains("test-secret"));
@@ -700,10 +705,10 @@ mod tests {
         assert!(result.usage.len() == 2);
         assert_eq!(result.usage[0].prompt_tokens, Some(100));
         assert_eq!(result.usage[0].completion_tokens, Some(10));
-        assert_eq!(result.usage[0].total_tokens(), Some(110));
+        assert_eq!(result.usage[0].total_reported, Some(110));
         assert_eq!(result.usage[1].prompt_tokens, Some(150));
         assert_eq!(result.usage[1].completion_tokens, Some(20));
-        assert_eq!(result.usage[1].total_tokens(), Some(170));
+        assert_eq!(result.usage[1].total_reported, Some(170));
         let messages = second_request["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3, "{second_request}");
         let results = messages[2]["content"].as_array().unwrap();
@@ -780,7 +785,7 @@ mod tests {
         assert_eq!(result.usage.len(), 2);
         assert_eq!(result.usage[0].prompt_tokens, None);
         assert_eq!(result.usage[0].completion_tokens, None);
-        assert_eq!(result.usage[0].total_tokens(), None);
+        assert_eq!(result.usage[0].total_reported, None);
         assert!(second_request
             .to_string()
             .contains("Unknown tool: unknown_test_tool"));

@@ -103,13 +103,13 @@ body {
   padding: 0.1rem 0.4rem;
 }
 
-[data-kind="game-event"] {
+[data-kind="game-event"],
+[data-kind="ai-usage"] {
   color: #666;
 }
 
 
-[data-kind="ai-usage"] {
-  color: #666;
+[data-kind="ai-usage"] .plaintext-body {
   font-family: monospace;
 }
 

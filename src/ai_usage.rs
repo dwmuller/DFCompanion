@@ -1,5 +1,5 @@
 use crate::ai_tools::definitions;
-use genai::chat::Usage;
+use genai::chat::{ChatRequest, ContentPart, Usage};
 use tokenx_rs::estimate_token_count;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -78,6 +78,7 @@ impl AiPromptTokenEstimates {
 #[derive(Clone, Debug, Default)]
 pub struct AiTurnUsage {
     pub purpose: String,
+    pub estimated_prompt_tokens: usize,
     pub prompt_tokens: Option<u64>,
     pub cached_prompt_tokens: Option<u64>,
     pub cache_creation_tokens: Option<u64>,
@@ -85,9 +86,47 @@ pub struct AiTurnUsage {
     pub total_reported: Option<u64>,
 }
 
+/// Estimate the number of tokens in a chat request. Based on system text, text
+/// chat messages, tool definitions and their schemas, and reasoning content.
+pub fn estimate_prompt_tokens(prompt: &ChatRequest) -> usize {
+    prompt
+        .system
+        .as_ref()
+        .map_or(0, |s| estimate_token_count(&s))
+        + prompt
+            .messages
+            .iter()
+            .map(|m| {
+                m.content
+                    .iter()
+                    .map(|p| match p {
+                        ContentPart::Text(part) => estimate_token_count(&part),
+                        ContentPart::ToolResponse(part) => estimate_token_count(&part.content),
+                        ContentPart::ReasoningContent(part) => estimate_token_count(&part),
+                        _ => 0,
+                    })
+                    .sum::<usize>()
+            })
+            .sum::<usize>()
+        + prompt.tools.as_ref().map_or(0, |v| {
+            v.iter()
+                .map(|tool| {
+                    tool.description
+                        .as_ref()
+                        .map_or(0, |d| estimate_token_count(&d))
+                        + tool
+                            .schema
+                            .as_ref()
+                            .map_or(0, |v| v.as_str().map_or(0, |s| estimate_token_count(s)))
+                })
+                .sum::<usize>()
+        })
+}
+
 impl AiTurnUsage {
-    pub fn from_genai_usage(usage: &Usage, purpose: &str) -> Self {
+    pub fn from_genai_usage(estimated_prompt_tokens: usize, usage: &Usage, purpose: &str) -> Self {
         AiTurnUsage {
+            estimated_prompt_tokens: estimated_prompt_tokens,
             prompt_tokens: usage.prompt_tokens.map(|t| t as u64),
             cached_prompt_tokens: usage
                 .prompt_tokens_details
@@ -103,26 +142,22 @@ impl AiTurnUsage {
         }
     }
 
-    pub(crate) fn total_tokens(&self) -> Option<u64> {
-        if self.prompt_tokens.is_none() && self.completion_tokens.is_none() {
-            return None;
-        }
-        Some(self.prompt_tokens.unwrap_or(0) + self.completion_tokens.unwrap_or(0))
-    }
     pub(crate) fn summary(&self) -> String {
         format!(
-            "Tokens for {}:\n  {:>6} input ({:>6} [{:>2}%] cached, {:>6} cache creation), {:>6} output, {:>7} total",
+            "Tokens for {}:\n  {:>6} est, {:>6} input ({:>6} [{:>2}%] cached, {:>6} cache creation), {:>6} output, {:>7} total [{}%]",
             self.purpose,
-            self.prompt_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
-            self.cached_prompt_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
+            self.estimated_prompt_tokens,
+            self.prompt_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
+            self.cached_prompt_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
             if let (Some(cached), Some(total)) = (self.cached_prompt_tokens, self.prompt_tokens) {
                 (cached * 100 / total).to_string()
             } else {
                 "unreported".to_string()
             },
-            self.cache_creation_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
-            self.completion_tokens.map(|t| t.to_string()).unwrap_or("unreported".to_string()),
-            self.total_tokens().map(|t| t.to_string()).unwrap_or("unreported".to_string()),
+            self.cache_creation_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
+            self.completion_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
+            self.total_reported.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
+            self.total_reported.map_or("n/a".to_string(), |t| (t * 100 / self.estimated_prompt_tokens as u64).to_string()),
         )
     }
 }
