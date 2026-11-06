@@ -3,6 +3,7 @@ use genai::{
     resolver::{AuthData, Endpoint, ServiceTargetResolver},
     Client, ModelIden, ServiceTarget,
 };
+use itertools::Itertools;
 use tokio::sync::Mutex;
 
 use crate::{
@@ -43,7 +44,7 @@ pub enum ChatRole {
 
 pub struct AiTurnResult {
     pub answer: String,
-    pub usage: AiTurnUsage,
+    pub usage: Vec<AiTurnUsage>,
 }
 
 #[derive(Default)]
@@ -295,7 +296,8 @@ impl AiRuntime {
             .with_store(false);
         let options = ChatOptions::default().with_max_tokens(MAX_OUTPUT_TOKENS);
         let mut budget = crate::ai_tools::ToolBudget::new();
-        let mut usage = AiTurnUsage::default();
+        let mut usage: Vec<AiTurnUsage> = Vec::new();
+        let mut purpose = "initial request".to_owned();
         loop {
             let response = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
@@ -309,7 +311,7 @@ impl AiRuntime {
                     configuration.interaction_method
                 )
             })?;
-            usage.add(&response.usage);
+            usage.push(AiTurnUsage::from_genai_usage(&response.usage, &purpose));
 
             let tool_calls = response
                 .tool_calls()
@@ -344,6 +346,10 @@ impl AiRuntime {
             // All results must travel in one message: Anthropic-style APIs require every
             // tool_result for a turn in the single message after the tool_use turn.
             let mut responses = Vec::with_capacity(tool_calls.len());
+            purpose = format!(
+                "tool call(s) {}",
+                tool_calls.iter().map(|call| &call.fn_name).join(", ")
+            );
             for call in &tool_calls {
                 let result = match budget.take() {
                     Ok(()) => crate::ai_tools::execute(&self.game_state, call).await,
@@ -621,10 +627,10 @@ mod tests {
             server.abort();
 
             assert_eq!(result.answer, "pong");
-            assert_eq!(result.usage.request_count, 1);
-            assert_eq!(result.usage.prompt_tokens, Some(1));
-            assert_eq!(result.usage.completion_tokens, Some(1));
-            assert_eq!(result.usage.total_tokens(), Some(2));
+            assert_eq!(result.usage.len(), 1);
+            assert_eq!(result.usage[0].prompt_tokens, Some(1));
+            assert_eq!(result.usage[0].completion_tokens, Some(1));
+            assert_eq!(result.usage[0].total_tokens(), Some(2));
             assert_eq!(path, expected_path);
             assert_eq!(auth_header, expected_auth_header);
             assert!(authorization.contains("test-secret"));
@@ -691,10 +697,13 @@ mod tests {
         server.abort();
 
         assert_eq!(result.answer, "done");
-        assert_eq!(result.usage.request_count, 2);
-        assert_eq!(result.usage.prompt_tokens, Some(250));
-        assert_eq!(result.usage.completion_tokens, Some(30));
-        assert_eq!(result.usage.total_tokens(), Some(280));
+        assert!(result.usage.len() == 2);
+        assert_eq!(result.usage[0].prompt_tokens, Some(100));
+        assert_eq!(result.usage[0].completion_tokens, Some(10));
+        assert_eq!(result.usage[0].total_tokens(), Some(110));
+        assert_eq!(result.usage[1].prompt_tokens, Some(150));
+        assert_eq!(result.usage[1].completion_tokens, Some(20));
+        assert_eq!(result.usage[1].total_tokens(), Some(170));
         let messages = second_request["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 3, "{second_request}");
         let results = messages[2]["content"].as_array().unwrap();
@@ -768,10 +777,10 @@ mod tests {
         server.abort();
 
         assert_eq!(result.answer, "tool result received");
-        assert_eq!(result.usage.request_count, 2);
-        assert_eq!(result.usage.prompt_tokens, None);
-        assert_eq!(result.usage.completion_tokens, None);
-        assert_eq!(result.usage.total_tokens(), None);
+        assert_eq!(result.usage.len(), 2);
+        assert_eq!(result.usage[0].prompt_tokens, None);
+        assert_eq!(result.usage[0].completion_tokens, None);
+        assert_eq!(result.usage[0].total_tokens(), None);
         assert!(second_request
             .to_string()
             .contains("Unknown tool: unknown_test_tool"));

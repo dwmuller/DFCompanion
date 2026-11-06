@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use itertools::Itertools;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{sleep_until, Instant};
@@ -530,7 +531,7 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
                     });
                     state.notify(DisplayMessage::new(
                         DisplayMessageKind::AiUsage,
-                        result.usage.summary(),
+                        result.usage.iter().map(|u| u.summary()).join("\n"),
                     ));
                 }
                 if kind == TurnKind::Periodic || conversation.pending_user_messages.is_empty() {

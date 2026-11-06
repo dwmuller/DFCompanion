@@ -103,9 +103,14 @@ body {
   padding: 0.1rem 0.4rem;
 }
 
-[data-kind="game-event"],
+[data-kind="game-event"] {
+  color: #666;
+}
+
+
 [data-kind="ai-usage"] {
   color: #666;
+  font-family: monospace;
 }
 
 /* The filter checkboxes live in a popup; the list follows their state. */
