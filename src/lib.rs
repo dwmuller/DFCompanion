@@ -59,11 +59,10 @@ impl DisplayMessageKind {
         }
     }
 
-    pub fn transcript_label(self) -> Option<&'static str> {
+    pub fn is_markdown(self) -> bool {
         match self {
-            Self::User => Some("You"),
-            Self::Companion => Some("Companion"),
-            _ => None,
+            Self::User | Self::Companion => true,
+            _ => false,
         }
     }
 }
@@ -213,16 +212,14 @@ impl NotificationHistory {
         (backlog, self.live_tx.subscribe())
     }
 
-    pub fn conversation_markdown(&self) -> String {
+    pub fn display_history_markdown(&self) -> String {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner
             .entries
             .iter()
-            .filter_map(|(_, message)| {
-                message
-                    .kind
-                    .transcript_label()
-                    .map(|label| format!("**{label}:**\n\n{}", message.text))
+            .map(|(_, message)| {
+                let label = message.kind.label();
+                format!("**{label}:**\n\n{}", message.text)
             })
             .collect::<Vec<_>>()
             .join("\n\n")
@@ -591,8 +588,8 @@ mod tests {
         assert_eq!(backlog[2].1.kind, DisplayMessageKind::Diagnostic);
         assert_eq!(backlog[3].1.kind, DisplayMessageKind::Companion);
         assert_eq!(
-            state.history.conversation_markdown(),
-            "**You:**\n\nhello\n\n**Companion:**\n\n**hi**"
+            state.history.display_history_markdown(),
+            "**Status:**\n\nfirst\n\n**You:**\n\nhello\n\n**Diagnostic:**\n\n/tools\n\n**Companion:**\n\n**hi**"
         );
         state.notify(DisplayMessage::new(DisplayMessageKind::Warning, "third"));
         assert_eq!(
@@ -773,7 +770,7 @@ mod tests {
             .await
             .pending_user_messages
             .is_empty());
-        assert_eq!(state.history.conversation_markdown(), "");
+        assert_eq!(state.history.display_history_markdown(), "**Diagnostic:**\n\nTool no_such_tool result:\n{ \"error\": \"Unknown tool: no_such_tool\" }\n\n\n**Diagnostic:**\n\nUnknown chat command: /bogus");
         worker.abort();
     }
 

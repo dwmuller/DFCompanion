@@ -197,8 +197,8 @@ struct ConfigurationFormErrorTemplate {
 }
 
 pub fn render_notification(message: &DisplayMessage) -> Result<String, RenderError> {
-    let transcript_label = message.kind.transcript_label();
-    let body = if transcript_label.is_some() {
+    let is_markdown = message.kind.is_markdown();
+    let body = if is_markdown {
         markdown_to_safe_html(&message.text)
     } else {
         message.text.clone()
@@ -207,7 +207,7 @@ pub fn render_notification(message: &DisplayMessage) -> Result<String, RenderErr
         kind: message.kind.key(),
         label: message.kind.label(),
         body: &body,
-        markdown: transcript_label.is_some(),
+        markdown: is_markdown,
     }
     .render()?
     .trim()

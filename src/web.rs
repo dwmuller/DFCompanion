@@ -889,7 +889,7 @@ async fn copy_conversation(State(state): State<AppState>) -> Response {
             (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        state.history.conversation_markdown(),
+        state.history.display_history_markdown(),
     )
         .into_response()
 }
@@ -1060,7 +1060,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn conversation_markdown_endpoint_uses_only_user_and_companion_messages() {
+    async fn conversation_markdown_endpoint_uses_all_messages() {
         let (state, _) = AppState::new();
         for message in [
             DisplayMessage::new(DisplayMessageKind::User, "Question"),
@@ -1099,7 +1099,7 @@ mod test {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(
             String::from_utf8(body.to_vec()).unwrap(),
-            "**You:**\n\nQuestion\n\n**Companion:**\n\n**Answer**"
+            "**You:**\n\nQuestion\n\n**Game event:**\n\nArrival\n\n**Diagnostic:**\n\n/tools\n\n**AI usage:**\n\n2 requests\n\n**Status:**\n\nConnected\n\n**Warning:**\n\nHeads up\n\n**Companion:**\n\n**Answer**"
         );
     }
 
