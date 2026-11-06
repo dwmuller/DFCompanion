@@ -6,7 +6,8 @@ use genai::{
 use tokio::sync::Mutex;
 
 use crate::{
-    ai_config::{AiConfiguration, ConfigurationRepository}, ai_usage::{AiPromptTokenEstimates, AiTurnUsage},
+    ai_config::{AiConfiguration, ConfigurationRepository},
+    ai_usage::{AiPromptTokenEstimates, AiTurnUsage},
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -78,21 +79,27 @@ impl Conversation {
         dropped
     }
 
+    fn token_estimates(&self, system_text: &str) -> AiPromptTokenEstimates {
+        AiPromptTokenEstimates::new(
+            true,
+            system_text,
+            &self.pending_reports,
+            &self.pending_user_messages,
+            &self
+                .history
+                .iter()
+                .map(|h| h.content.clone())
+                .collect::<Vec<_>>(),
+        )
+    }
+
     pub fn build_prompt(&self, system_text: &str) -> Prompt {
         let mut history = self.history.clone();
         let mut reports = self.pending_reports.clone();
         let mut omitted_report_count = 0;
         let mut included_user_message_count = self.pending_user_messages.len();
 
-        let pre_trim_token_estimates = AiPromptTokenEstimates::new(
-            system_text,
-            &reports,
-            &self.pending_user_messages[..included_user_message_count],
-            &history
-                .iter()
-                .map(|h| h.content.clone())
-                .collect::<Vec<_>>(),
-        );
+        let pre_trim_token_estimates = self.token_estimates(system_text);
         let mut post_trim_token_estimates: Option<AiPromptTokenEstimates> = None;
 
         loop {
@@ -131,15 +138,7 @@ impl Conversation {
                     post_trim_token_estimates,
                 };
             }
-            post_trim_token_estimates = Some(AiPromptTokenEstimates::new(
-                system_text,
-                &reports,
-                &self.pending_user_messages[..included_user_message_count],
-                &history
-                    .iter()
-                    .map(|h| h.content.clone())
-                    .collect::<Vec<_>>(),
-            ));
+            post_trim_token_estimates = Some(self.token_estimates(system_text));
         }
     }
 
@@ -311,8 +310,6 @@ impl AiRuntime {
                 )
             })?;
             usage.add(&response.usage);
-            // Uncomment this line to examine AI usage data returned by genai.
-            //eprintln!("AI request #{} genai reported usage:\n{:#?}", usage.request_count, response.usage);
 
             let tool_calls = response
                 .tool_calls()

@@ -509,12 +509,12 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
         }
         state.notify(DisplayMessage::new(
             DisplayMessageKind::Diagnostic,
-            prompt.pre_trim_token_estimates.summary("pre-trim"),
+            prompt.pre_trim_token_estimates.summary(),
         ));
         if let Some(post_trim_token_estimates) = &prompt.post_trim_token_estimates {
             state.notify(DisplayMessage::new(
                 DisplayMessageKind::Diagnostic,
-                post_trim_token_estimates.summary("post-trim"),
+                post_trim_token_estimates.summary(),
             ));
         }
         match state.ai.complete(&configuration, &prompt).await {

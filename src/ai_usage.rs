@@ -1,9 +1,10 @@
+use crate::ai_tools::definitions;
 use genai::chat::Usage;
 use tokenx_rs::estimate_token_count;
-use crate::ai_tools::definitions;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AiPromptTokenEstimates {
+    pub pre_trim: bool,
     pub system_text_tokens: usize,
     pub reports_tokens: usize,
     pub user_messages_tokens: usize,
@@ -14,6 +15,7 @@ pub struct AiPromptTokenEstimates {
 
 impl AiPromptTokenEstimates {
     pub fn new(
+        pre_trim: bool,
         system_text: &str,
         reports: &[String],
         user_messages: &[String],
@@ -33,15 +35,24 @@ impl AiPromptTokenEstimates {
             .map(|hist| estimate_token_count(&hist))
             .sum::<usize>();
         let tools_tokens = definitions()
-                    .iter()
-                    .map(|def| {
-                        def.schema.as_ref().map_or(0,|s|  s.as_str().map_or(0, |s| estimate_token_count(s)))
-                        + def.description.as_ref().map_or(0, |d| estimate_token_count(&d))
-                    })
-        .sum();
-        let total_tokens =
-            system_text_tokens + reports_tokens + user_messages_tokens + history_tokens + tools_tokens;
+            .iter()
+            .map(|def| {
+                def.schema
+                    .as_ref()
+                    .map_or(0, |s| s.as_str().map_or(0, |s| estimate_token_count(s)))
+                    + def
+                        .description
+                        .as_ref()
+                        .map_or(0, |d| estimate_token_count(&d))
+            })
+            .sum();
+        let total_tokens = system_text_tokens
+            + reports_tokens
+            + user_messages_tokens
+            + history_tokens
+            + tools_tokens;
         AiPromptTokenEstimates {
+            pre_trim,
             system_text_tokens,
             reports_tokens,
             user_messages_tokens,
@@ -50,10 +61,10 @@ impl AiPromptTokenEstimates {
             total_tokens,
         }
     }
-    pub fn summary(&self, when: &str) -> String {
+    pub fn summary(&self) -> String {
         format!(
             "Prompt {} token estimates: system {}, reports {}, user {}, history {}, tools {}, total {}",
-            when,
+            if self.pre_trim { "pre-trim" } else { "post-trim" },
             self.system_text_tokens,
             self.reports_tokens,
             self.user_messages_tokens,
