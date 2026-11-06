@@ -19,8 +19,9 @@ records of human analyses to help understand how things flow.
 
 ### Details of loop in ai::Runtime::complete_with_key()
 
-Apparently, the OpenAI protocol requires that all the tool results be sent back
-in one chat request.
+For compatibility with Anthropic-style tool-use APIs, DFCompanion/genai collects
+all results from a batch of tool calls into the single tool-result message
+following the assistant's tool-use message.
 
 This is where much of the interaction with genai occurs.
 
@@ -38,4 +39,5 @@ This is where much of the interaction with genai occurs.
 - Tool outputs are not saved anywhere else -- they don't become part of the
   conversation history.
 
-Each tool call batch results in the chat request growing by one assistant message and all the responses.
+Each tool call batch results in the chat request growing by one assistant
+message and all the responses.
