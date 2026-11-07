@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_usage::{AiPromptTokenEstimates, AiTurnUsage},
+    diagnostics::write_ai_failure_dump,
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -325,22 +326,36 @@ impl AiRuntime {
                 .collect::<Vec<_>>();
             if tool_calls.is_empty() {
                 let stop_reason = response.stop_reason.clone();
-                let answer = response
-                    .into_first_text()
+                let mut answer = response
+                    .texts()
+                    .iter()
                     .filter(|text| !text.trim().is_empty())
-                    .ok_or_else(|| {
-                        format!(
-                            "{} returned no text response (stop reason: {}).",
-                            configuration.interaction_method,
-                            stop_reason
-                                .map_or("unknown".to_owned(), |reason| format!("{reason:?}"))
-                        )
-                    })?;
+                    .join("\n\n");
+                if answer.is_empty() {
+                    answer = format!(
+                        "{} returned no text response (stop reason: {}).\n\n",
+                        configuration.interaction_method,
+                        stop_reason.map_or("unknown".to_owned(), |reason| format!("{reason:?}"))
+                    );
+                    let dump_msg = match write_ai_failure_dump(
+                        "No text response",
+                        configuration.interaction_method.as_str(),
+                        &configuration.model_id,
+                        &request,
+                        &response,
+                    ) {
+                        Ok(path) => format!("AI failure dump written to: {}", path.display()),
+                        Err(error) => format!("Failed to write AI failure dump: {}", error),
+                    };
+                    answer.push_str(&dump_msg);
+                }
                 return Ok(AiTurnResult {
                     answer: answer,
                     usage: usage,
                 });
             }
+
+            // If we get here, there are tool calls to handle.
             let assistant_message =
                 response
                     .into_assistant_message_for_tool_use()

@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use directories::ProjectDirs;
 use itertools::Itertools;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
@@ -12,6 +13,7 @@ pub mod ai_providers;
 pub mod ai_tools;
 pub mod ai_usage;
 pub mod chat_commands;
+pub mod diagnostics;
 pub mod game_state;
 
 pub mod api {
@@ -22,6 +24,11 @@ pub mod web;
 pub mod web_templates;
 
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
+
+pub fn project_dir() -> ProjectDirs {
+    ProjectDirs::from("org", "DFCompanion", "DFCompanion")
+        .expect("Could not locate the per-user project directory.")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayMessageKind {
