@@ -1,6 +1,5 @@
 # AI interactions wish-list
 
-- Increase MAX_OUTPUT_TOKENS to 8192 (at least).
 - Add diagnostic warning when estimated request tokens is getting large (50k to
   100k range).
 - Move configuration data files to semi-standard "config" directory.

@@ -2,7 +2,6 @@
 
 ## Main page UI improvements
 
-- Move prompt-based estimates to "AI Usage" category.
 - Define and display chat state.
   - Idle, Processing, Blocked
   - Enter Blocked state when there's any failure to process AI input (not just
