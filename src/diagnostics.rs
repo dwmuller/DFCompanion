@@ -14,8 +14,7 @@ pub fn write_ai_failure_dump(
     fs::create_dir_all(&dir)?;
 
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S%.3f");
-    let path = dir
-        .join(format!("ai-failure-{timestamp}.txt"));
+    let path = dir.join(format!("ai-failure-{timestamp}.txt"));
 
     let mut dump = String::new();
 

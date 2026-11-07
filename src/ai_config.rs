@@ -132,11 +132,7 @@ impl ConfigurationRepository {
     }
 
     pub fn load_default() -> Result<Self, String> {
-        Self::load(
-            project_dir()
-                .data_local_dir()
-                .join(CONFIG_FILE_NAME),
-        )
+        Self::load(project_dir().data_local_dir().join(CONFIG_FILE_NAME))
     }
 
     fn load(path: PathBuf) -> Result<Self, String> {

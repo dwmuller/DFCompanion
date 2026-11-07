@@ -513,12 +513,12 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
             ));
         }
         state.notify(DisplayMessage::new(
-            DisplayMessageKind::Diagnostic,
+            DisplayMessageKind::AiUsage,
             prompt.pre_trim_token_estimates.summary(),
         ));
         if let Some(post_trim_token_estimates) = &prompt.post_trim_token_estimates {
             state.notify(DisplayMessage::new(
-                DisplayMessageKind::Diagnostic,
+                DisplayMessageKind::AiUsage,
                 post_trim_token_estimates.summary(),
             ));
         }
