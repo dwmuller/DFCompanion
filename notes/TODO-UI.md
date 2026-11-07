@@ -1,17 +1,14 @@
 # UI improvements wish list
 
-## Pure UI improvements
+## Main page UI improvements
 
-- Highlight start of user request vs AI response in conversation control.
-  - Needs a better visual indicator.
+- Move prompt-based estimates to "AI Usage" category.
 - Might want more categories of notifications, perhaps explicitly shown in
   conversation window.
   - Particularly want to be able to distinguish "system" msgs, of which I want
     more, from actual back-and-forth with AI.
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
-- Arrange config mgmt list as a table.
-  - Open forms will probably span all columns.
 - Do some styling to get away from the drear black and white.
 
 ## Usability improvements for AI config
@@ -26,3 +23,5 @@
   - If global system text is used, this is appended to it; otherwise only this
   per-config text is sent.
   - May be empty if not needed.
+- Arrange config mgmt list as a table.
+  - Open forms will probably span all columns.

@@ -41,3 +41,37 @@ This is where much of the interaction with genai occurs.
 
 Each tool call batch results in the chat request growing by one assistant
 message and all the responses.
+
+### Chat growth
+
+Instrumentation of failures due to violation of MAX_OUTPUT_TOKENS led to the
+discovery of two related problems: intermediate reasoning could consume the
+entire output allowance, while repeated tool calls and their results could cause
+very large within-turn growth of the input context. One failure involved an
+initial request that engendered five tool-call batches:
+
+```
+Tokens for initial request:
+   17000 est,  19078 input (  5760 [30%] cached,      0 cache creation),    358 output,   19436 total [114%]
+Tokens for tool call(s) list_locations, get_fortress_overview:
+   18129 est,  19985 input ( 19328 [96%] cached,      0 cache creation),    460 output,   20445 total [112%]
+Tokens for tool call(s) list_residents, list_residents, list_residents:
+   28578 est,  29868 input ( 20352 [68%] cached,      0 cache creation),   1540 output,   31408 total [109%]
+Tokens for tool call(s) get_unit_details, get_unit_details, get_unit_details, get_unit_details, get_unit_details, get_unit_details:
+   99335 est,  89806 input ( 31360 [34%] cached,      0 cache creation),   1429 output,   91235 total [91%]
+Tokens for tool call(s) get_unit_details, get_unit_details, get_unit_details, get_unit_details, get_unit_details, list_zones:
+  148375 est, 130703 input ( 91136 [69%] cached,      0 cache creation),   3828 output,  134531 total [90%]
+Tokens for tool call(s) get_unit_details, get_unit_details:
+  157366 est, 139507 input (134528 [96%] cached,      0 cache creation),   4096 output,  143603 total [91%]
+```
+
+By far most of the growth in input tokens was caused by accumulated
+tool-call/result context. In the final request, the AI then consumed the entire
+4,096-token output allowance in intermediate reasoning without reaching a final
+text response.
+
+The excessive tool activity seems to have been caused at least in part by a lack
+of tools suitable to the task the AI was working on. In particular, it
+repeatedly called get_unit_details to infer religious affiliation from indirect
+data because explicit religion/sect membership was not available through the
+tools.
