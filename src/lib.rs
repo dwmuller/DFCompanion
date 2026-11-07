@@ -21,7 +21,6 @@ pub mod api {
 }
 pub mod rpc;
 pub mod web;
-pub mod web_templates;
 
 pub const EVENT_QUEUE_CAPACITY: usize = 50;
 
@@ -344,8 +343,7 @@ pub fn run_companion_worker(
                             .conversation
                             .lock()
                             .await
-                            .pending_user_messages
-                            .push(ORIENT_MESSAGE.to_owned());
+                            .push_user_message(ORIENT_MESSAGE.to_owned());
                         suspended = !try_ai_turn(&state, TurnKind::Player).await;
                         flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -356,13 +354,7 @@ pub fn run_companion_worker(
                         run_chat_command(&state, command).await;
                         continue;
                     }
-                    state
-                        .ai
-                        .conversation
-                        .lock()
-                        .await
-                        .pending_user_messages
-                        .push(text);
+                    state.ai.conversation.lock().await.push_user_message(text);
                     suspended = !try_ai_turn(&state, TurnKind::Player).await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -494,7 +486,7 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
         }
     };
     let mut conversation = state.ai.conversation.lock().await;
-    if kind != TurnKind::Periodic && conversation.pending_user_messages.is_empty() {
+    if kind != TurnKind::Periodic && conversation.pending_user_message_count() == 0 {
         state.notify(DisplayMessage::new(
             DisplayMessageKind::Status,
             "There is no failed AI request to retry.",
@@ -538,7 +530,7 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
                         result.usage.iter().map(|u| u.summary()).join("\n"),
                     ));
                 }
-                if kind == TurnKind::Periodic || conversation.pending_user_messages.is_empty() {
+                if kind == TurnKind::Periodic || conversation.pending_user_message_count() == 0 {
                     return true;
                 }
             }
@@ -770,13 +762,15 @@ mod tests {
             error.text.contains("Unknown chat command: /bogus"),
             "{error:?}"
         );
-        assert!(state
-            .ai
-            .conversation
-            .lock()
-            .await
-            .pending_user_messages
-            .is_empty());
+        assert!(
+            state
+                .ai
+                .conversation
+                .lock()
+                .await
+                .pending_user_message_count()
+                == 0
+        );
         assert_eq!(state.history.display_history_markdown(), "**Diagnostic:**\n\nTool no_such_tool result:\n{ \"error\": \"Unknown tool: no_such_tool\" }\n\n\n**Diagnostic:**\n\nUnknown chat command: /bogus");
         worker.abort();
     }
@@ -992,11 +986,8 @@ mod tests {
         let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
         assert!(failure.text.contains("AI request failed"));
         let conversation = state.ai.conversation.lock().await;
-        assert_eq!(conversation.pending_reports.len(), 1);
-        assert_eq!(
-            conversation.pending_user_messages,
-            vec!["What happened?".to_owned()]
-        );
+        assert_eq!(conversation.pending_report_count(), 1);
+        assert_eq!(conversation.pending_user_message_count(), 1);
         drop(conversation);
         worker.abort();
     }
@@ -1049,7 +1040,7 @@ mod tests {
         // Automatic turns stay paused after the failure, however long we wait.
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
-        assert_eq!(state.ai.conversation.lock().await.pending_reports.len(), 1);
+        assert_eq!(state.ai.conversation.lock().await.pending_report_count(), 1);
         worker.abort();
     }
 

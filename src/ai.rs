@@ -32,13 +32,13 @@ pub fn is_no_comment(answer: &str) -> bool {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
+struct ChatMessage {
+    role: ChatRole,
+    content: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ChatRole {
+enum ChatRole {
     User,
     Assistant,
 }
@@ -50,22 +50,28 @@ pub struct AiTurnResult {
 
 #[derive(Default)]
 pub struct Conversation {
-    pub history: Vec<ChatMessage>,
-    pub pending_reports: Vec<String>,
-    pub pending_user_messages: Vec<String>,
+    history: Vec<ChatMessage>,
+    pending_reports: Vec<String>,
+    pending_user_messages: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Prompt {
-    pub history: Vec<ChatMessage>,
-    pub current_user_content: String,
+    history: Vec<ChatMessage>,
+    current_user_content: String,
+    included_user_message_count: usize,
     pub omitted_report_count: usize,
-    pub included_user_message_count: usize,
     pub pre_trim_token_estimates: AiPromptTokenEstimates,
     pub post_trim_token_estimates: Option<AiPromptTokenEstimates>,
 }
 
 impl Conversation {
+    pub fn pending_report_count(&self) -> usize {
+        self.pending_reports.len()
+    }
+    pub fn pending_user_message_count(&self) -> usize {
+        self.pending_user_messages.len()
+    }
     pub fn push_report(&mut self, report: String) -> usize {
         self.pending_reports.push(report);
         let mut dropped = 0;
@@ -79,6 +85,10 @@ impl Conversation {
             dropped += 1;
         }
         dropped
+    }
+
+    pub fn push_user_message(&mut self, message: String) {
+        self.pending_user_messages.push(message);
     }
 
     fn token_estimates(&self, system_text: &str) -> AiPromptTokenEstimates {
