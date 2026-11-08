@@ -4,12 +4,14 @@ use genai::{
     Client, ModelIden, ServiceTarget,
 };
 use itertools::Itertools;
+use tokenx_rs::estimate_token_count;
 use tokio::sync::Mutex;
 
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_usage::{AiPromptTokenEstimates, AiTurnUsage},
     diagnostics::write_ai_failure_dump,
+    GameEvent,
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -22,7 +24,9 @@ pub const DEFAULT_SYSTEM_TEXT: &str = "You are a concise Dwarf Fortress companio
 /// automatic check.
 pub const NO_COMMENT: &str = "NO_COMMENT";
 
+const REQUESTS_PREFIX: &str = "Player messages:\n";
 const PERIODIC_PROMPT: &str = "No player message. This is an automatic periodic check while the game runs. Use the read-only game-state tools if that helps you notice a problem or development the player should know about. Speak to the player only about something important and new; otherwise reply with exactly NO_COMMENT and nothing else.";
+const REPORT_PENDING_MSG: &str =  "There are also one or more messages from the player queued which will be sent shortly.\n";
 
 pub fn is_no_comment(answer: &str) -> bool {
     answer
@@ -48,123 +52,119 @@ pub struct AiTurnResult {
     pub usage: Vec<AiTurnUsage>,
 }
 
+enum AiInput {
+    UserRequest {
+        text: String,
+    },
+    GameReport {
+        event: GameEvent,
+    }
+}
+
 #[derive(Default)]
 pub struct Conversation {
     history: Vec<ChatMessage>,
-    pending_reports: Vec<String>,
-    pending_user_messages: Vec<String>,
+    pending_input: Vec<AiInput>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Prompt {
     history: Vec<ChatMessage>,
     current_user_content: String,
-    included_user_message_count: usize,
-    pub omitted_report_count: usize,
-    pub pre_trim_token_estimates: AiPromptTokenEstimates,
-    pub post_trim_token_estimates: Option<AiPromptTokenEstimates>,
+    include_in_history: bool,
+    included_inputs: usize,
+    token_estimates: AiPromptTokenEstimates,
 }
 
 impl Conversation {
     pub fn pending_report_count(&self) -> usize {
-        self.pending_reports.len()
+        self.pending_input.iter().filter(|i| matches!(i, AiInput::GameReport { .. })).count()
     }
     pub fn pending_user_message_count(&self) -> usize {
-        self.pending_user_messages.len()
+        self.pending_input.iter().filter(|i| matches!(i, AiInput::UserRequest { .. })).count()
     }
-    pub fn push_report(&mut self, report: String) -> usize {
-        self.pending_reports.push(report);
-        let mut dropped = 0;
-        while estimate_prompt_tokens(
-            &[],
-            &format_prompt_content(&self.pending_reports, ""),
-            DEFAULT_SYSTEM_TEXT,
-        ) > MAX_INPUT_TOKENS
-        {
-            self.pending_reports.remove(0);
-            dropped += 1;
-        }
-        dropped
+    pub fn push_report(&mut self, event: GameEvent) {
+        self.pending_input.push(AiInput::GameReport { event: event });
     }
 
-    pub fn push_user_message(&mut self, message: String) {
-        self.pending_user_messages.push(message);
+    pub fn push_user_message(&mut self, message: &str) {
+        self.pending_input.push(AiInput::UserRequest { text: message.to_owned() });
     }
 
-    fn token_estimates(&self, system_text: &str) -> AiPromptTokenEstimates {
-        AiPromptTokenEstimates::new(
-            true,
-            system_text,
-            &self.pending_reports,
-            &self.pending_user_messages,
-            &self
-                .history
-                .iter()
-                .map(|h| h.content.clone())
-                .collect::<Vec<_>>(),
-        )
-    }
+    pub fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
+        let mut current_user_content = REQUESTS_PREFIX.to_string();
+        let mut input_token_estimate :usize = estimate_token_count(REQUESTS_PREFIX);
+        let mut include_in_history = true;
 
-    pub fn build_prompt(&self, system_text: &str) -> Prompt {
-        let mut history = self.history.clone();
-        let mut reports = self.pending_reports.clone();
-        let mut omitted_report_count = 0;
-        let mut included_user_message_count = self.pending_user_messages.len();
-
-        let pre_trim_token_estimates = self.token_estimates(system_text);
-        let mut post_trim_token_estimates: Option<AiPromptTokenEstimates> = None;
-
-        loop {
-            let player_messages =
-                self.pending_user_messages[..included_user_message_count].join("\n");
-            let current_user_content = format_prompt_content(&reports, &player_messages);
-            if estimate_prompt_tokens(&history, &current_user_content, system_text)
-                <= MAX_INPUT_TOKENS
-            {
-                return Prompt {
-                    history,
-                    current_user_content,
-                    omitted_report_count,
-                    included_user_message_count,
-                    pre_trim_token_estimates,
-                    post_trim_token_estimates,
-                };
+        let requests = self.pending_input.iter().take_while(|&i| {
+            if let AiInput::UserRequest { text } = i {
+                current_user_content.push_str("\n");
+                current_user_content.push_str(&text);
+                let n = estimate_token_count(&current_user_content);
+                if MAX_INPUT_TOKENS > n {
+                    input_token_estimate += n;
+                    return true;
+                }
+                else {
+                    current_user_content.truncate(current_user_content.len() - text.len() - 1); // remove the last added text and newline
+                    return false;
+                }
             }
-
-            // Prompt would exceed the token limit, so we need to trim it. We do
-            // so in a particular order until it's small enough.
-            if !reports.is_empty() {
-                reports.remove(0);
-                omitted_report_count += 1;
-            } else if history.len() >= 2 {
-                history.drain(0..2);
-            } else if included_user_message_count > 1 {
-                included_user_message_count -= 1;
-            } else {
-                return Prompt {
-                    history,
-                    current_user_content,
-                    omitted_report_count,
-                    included_user_message_count,
-                    pre_trim_token_estimates,
-                    post_trim_token_estimates,
-                };
+            false
+        }).collect::<Vec<_>>();
+        let mut included_inputs = requests.len();
+        if included_inputs == 0 {
+            current_user_content = PERIODIC_PROMPT.to_string();
+            if self.pending_input.iter().find(|i| matches!(i, AiInput::UserRequest { .. })).is_some() {
+                current_user_content.push_str(REPORT_PENDING_MSG);
             }
-            post_trim_token_estimates = Some(self.token_estimates(system_text));
+            input_token_estimate = estimate_token_count(&current_user_content);
+            include_in_history = false;
+            let reports = self.pending_input.iter().take_while(|&i| {
+                if let AiInput::GameReport { event } = i {
+                    let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
+                    current_user_content.push_str("\n");
+                    current_user_content.push_str(&line);
+                    let n = estimate_token_count(&current_user_content);
+                    if MAX_INPUT_TOKENS > n {
+                        input_token_estimate += n;
+                        return true;
+                    } else
+                    {
+                        current_user_content.truncate(current_user_content.len() - line.len() - 1); // remove the last added line and newline
+                        return false;
+                    }
+                }
+                false
+            }).collect::<Vec<_>>();
+            included_inputs = reports.len();
         }
+        if included_inputs == 0 {
+            return None;
+        }
+        let token_estimates = AiPromptTokenEstimates::new(&system_text, &current_user_content, self.history.iter().map(|m| &m.content));
+        return Some(Prompt {
+            history: self.history.clone(),
+            current_user_content,
+            include_in_history,
+            included_inputs,
+            token_estimates,
+        });
     }
 
+    /// Completes a prompt by adding the user's input and the AI's answer to the conversation history.
+    /// Note that this *must* be the prompt most recently returned by `build_prompt`.
     pub fn complete(&mut self, prompt: Prompt, answer: String) {
         let Prompt {
             history,
             current_user_content,
-            included_user_message_count,
+            include_in_history,
+            included_inputs,
             ..
         } = prompt;
+        self.pending_input.drain(..included_inputs);
         // An uneventful periodic check leaves no trace in the history.
-        if included_user_message_count == 0
-            && self.pending_reports.is_empty()
-            && is_no_comment(&answer)
+        if !include_in_history && is_no_comment(&answer)
         {
             return;
         }
@@ -181,45 +181,13 @@ impl Conversation {
             let excess = self.history.len() - MAX_HISTORY_MESSAGES;
             self.history.drain(0..excess);
         }
-        self.pending_reports.clear();
-        self.pending_user_messages
-            .drain(0..included_user_message_count);
     }
 }
 
-fn format_prompt_content(reports: &[String], player_messages: &str) -> String {
-    let mut content = String::new();
-    if !reports.is_empty() {
-        content.push_str("Fortress reports received since the previous answer:\n");
-        for report in reports {
-            content.push_str("- ");
-            content.push_str(report);
-            content.push('\n');
-        }
+impl Prompt {
+    pub fn token_estimates_summary(&self) -> String {
+        "Estimated prompt tokens: ".to_string() + &self.token_estimates.summary()
     }
-    if player_messages.is_empty() {
-        content.push('\n');
-        content.push_str(PERIODIC_PROMPT);
-    } else {
-        content.push_str("\nPlayer message(s):\n");
-        content.push_str(player_messages);
-    }
-    content
-}
-
-fn estimate_prompt_tokens(
-    history: &[ChatMessage],
-    current_user_content: &str,
-    system_text: &str,
-) -> usize {
-    let text_size = system_text.len()
-        + history
-            .iter()
-            .map(|message| message.content.len())
-            .sum::<usize>()
-        + current_user_content.len();
-    let message_overhead = history.len().saturating_add(1).saturating_mul(8);
-    text_size.saturating_add(2) / 3 + message_overhead
 }
 
 pub struct AiRuntime {
@@ -471,76 +439,46 @@ mod tests {
         (format!("http://{address}/v1/"), requests_rx, task)
     }
 
-    #[test]
-    fn conversation_drops_old_reports_before_older_chat_history() {
-        let mut conversation = Conversation::default();
-        conversation.history = vec![
-            ChatMessage {
-                role: ChatRole::User,
-                content: "old conversation ".repeat(50_000),
-            },
-            ChatMessage {
-                role: ChatRole::Assistant,
-                content: "old answer ".repeat(50_000),
-            },
-        ];
-        conversation.pending_reports = vec!["recent report".to_owned()];
-        conversation.pending_user_messages = vec!["What happened?".to_owned()];
-
-        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT);
-
-        assert_eq!(prompt.omitted_report_count, 1);
-        assert!(prompt.history.is_empty());
-        assert!(prompt.current_user_content.contains("What happened?"));
-        assert!(
-            estimate_prompt_tokens(
-                &prompt.history,
-                &prompt.current_user_content,
-                DEFAULT_SYSTEM_TEXT
-            ) <= MAX_INPUT_TOKENS
-        );
+    fn build_game_event(id: i64, text: &str) -> GameEvent {
+        GameEvent { id: Some(id), date: "date".to_owned(), report_type: None, category: "test".to_owned(), text: text.to_owned() }
     }
 
     #[test]
-    fn successful_turn_is_bounded_and_clears_pending_context() {
+    fn successful_chat_completion_clears_pending_inputs_of_same_type() {
         let mut conversation = Conversation::default();
-        conversation.pending_reports.push("report".to_owned());
-        conversation
-            .pending_user_messages
-            .push("question".to_owned());
-        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT);
+        conversation.push_report(build_game_event(1, "just testing"));
+        conversation.push_user_message("question");
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
         conversation.complete(prompt, "answer".to_owned());
 
-        assert!(conversation.pending_reports.is_empty());
-        assert!(conversation.pending_user_messages.is_empty());
+        assert_eq!(conversation.pending_input.len(), 1);
         assert_eq!(conversation.history.len(), 2);
     }
 
     #[test]
     fn periodic_turn_without_a_player_message_asks_for_no_comment_when_idle() {
         let mut conversation = Conversation::default();
-        conversation.pending_reports.push("a report".to_owned());
-        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT);
+        conversation.push_report(build_game_event(1, "a report"));
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
-        assert_eq!(prompt.included_user_message_count, 0);
+        assert_eq!(prompt.included_inputs, 1);
         assert!(prompt.current_user_content.contains("a report"));
         assert!(prompt.current_user_content.contains(NO_COMMENT));
         assert!(!prompt.current_user_content.contains("Player message"));
     }
 
     #[test]
-    fn uneventful_periodic_turn_leaves_no_history_but_one_with_reports_does() {
+    fn report_then_no_comment_does_not_add_history() {
         let mut conversation = Conversation::default();
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT);
-        conversation.complete(prompt, " NO_COMMENT. ".to_owned());
-        assert!(conversation.history.is_empty());
+        assert!(prompt.is_none());
 
-        conversation.pending_reports.push("a report".to_owned());
-        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT);
+        conversation.push_report(build_game_event(1, "a report"));
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
         conversation.complete(prompt, NO_COMMENT.to_owned());
-        assert_eq!(conversation.history.len(), 2);
-        assert!(conversation.pending_reports.is_empty());
+        assert_eq!(conversation.history.len(), 0);
+        assert!(conversation.pending_input.is_empty());
     }
 
     #[test]
@@ -549,25 +487,6 @@ mod tests {
         assert!(is_no_comment("  no_comment.\n"));
         assert!(!is_no_comment("NO_COMMENT, but the dwarves are starving"));
         assert!(!is_no_comment("The drink is low."));
-    }
-
-    #[test]
-    fn pending_reports_are_bounded_before_a_player_turn() {
-        let mut conversation = Conversation::default();
-        let dropped = conversation.push_report("old report ".repeat(15_000));
-        let following_dropped = conversation.push_report("latest report".to_owned());
-
-        assert_eq!(dropped, 1);
-        assert_eq!(following_dropped, 0);
-        assert_eq!(conversation.pending_reports, vec!["latest report"]);
-    }
-
-    #[test]
-    fn prompt_budget_accounts_for_user_system_text() {
-        assert!(
-            estimate_prompt_tokens(&[], "question", &"large system text ".repeat(3_000))
-                > estimate_prompt_tokens(&[], "question", "short")
-        );
     }
 
     #[tokio::test]
@@ -580,10 +499,9 @@ mod tests {
         let prompt = Prompt {
             history: Vec::new(),
             current_user_content: "Hello.".to_owned(),
-            omitted_report_count: 0,
-            included_user_message_count: 1,
-            pre_trim_token_estimates: AiPromptTokenEstimates::default(),
-            post_trim_token_estimates: None,
+            include_in_history: true,
+            included_inputs: 1,
+            token_estimates: AiPromptTokenEstimates::default(),
         };
         let responses = [
             (
@@ -712,10 +630,9 @@ mod tests {
         let prompt = Prompt {
             history: Vec::new(),
             current_user_content: "Use tools.".to_owned(),
-            omitted_report_count: 0,
-            included_user_message_count: 1,
-            pre_trim_token_estimates: AiPromptTokenEstimates::default(),
-            post_trim_token_estimates: None,
+            include_in_history: true,
+            included_inputs: 1,
+            token_estimates: AiPromptTokenEstimates::default(),
         };
 
         let result = runtime
@@ -792,10 +709,9 @@ mod tests {
         let prompt = Prompt {
             history: Vec::new(),
             current_user_content: "Use a tool.".to_owned(),
-            omitted_report_count: 0,
-            included_user_message_count: 1,
-            pre_trim_token_estimates: AiPromptTokenEstimates::default(),
-            post_trim_token_estimates: None,
+            include_in_history: true,
+            included_inputs: 1,
+            token_estimates: AiPromptTokenEstimates::default(),
         };
 
         let result = runtime

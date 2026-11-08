@@ -343,7 +343,7 @@ pub fn run_companion_worker(
                             .conversation
                             .lock()
                             .await
-                            .push_user_message(ORIENT_MESSAGE.to_owned());
+                            .push_user_message(ORIENT_MESSAGE);
                         suspended = !try_ai_turn(&state, TurnKind::Player).await;
                         flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -354,26 +354,17 @@ pub fn run_companion_worker(
                         run_chat_command(&state, command).await;
                         continue;
                     }
-                    state.ai.conversation.lock().await.push_user_message(text);
+                    state.ai.conversation.lock().await.push_user_message(&text);
                     suspended = !try_ai_turn(&state, TurnKind::Player).await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
                 Wake::Item(QueueItem::GameEvent(event)) => {
-                    let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
-                    let dropped_reports = state.ai.conversation.lock().await.push_report(line);
-                    if dropped_reports > 0 {
-                        state.notify(DisplayMessage::new(
-                            DisplayMessageKind::Warning,
-                            format!(
-                                "{dropped_reports} oldest pending report(s) were discarded to keep the AI context within its input limit."
-                            ),
-                        ));
-                    }
                     state.notify(DisplayMessage::new(
                         DisplayMessageKind::GameEvent,
                         format!("{} [{}] {}", event.date, event.category, event.text),
                     ));
+                    state.ai.conversation.lock().await.push_report(event);
                     flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
                 }
                 Wake::Flush => {
@@ -493,27 +484,11 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
         ));
         return true;
     }
-    loop {
-        let prompt = conversation.build_prompt(&configuration.system_text);
-        if prompt.omitted_report_count > 0 {
-            state.notify(DisplayMessage::new(
-                DisplayMessageKind::Warning,
-                format!(
-                    "{} oldest pending report(s) were left out to fit the AI context limit.",
-                    prompt.omitted_report_count
-                ),
-            ));
-        }
+    while let Some(prompt) = conversation.build_prompt(&configuration.system_text) {
         state.notify(DisplayMessage::new(
             DisplayMessageKind::AiUsage,
-            prompt.pre_trim_token_estimates.summary(),
+            prompt.token_estimates_summary(),
         ));
-        if let Some(post_trim_token_estimates) = &prompt.post_trim_token_estimates {
-            state.notify(DisplayMessage::new(
-                DisplayMessageKind::AiUsage,
-                post_trim_token_estimates.summary(),
-            ));
-        }
         match state.ai.complete(&configuration, &prompt).await {
             Ok(result) => {
                 let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&result.answer);
@@ -545,6 +520,7 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
             }
         }
     }
+    return true;
 }
 
 #[cfg(test)]

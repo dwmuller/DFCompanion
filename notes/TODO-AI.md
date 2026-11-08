@@ -2,6 +2,10 @@
 
 - Add diagnostic warning when estimated request tokens is getting large (50k to
   100k range).
+- Game event notifications eliciting a "no comment" response do not add to
+  history. Consider whether they should.
+  - Maybe give the AI a way to reply with history additions but no message to
+    user, as a way to remember for later consideration.
 - Move configuration data files to semi-standard "config" directory.
     - See "directories" crate.
 - Auto-compaction of context to limit growth.

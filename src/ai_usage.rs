@@ -4,34 +4,22 @@ use tokenx_rs::estimate_token_count;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AiPromptTokenEstimates {
-    pub pre_trim: bool,
     pub system_text_tokens: usize,
-    pub reports_tokens: usize,
-    pub user_messages_tokens: usize,
+    pub content_tokens: usize,
     pub history_tokens: usize,
     pub tools_tokens: usize,
     pub total_tokens: usize,
 }
 
 impl AiPromptTokenEstimates {
-    pub fn new(
-        pre_trim: bool,
+    pub fn new<'a>(
         system_text: &str,
-        reports: &[String],
-        user_messages: &[String],
-        history: &[String],
+        content: &str,
+        history: impl Iterator<Item = &'a String>,
     ) -> Self {
         let system_text_tokens = estimate_token_count(system_text);
-        let reports_tokens = reports
-            .iter()
-            .map(|r| estimate_token_count(&r))
-            .sum::<usize>();
-        let user_messages_tokens = user_messages
-            .iter()
-            .map(|m| estimate_token_count(&m))
-            .sum::<usize>();
+        let content_tokens = estimate_token_count(content);
         let history_tokens = history
-            .iter()
             .map(|hist| estimate_token_count(&hist))
             .sum::<usize>();
         let tools_tokens = definitions()
@@ -47,27 +35,25 @@ impl AiPromptTokenEstimates {
             })
             .sum();
         let total_tokens = system_text_tokens
-            + reports_tokens
-            + user_messages_tokens
+            + content_tokens
             + history_tokens
             + tools_tokens;
         AiPromptTokenEstimates {
-            pre_trim,
             system_text_tokens,
-            reports_tokens,
-            user_messages_tokens,
+            content_tokens,
             history_tokens,
             tools_tokens,
             total_tokens,
         }
     }
+
+    /// Returns a single-line summary of the token estimates.
+    /// Needs an explanatory prefix before display.
     pub fn summary(&self) -> String {
         format!(
-            "Prompt {} token estimates: system {}, reports {}, user {}, history {}, tools {}, total {}",
-            if self.pre_trim { "pre-trim" } else { "post-trim" },
+            "system {}, content {}, history {}, tools {}, total {}",
             self.system_text_tokens,
-            self.reports_tokens,
-            self.user_messages_tokens,
+            self.content_tokens,
             self.history_tokens,
             self.tools_tokens,
             self.total_tokens
@@ -144,7 +130,7 @@ impl AiTurnUsage {
 
     pub(crate) fn summary(&self) -> String {
         format!(
-            "Tokens for {}:\n  {:>6} est, {:>6} input ({:>6} [{:>2}%] cached, {:>6} cache creation), {:>6} output, {:>7} total [{}%]",
+            "Tokens for {}:\n  {:>6} est, {:>6} input ({:>6} [{:>2}%] cached, {:>6} cache creation), {:>6} output, {:>7} total [{:>3}%]",
             self.purpose,
             self.estimated_prompt_tokens,
             self.prompt_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
