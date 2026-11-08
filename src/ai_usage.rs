@@ -1,5 +1,5 @@
 use crate::ai_tools::definitions;
-use genai::chat::{ChatRequest, ContentPart, Usage};
+use genai::chat::Usage;
 use tokenx_rs::estimate_token_count;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -11,54 +11,19 @@ pub struct AiPromptTokenEstimates {
     pub total_tokens: usize,
 }
 
-impl AiPromptTokenEstimates {
-    pub fn new<'a>(
-        system_text: &str,
-        content: &str,
-        history: impl Iterator<Item = &'a String>,
-    ) -> Self {
-        let system_text_tokens = estimate_token_count(system_text);
-        let content_tokens = estimate_token_count(content);
-        let history_tokens = history
-            .map(|hist| estimate_token_count(&hist))
-            .sum::<usize>();
-        let tools_tokens = definitions()
-            .iter()
-            .map(|def| {
-                def.schema
+pub fn tools_tokens_estimate() -> usize {
+    definitions()
+        .iter()
+        .map(|def| {
+            def.schema
+                .as_ref()
+                .map_or(0, |s| s.as_str().map_or(0, |s| estimate_token_count(s)))
+                + def
+                    .description
                     .as_ref()
-                    .map_or(0, |s| s.as_str().map_or(0, |s| estimate_token_count(s)))
-                    + def
-                        .description
-                        .as_ref()
-                        .map_or(0, |d| estimate_token_count(&d))
-            })
-            .sum();
-        let total_tokens = system_text_tokens
-            + content_tokens
-            + history_tokens
-            + tools_tokens;
-        AiPromptTokenEstimates {
-            system_text_tokens,
-            content_tokens,
-            history_tokens,
-            tools_tokens,
-            total_tokens,
-        }
-    }
-
-    /// Returns a single-line summary of the token estimates.
-    /// Needs an explanatory prefix before display.
-    pub fn summary(&self) -> String {
-        format!(
-            "system {}, content {}, history {}, tools {}, total {}",
-            self.system_text_tokens,
-            self.content_tokens,
-            self.history_tokens,
-            self.tools_tokens,
-            self.total_tokens
-        )
-    }
+                    .map_or(0, |d| estimate_token_count(&d))
+        })
+        .sum::<usize>()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,43 +35,6 @@ pub struct AiTurnUsage {
     pub cache_creation_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub total_reported: Option<u64>,
-}
-
-/// Estimate the number of tokens in a chat request. Based on system text, text
-/// chat messages, tool definitions and their schemas, and reasoning content.
-pub fn estimate_prompt_tokens(prompt: &ChatRequest) -> usize {
-    prompt
-        .system
-        .as_ref()
-        .map_or(0, |s| estimate_token_count(&s))
-        + prompt
-            .messages
-            .iter()
-            .map(|m| {
-                m.content
-                    .iter()
-                    .map(|p| match p {
-                        ContentPart::Text(part) => estimate_token_count(&part),
-                        ContentPart::ToolResponse(part) => estimate_token_count(&part.content),
-                        ContentPart::ReasoningContent(part) => estimate_token_count(&part),
-                        _ => 0,
-                    })
-                    .sum::<usize>()
-            })
-            .sum::<usize>()
-        + prompt.tools.as_ref().map_or(0, |v| {
-            v.iter()
-                .map(|tool| {
-                    tool.description
-                        .as_ref()
-                        .map_or(0, |d| estimate_token_count(&d))
-                        + tool
-                            .schema
-                            .as_ref()
-                            .map_or(0, |v| v.as_str().map_or(0, |s| estimate_token_count(s)))
-                })
-                .sum::<usize>()
-        })
 }
 
 impl AiTurnUsage {

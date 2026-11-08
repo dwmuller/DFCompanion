@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
-    ai_usage::{AiPromptTokenEstimates, AiTurnUsage},
+    ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
     diagnostics::write_ai_failure_dump,
     GameEvent,
 };
@@ -26,7 +26,8 @@ pub const NO_COMMENT: &str = "NO_COMMENT";
 
 const REQUESTS_PREFIX: &str = "Player messages:\n";
 const PERIODIC_PROMPT: &str = "No player message. This is an automatic periodic check while the game runs. Use the read-only game-state tools if that helps you notice a problem or development the player should know about. Speak to the player only about something important and new; otherwise reply with exactly NO_COMMENT and nothing else.";
-const REPORT_PENDING_MSG: &str =  "There are also one or more messages from the player queued which will be sent shortly.\n";
+const REPORT_PENDING_MSG: &str =
+    "There are also one or more messages from the player queued which will be sent shortly.\n";
 
 pub fn is_no_comment(answer: &str) -> bool {
     answer
@@ -53,12 +54,8 @@ pub struct AiTurnResult {
 }
 
 enum AiInput {
-    UserRequest {
-        text: String,
-    },
-    GameReport {
-        event: GameEvent,
-    }
+    UserRequest { text: String },
+    GameReport { event: GameEvent },
 }
 
 #[derive(Default)]
@@ -70,82 +67,122 @@ pub struct Conversation {
 #[derive(Clone, Debug)]
 pub struct Prompt {
     history: Vec<ChatMessage>,
-    current_user_content: String,
+    content: String,
     include_in_history: bool,
     included_inputs: usize,
-    token_estimates: AiPromptTokenEstimates,
+    pub token_estimates: AiPromptTokenEstimates,
 }
 
 impl Conversation {
     pub fn pending_report_count(&self) -> usize {
-        self.pending_input.iter().filter(|i| matches!(i, AiInput::GameReport { .. })).count()
+        self.pending_input
+            .iter()
+            .filter(|i| matches!(i, AiInput::GameReport { .. }))
+            .count()
     }
     pub fn pending_user_message_count(&self) -> usize {
-        self.pending_input.iter().filter(|i| matches!(i, AiInput::UserRequest { .. })).count()
+        self.pending_input
+            .iter()
+            .filter(|i| matches!(i, AiInput::UserRequest { .. }))
+            .count()
     }
     pub fn push_report(&mut self, event: GameEvent) {
-        self.pending_input.push(AiInput::GameReport { event: event });
+        self.pending_input
+            .push(AiInput::GameReport { event: event });
     }
 
     pub fn push_user_message(&mut self, message: &str) {
-        self.pending_input.push(AiInput::UserRequest { text: message.to_owned() });
+        self.pending_input.push(AiInput::UserRequest {
+            text: message.to_owned(),
+        });
     }
 
     pub fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
-        let mut current_user_content = REQUESTS_PREFIX.to_string();
-        let mut input_token_estimate :usize = estimate_token_count(REQUESTS_PREFIX);
+        let mut content = REQUESTS_PREFIX.to_string();
         let mut include_in_history = true;
+        let system_text_tokens = estimate_token_count(system_text);
+        let tools_tokens = tools_tokens_estimate();
+        let history_tokens = self
+            .history
+            .iter()
+            .map(|m| estimate_token_count(&m.content))
+            .sum::<usize>();
+        let content_tokens_limit =
+            MAX_INPUT_TOKENS - system_text_tokens - history_tokens - tools_tokens;
+        let mut content_tokens: usize = estimate_token_count(REQUESTS_PREFIX);
 
-        let requests = self.pending_input.iter().take_while(|&i| {
-            if let AiInput::UserRequest { text } = i {
-                current_user_content.push_str("\n");
-                current_user_content.push_str(&text);
-                let n = estimate_token_count(&current_user_content);
-                if MAX_INPUT_TOKENS > n {
-                    input_token_estimate += n;
-                    return true;
-                }
-                else {
-                    current_user_content.truncate(current_user_content.len() - text.len() - 1); // remove the last added text and newline
-                    return false;
-                }
-            }
-            false
-        }).collect::<Vec<_>>();
-        let mut included_inputs = requests.len();
-        if included_inputs == 0 {
-            current_user_content = PERIODIC_PROMPT.to_string();
-            if self.pending_input.iter().find(|i| matches!(i, AiInput::UserRequest { .. })).is_some() {
-                current_user_content.push_str(REPORT_PENDING_MSG);
-            }
-            input_token_estimate = estimate_token_count(&current_user_content);
-            include_in_history = false;
-            let reports = self.pending_input.iter().take_while(|&i| {
-                if let AiInput::GameReport { event } = i {
-                    let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
-                    current_user_content.push_str("\n");
-                    current_user_content.push_str(&line);
-                    let n = estimate_token_count(&current_user_content);
-                    if MAX_INPUT_TOKENS > n {
-                        input_token_estimate += n;
+        let requests = self
+            .pending_input
+            .iter()
+            .take_while(|&i| {
+                if let AiInput::UserRequest { text } = i {
+                    content.push_str("\n");
+                    content.push_str(&text);
+                    // Note: We don't assume that summing estimates for
+                    // fragments is equivalent to estimating the concatenation
+                    // of fragments.
+                    content_tokens = estimate_token_count(&content);
+                    if content_tokens_limit > content_tokens {
                         return true;
-                    } else
-                    {
-                        current_user_content.truncate(current_user_content.len() - line.len() - 1); // remove the last added line and newline
+                    } else {
+                        content.truncate(content.len() - text.len() - 1); // remove the last added text and newline
+                        content_tokens = estimate_token_count(&content);
                         return false;
                     }
                 }
                 false
-            }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
+        let mut included_inputs = requests.len();
+        if included_inputs == 0 {
+            content = PERIODIC_PROMPT.to_string();
+            if self
+                .pending_input
+                .iter()
+                .find(|i| matches!(i, AiInput::UserRequest { .. }))
+                .is_some()
+            {
+                content.push_str(REPORT_PENDING_MSG);
+            }
+            include_in_history = false;
+            let reports = self
+                .pending_input
+                .iter()
+                .take_while(|&i| {
+                    if let AiInput::GameReport { event } = i {
+                        let line =
+                            serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
+                        content.push_str("\n");
+                        content.push_str(&line);
+                        content_tokens = estimate_token_count(&content);
+                        if content_tokens_limit > content_tokens {
+                            return true;
+                        } else {
+                            content.truncate(content.len() - line.len() - 1); // remove the last added line and newline
+                            content_tokens = estimate_token_count(&content);
+                            return false;
+                        }
+                    }
+                    false
+                })
+                .collect::<Vec<_>>();
             included_inputs = reports.len();
         }
         if included_inputs == 0 {
             return None;
         }
-        let token_estimates = AiPromptTokenEstimates::new(&system_text, &current_user_content, self.history.iter().map(|m| &m.content));
+        let total_tokens = system_text_tokens + content_tokens + history_tokens + tools_tokens;
+        assert!(total_tokens <= MAX_INPUT_TOKENS);
+        let token_estimates = AiPromptTokenEstimates {
+            system_text_tokens,
+            content_tokens,
+            history_tokens,
+            tools_tokens,
+            total_tokens,
+        };
         return Some(Prompt {
             history: self.history.clone(),
-            current_user_content,
+            content,
             include_in_history,
             included_inputs,
             token_estimates,
@@ -157,15 +194,14 @@ impl Conversation {
     pub fn complete(&mut self, prompt: Prompt, answer: String) {
         let Prompt {
             history,
-            current_user_content,
+            content: current_user_content,
             include_in_history,
             included_inputs,
             ..
         } = prompt;
         self.pending_input.drain(..included_inputs);
         // An uneventful periodic check leaves no trace in the history.
-        if !include_in_history && is_no_comment(&answer)
-        {
+        if !include_in_history && is_no_comment(&answer) {
             return;
         }
         self.history = history;
@@ -185,8 +221,17 @@ impl Conversation {
 }
 
 impl Prompt {
+    /// Returns a single-line summary of the token estimates.
     pub fn token_estimates_summary(&self) -> String {
-        "Estimated prompt tokens: ".to_string() + &self.token_estimates.summary()
+        let this = &self.token_estimates;
+        format!(
+            "Estimated prompt tokens: system {}, content {}, history {}, tools {}, total {}",
+            this.system_text_tokens,
+            this.content_tokens,
+            this.history_tokens,
+            this.tools_tokens,
+            this.total_tokens
+        )
     }
 }
 
@@ -267,7 +312,7 @@ impl AiRuntime {
                 ChatRole::Assistant => GenaiMessage::assistant(message.content.clone()),
             })
             .collect::<Vec<_>>();
-        messages.push(GenaiMessage::user(prompt.current_user_content.clone()));
+        messages.push(GenaiMessage::user(prompt.content.clone()));
 
         let mut request = ChatRequest::new(messages)
             .with_system(configuration.system_text.clone())
@@ -278,7 +323,6 @@ impl AiRuntime {
         let mut usage: Vec<AiTurnUsage> = Vec::new();
         let mut purpose = "initial request".to_owned();
         loop {
-            let estimated_prompt_tokens = crate::ai_usage::estimate_prompt_tokens(&request);
             let response = tokio::time::timeout(
                 std::time::Duration::from_secs(60),
                 client.exec_chat(&configuration.model_id, request.clone(), Some(&options)),
@@ -292,7 +336,7 @@ impl AiRuntime {
                 )
             })?;
             usage.push(AiTurnUsage::from_genai_usage(
-                estimated_prompt_tokens,
+                prompt.token_estimates.total_tokens,
                 &response.usage,
                 &purpose,
             ));
@@ -440,7 +484,13 @@ mod tests {
     }
 
     fn build_game_event(id: i64, text: &str) -> GameEvent {
-        GameEvent { id: Some(id), date: "date".to_owned(), report_type: None, category: "test".to_owned(), text: text.to_owned() }
+        GameEvent {
+            id: Some(id),
+            date: "date".to_owned(),
+            report_type: None,
+            category: "test".to_owned(),
+            text: text.to_owned(),
+        }
     }
 
     #[test]
@@ -463,9 +513,9 @@ mod tests {
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
         assert_eq!(prompt.included_inputs, 1);
-        assert!(prompt.current_user_content.contains("a report"));
-        assert!(prompt.current_user_content.contains(NO_COMMENT));
-        assert!(!prompt.current_user_content.contains("Player message"));
+        assert!(prompt.content.contains("a report"));
+        assert!(prompt.content.contains(NO_COMMENT));
+        assert!(!prompt.content.contains("Player message"));
     }
 
     #[test]
@@ -498,7 +548,7 @@ mod tests {
         let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), sender);
         let prompt = Prompt {
             history: Vec::new(),
-            current_user_content: "Hello.".to_owned(),
+            content: "Hello.".to_owned(),
             include_in_history: true,
             included_inputs: 1,
             token_estimates: AiPromptTokenEstimates::default(),
@@ -629,7 +679,7 @@ mod tests {
         };
         let prompt = Prompt {
             history: Vec::new(),
-            current_user_content: "Use tools.".to_owned(),
+            content: "Use tools.".to_owned(),
             include_in_history: true,
             included_inputs: 1,
             token_estimates: AiPromptTokenEstimates::default(),
@@ -708,7 +758,7 @@ mod tests {
         };
         let prompt = Prompt {
             history: Vec::new(),
-            current_user_content: "Use a tool.".to_owned(),
+            content: "Use a tool.".to_owned(),
             include_in_history: true,
             included_inputs: 1,
             token_estimates: AiPromptTokenEstimates::default(),
