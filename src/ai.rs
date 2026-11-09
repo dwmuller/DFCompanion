@@ -246,7 +246,7 @@ impl Prompt {
     pub fn token_estimates_summary(&self) -> String {
         let this = &self.token_estimates;
         format!(
-            "Estimated prompt tokens: system {}, content {}, history {}, tools {}, total {}",
+            "Estimated prompt tokens: system {} + content {} + history {} + tools {} = total {}",
             this.system_text_tokens,
             this.content_tokens,
             this.history_tokens,
@@ -378,7 +378,6 @@ impl AiRuntime {
                 )
             })?;
             usage.push(AiTurnUsage::from_genai_usage(
-                prompt.token_estimates.total_tokens,
                 &response.usage,
                 &purpose,
             ));

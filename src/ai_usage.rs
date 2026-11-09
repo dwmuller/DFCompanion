@@ -29,7 +29,6 @@ pub fn tools_tokens_estimate() -> usize {
 #[derive(Clone, Debug, Default)]
 pub struct AiTurnUsage {
     pub purpose: String,
-    pub estimated_prompt_tokens: usize,
     pub prompt_tokens: Option<u64>,
     pub cached_prompt_tokens: Option<u64>,
     pub cache_creation_tokens: Option<u64>,
@@ -38,9 +37,8 @@ pub struct AiTurnUsage {
 }
 
 impl AiTurnUsage {
-    pub fn from_genai_usage(estimated_prompt_tokens: usize, usage: &Usage, purpose: &str) -> Self {
+    pub fn from_genai_usage(usage: &Usage, purpose: &str) -> Self {
         AiTurnUsage {
-            estimated_prompt_tokens: estimated_prompt_tokens,
             prompt_tokens: usage.prompt_tokens.map(|t| t as u64),
             cached_prompt_tokens: usage
                 .prompt_tokens_details
@@ -57,21 +55,24 @@ impl AiTurnUsage {
     }
 
     pub(crate) fn summary(&self) -> String {
-        format!(
-            "Tokens for {}:\n  {:>6} est, {:>6} input ({:>6} [{:>2}%] cached, {:>6} cache creation), {:>6} output, {:>7} total [{:>3}%]",
-            self.purpose,
-            self.estimated_prompt_tokens,
-            self.prompt_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
-            self.cached_prompt_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
-            if let (Some(cached), Some(total)) = (self.cached_prompt_tokens, self.prompt_tokens) {
+        let na = || "n/a".to_string();
+        let prompt_tokens = self.prompt_tokens.map_or(na(), |t| t.to_string());
+        let cached_tokens = self.cached_prompt_tokens.map_or(na(), |t| t.to_string());
+        let pct_cached = if let (Some(cached), Some(total)) = (self.cached_prompt_tokens, self.prompt_tokens) {
                 (cached * 100 / total).to_string()
             } else {
-                "unreported".to_string()
-            },
-            self.cache_creation_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
-            self.completion_tokens.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
-            self.total_reported.map(|t| t.to_string()).unwrap_or("n/a".to_string()),
-            self.total_reported.map_or("n/a".to_string(), |t| (t * 100 / self.estimated_prompt_tokens as u64).to_string()),
+                "N/A".to_string()
+            };
+
+        format!(
+            "Tokens for {}:\n  {:>6} input ({:>6} [{:>2}%] cached, {:>6} cache creation), {:>6} output, {:>7} total",
+            self.purpose,
+            prompt_tokens,
+            cached_tokens,
+            pct_cached,
+            self.cache_creation_tokens.map_or(na(), |t| t.to_string()),
+            self.completion_tokens.map_or(na(), |t| t.to_string()),
+            self.total_reported.map_or(na(), |t| t.to_string()),
         )
     }
 }
