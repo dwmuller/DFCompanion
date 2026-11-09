@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use directories::ProjectDirs;
 use serde::Serialize;
@@ -71,7 +71,6 @@ enum Wake {
     Check,
 }
 
-#[derive(Clone)]
 pub struct CompanionApp {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<DisplayMessage>,
@@ -86,18 +85,18 @@ pub struct CompanionApp {
 }
 
 impl CompanionApp {
-    pub fn new() -> (Self, mpsc::Receiver<QueueItem>) {
+    pub fn new() -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
         Self::with_ai_configurations(ai_config::ConfigurationRepository::in_memory())
     }
 
-    pub fn load() -> Result<(Self, mpsc::Receiver<QueueItem>), String> {
+    pub fn load() -> Result<(Arc<Self>, mpsc::Receiver<QueueItem>), String> {
         let configurations = ai_config::ConfigurationRepository::load_default()?;
         Ok(Self::with_ai_configurations(configurations))
     }
 
     fn with_ai_configurations(
         configurations: ai_config::ConfigurationRepository,
-    ) -> (Self, mpsc::Receiver<QueueItem>) {
+    ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
         let ai = std::sync::Arc::new(ai::AiRuntime::new(
@@ -107,14 +106,14 @@ impl CompanionApp {
         let history = NotificationHistory::record(&notifications_tx);
 
         (
-            Self {
+            Arc::new(Self {
                 queue_tx,
                 notifications_tx,
                 history,
                 ai,
                 event_turns: Default::default(),
                 periodic_turns: Default::default(),
-            },
+            }),
             queue_rx,
         )
     }
@@ -166,7 +165,7 @@ impl CompanionApp {
 /// so a broken configuration cannot flood the chat or burn requests.
 pub fn run_companion_worker(
     mut queue_rx: mpsc::Receiver<QueueItem>,
-    state: CompanionApp,
+    state: Arc<CompanionApp>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     async move {
         let mut flush_at: Option<Instant> = None;
@@ -807,7 +806,7 @@ mod tests {
     }
 
     async fn post_plugin_event(
-        state: CompanionApp,
+        state: Arc<CompanionApp>,
         body: &'static str,
     ) -> axum::response::Response {
         crate::web::router(state)
@@ -976,7 +975,7 @@ mod tests {
         assert_eq!(queue_rx.len(), EVENT_QUEUE_CAPACITY);
     }
     async fn start_test_grpc_server(
-        state: CompanionApp,
+        state: Arc<CompanionApp>,
     ) -> (
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,

@@ -1,6 +1,6 @@
 mod templates;
 
-use std::convert::Infallible;
+use std::{convert::Infallible, sync::Arc};
 
 use axum::{
     body::Body,
@@ -92,7 +92,7 @@ pub fn with_request_tracing(router: Router) -> Router {
     )
 }
 
-pub fn router(state: CompanionApp) -> Router {
+pub fn router(state: Arc<CompanionApp>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/ai-configurations", get(configurations_page))
@@ -152,7 +152,7 @@ pub fn router(state: CompanionApp) -> Router {
 
 /// Handles POST requests for events from DFHack plugin.
 async fn plugin_event(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     axum::Json(event): axum::Json<PluginEvent>,
 ) -> impl IntoResponse {
@@ -244,7 +244,7 @@ fn configuration_items(
 }
 
 /// Handles GET requests for the index page.
-async fn index(State(state): State<CompanionApp>) -> Response {
+async fn index(State(state): State<Arc<CompanionApp>>) -> Response {
     match configuration_items(&state.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
@@ -256,7 +256,7 @@ async fn index(State(state): State<CompanionApp>) -> Response {
 }
 
 /// Handles GET requests for the AI configurations page.
-async fn configurations_page(State(state): State<CompanionApp>) -> Response {
+async fn configurations_page(State(state): State<Arc<CompanionApp>>) -> Response {
     match configuration_items(&state.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
@@ -286,7 +286,7 @@ fn fragment_response(
 }
 
 /// Handles GET requests for the AI configuration list fragment
-async fn configuration_list_fragment(State(state): State<CompanionApp>) -> Response {
+async fn configuration_list_fragment(State(state): State<Arc<CompanionApp>>) -> Response {
     let (items, _active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
         Err(err) => return render_error_response("AI configurations", err),
@@ -298,7 +298,7 @@ async fn configuration_list_fragment(State(state): State<CompanionApp>) -> Respo
 }
 
 /// Handles GET requests for the new AI configuration form fragment
-async fn new_configuration_form_fragment(State(_state): State<CompanionApp>) -> Response {
+async fn new_configuration_form_fragment(State(_state): State<Arc<CompanionApp>>) -> Response {
     let providers = match built_in_providers() {
         Ok(providers) => providers,
         Err(error) => {
@@ -319,7 +319,7 @@ async fn new_configuration_form_fragment(State(_state): State<CompanionApp>) -> 
 
 /// Handles GET requests for the edit AI configuration form fragment
 async fn edit_configuration_form_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
 ) -> Response {
     let config = match state.ai.configurations.try_get(&id) {
@@ -355,7 +355,9 @@ async fn edit_configuration_form_fragment(
 }
 
 /// Handles GET requests for the closed AI configuration form fragment
-async fn closed_new_configuration_form_fragment(State(_state): State<CompanionApp>) -> Response {
+async fn closed_new_configuration_form_fragment(
+    State(_state): State<Arc<CompanionApp>>,
+) -> Response {
     fragment_response(
         StatusCode::OK,
         templates::render_create_closed(),
@@ -367,7 +369,7 @@ async fn closed_new_configuration_form_fragment(State(_state): State<CompanionAp
 /// POST handler for creating a new AI configuration
 ///
 async fn create_configuration_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<ConfigurationForm>,
 ) -> Response {
@@ -436,7 +438,7 @@ fn configuration_form_error_response(
 
 /// Handles PUT requests for updating an AI configuration
 async fn update_configuration_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ConfigurationForm>,
@@ -477,13 +479,13 @@ async fn update_configuration_fragment(
 }
 
 /// Handles GET requests for the active AI configuration fragment.
-async fn active_configuration_fragment(State(state): State<CompanionApp>) -> Response {
+async fn active_configuration_fragment(State(state): State<Arc<CompanionApp>>) -> Response {
     active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
 /// Handles POST requests to select an AI configuration.
 async fn select_configuration_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<SelectConfigurationForm>,
 ) -> Response {
@@ -598,7 +600,7 @@ fn summary_response(state: &CompanionApp, item: &ConfigurationListItem) -> Respo
 
 /// Handles GET requests for the closed AI configuration summary fragment.
 async fn closed_configuration_summary_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
 ) -> Response {
     match existing_configuration_item(&state, &id) {
@@ -613,7 +615,7 @@ async fn closed_configuration_summary_fragment(
 
 /// Handles GET requests for the API key form fragment.
 async fn api_key_form_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
 ) -> Response {
     match existing_configuration_item(&state, &id) {
@@ -628,7 +630,7 @@ async fn api_key_form_fragment(
 
 /// Handles POST requests to save an API key.
 async fn save_api_key_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Form(form): Form<ApiKeyForm>,
@@ -671,7 +673,7 @@ async fn save_api_key_fragment(
 
 /// Handles POST requests to forget an API key.
 async fn forget_api_key_fragment(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
@@ -692,7 +694,7 @@ async fn forget_api_key_fragment(
 
 /// Handles DELETE requests to remove an AI configuration.
 async fn delete_configuration(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
@@ -833,7 +835,7 @@ struct AutomaticTurnsForm {
 
 /// Handles POST requests to configure automatic turns.
 async fn set_automatic_turns(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<AutomaticTurnsForm>,
 ) -> Response {
@@ -853,7 +855,7 @@ async fn set_automatic_turns(
 
 /// Handles GET requests for the server-sent events stream.
 async fn events(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     // A reconnecting browser says where it left off, so it isn't sent
@@ -891,7 +893,7 @@ async fn events(
 }
 
 /// Serves the user/companion transcript from typed message history, not rendered DOM.
-async fn copy_conversation(State(state): State<CompanionApp>) -> Response {
+async fn copy_conversation(State(state): State<Arc<CompanionApp>>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
@@ -904,7 +906,7 @@ async fn copy_conversation(State(state): State<CompanionApp>) -> Response {
 
 /// Handles POST requests for chat messages.
 async fn chat(
-    State(state): State<CompanionApp>,
+    State(state): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<ChatForm>,
 ) -> impl IntoResponse {
@@ -963,7 +965,7 @@ async fn chat(
 }
 
 /// Handles POST requests to retry the last AI action.
-async fn retry(State(state): State<CompanionApp>, headers: HeaderMap) -> Response {
+async fn retry(State(state): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }

@@ -7,13 +7,14 @@ use crate::{
     app::{CompanionApp, GameEvent, QueueItem},
     notifications::{DisplayMessage, DisplayMessageKind},
 };
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct CompanionRpc {
-    state: CompanionApp,
+    state: Arc<CompanionApp>,
 }
 
-pub fn service(state: CompanionApp) -> CompanionRpc {
+pub fn service(state: Arc<CompanionApp>) -> CompanionRpc {
     CompanionRpc { state }
 }
 
