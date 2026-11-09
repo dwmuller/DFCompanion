@@ -67,10 +67,10 @@ struct Conversation {
 
 #[derive(Clone, Debug)]
 enum SendResult {
-    // No errors, and no pending interactions remaining to send.
+    // Successful; no pending interactions remaining to send.
     Drained,
-    // A message was sent. More messages are pending.
-    Sent,
+    // Successful; more interactions are pending.
+    MorePending,
     // Unable to send because no AI configuration is active.
     NoActiveConfiguration,
     // An error occurred while attempting to send the interaction.
@@ -93,7 +93,6 @@ struct Prompt {
     kind: PromptKind,
     history: Vec<ChatMessage>,
     content: String,
-    include_in_history: bool,
     included_inputs: usize,
     token_estimates: AiPromptTokenEstimates,
 }
@@ -125,7 +124,6 @@ impl Conversation {
     fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
         let mut kind = PromptKind::UserRequest;
         let mut content = REQUESTS_PREFIX.to_string();
-        let mut include_in_history = true;
         let system_text_tokens = estimate_token_count(system_text);
         let tools_tokens = tools_tokens_estimate();
         let history_tokens = self
@@ -171,7 +169,6 @@ impl Conversation {
             {
                 content.push_str(REPORT_PENDING_MSG);
             }
-            include_in_history = false;
             let reports = self
                 .pending_input
                 .iter()
@@ -211,7 +208,6 @@ impl Conversation {
             kind,
             history: self.history.clone(),
             content,
-            include_in_history,
             included_inputs,
             token_estimates,
         });
@@ -219,31 +215,28 @@ impl Conversation {
 
     /// Completes a prompt by adding the user's input and the AI's answer to the conversation history.
     /// Note that this *must* be the prompt most recently returned by `build_prompt`.
-    fn complete(&mut self, prompt: Prompt, answer: String) {
+    fn complete(&mut self, prompt: Prompt, answer: String, add_to_history: bool) {
         let Prompt {
             history,
             content: current_user_content,
-            include_in_history,
             included_inputs,
             ..
         } = prompt;
         self.pending_input.drain(..included_inputs);
-        // An uneventful periodic check leaves no trace in the history.
-        if !include_in_history && is_no_comment(&answer) {
-            return;
-        }
-        self.history = history;
-        self.history.push(ChatMessage {
-            role: ChatRole::User,
-            content: current_user_content,
-        });
-        self.history.push(ChatMessage {
-            role: ChatRole::Assistant,
-            content: answer,
-        });
-        if self.history.len() > MAX_HISTORY_MESSAGES {
-            let excess = self.history.len() - MAX_HISTORY_MESSAGES;
-            self.history.drain(0..excess);
+        if add_to_history {
+            self.history = history;
+            self.history.push(ChatMessage {
+                role: ChatRole::User,
+                content: current_user_content,
+            });
+            self.history.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: answer,
+            });
+            if self.history.len() > MAX_HISTORY_MESSAGES {
+                let excess = self.history.len() - MAX_HISTORY_MESSAGES;
+                self.history.drain(0..excess);
+            }
         }
     }
 }
@@ -457,17 +450,22 @@ impl AiRuntime {
         conversation.build_prompt(system_text)
     }
 
-    /// Updates conversation to relect successful completion of a previously
+    /// Updates conversation to reflect successful completion of a previously
     /// prepared prompt. Return true if there are more messages waiting to be
     /// sent in the conversation.
-    async fn commit_interaction(&self, prompt: Prompt, answer: String) -> bool {
+    async fn commit_interaction(
+        &self,
+        prompt: Prompt,
+        answer: String,
+        add_to_history: bool,
+    ) -> bool {
         let mut conversation = self.conversation.lock().await;
-        conversation.complete(prompt, answer);
+        conversation.complete(prompt, answer, add_to_history);
         conversation.pending_input.len() > 0
     }
 
     /// Sends the next interaction, which may be a batch of messages of similar
-    /// type. Replies intended for the user are sendtto the notification queue.
+    /// type. Replies intended for the user are sent to the notification queue.
     /// Also generates AI usage notifications.
     async fn send_next_interaction(&self) -> SendResult {
         let configuration = match self.configurations.active() {
@@ -488,8 +486,12 @@ impl AiRuntime {
             match self.complete(&configuration, &prompt).await {
                 Ok(result) => {
                     let notify_user = is_user_interaction || !is_no_comment(&result.answer);
+                    // This logic may change, thus it's a separate boolean.
+                    let add_to_history = is_user_interaction || !is_no_comment(&result.answer);
                     // Consume prompt and update the conversation.
-                    let more_pending = self.commit_interaction(prompt, result.answer.clone()).await;
+                    let more_pending = self
+                        .commit_interaction(prompt, result.answer.clone(), add_to_history)
+                        .await;
                     if notify_user {
                         self.notify(
                             DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
@@ -501,7 +503,7 @@ impl AiRuntime {
                         result.usage.iter().map(|u| u.summary()).join("\n"),
                     ));
                     if more_pending {
-                        SendResult::Sent
+                        SendResult::MorePending
                     } else {
                         SendResult::Drained
                     }
@@ -513,8 +515,7 @@ impl AiRuntime {
         }
     }
 
-    /// Runs AI turns until all pending data has been processed and all messages are
-    /// answered. Returns false if the AI request failed.
+    /// Processes pending AI input until it is drained or an interaction fails.
     pub async fn flush_pending_messages(&self) -> bool {
         // Only one caller allowed at a time. This will block the queue
         // processing loop that calls us, but its inputs come from async queues
@@ -523,7 +524,7 @@ impl AiRuntime {
 
         loop {
             match self.send_next_interaction().await {
-                SendResult::Sent => {}
+                SendResult::MorePending => {}
                 SendResult::NoActiveConfiguration => {
                     self.notify(DisplayMessage::new(
                         DisplayMessageKind::Warning,
@@ -642,7 +643,7 @@ mod tests {
         conversation.push_user_message("question");
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
-        conversation.complete(prompt, "answer".to_owned());
+        conversation.complete(prompt, "answer".to_owned(), true);
 
         assert_eq!(conversation.pending_input.len(), 1);
         assert_eq!(conversation.history.len(), 2);
@@ -668,7 +669,7 @@ mod tests {
 
         conversation.push_report(build_game_event(1, "a report"));
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
-        conversation.complete(prompt, NO_COMMENT.to_owned());
+        conversation.complete(prompt, NO_COMMENT.to_owned(), false);
         assert_eq!(conversation.history.len(), 0);
         assert!(conversation.pending_input.is_empty());
     }
@@ -692,7 +693,6 @@ mod tests {
             kind: PromptKind::UserRequest,
             history: Vec::new(),
             content: "Hello.".to_owned(),
-            include_in_history: true,
             included_inputs: 1,
             token_estimates: AiPromptTokenEstimates::default(),
         };
@@ -824,7 +824,6 @@ mod tests {
             kind: PromptKind::Automated,
             history: Vec::new(),
             content: "Use tools.".to_owned(),
-            include_in_history: true,
             included_inputs: 1,
             token_estimates: AiPromptTokenEstimates::default(),
         };
@@ -904,7 +903,6 @@ mod tests {
             kind: PromptKind::UserRequest,
             history: Vec::new(),
             content: "Use a tool.".to_owned(),
-            include_in_history: true,
             included_inputs: 1,
             token_estimates: AiPromptTokenEstimates::default(),
         };
