@@ -1,4 +1,20 @@
 const notifications = document.getElementById("notifications");
+const bottomTolerance = 4;
+let followIncoming = false;
+
+notifications.addEventListener("htmx:sse:before:message", (event) => {
+  if (!event.detail.message.event) {
+    followIncoming =
+      notifications.scrollHeight - notifications.clientHeight - notifications.scrollTop <= bottomTolerance;
+  }
+});
+
+notifications.addEventListener("htmx:sse:after:message", (event) => {
+  if (!event.detail.message.event && followIncoming) {
+    notifications.scrollTop = notifications.scrollHeight;
+  }
+});
+
 // Hidden notification kinds are filtered by CSS from these checkboxes; the
 // choices are remembered. Both kinds are hidden by default.
 for (const id of ["show-game-events", "show-ai-usage"]) {

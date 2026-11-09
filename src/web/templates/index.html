@@ -75,7 +75,7 @@
         <span id="copy-conversation-status" role="status" aria-live="polite"></span>
       </div>
     </div>
-    <div id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend scroll:bottom" hx-config="sse.pauseOnBackground:false"></div>
+    <div id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend" hx-config="sse.pauseOnBackground:false"></div>
     <h2>Chat</h2>
     <form id="chat-form"
         hx-post="/chat"
