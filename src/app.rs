@@ -75,13 +75,13 @@ pub struct CompanionApp {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<DisplayMessage>,
     pub history: NotificationHistory,
-    pub ai: std::sync::Arc<ai::AiRuntime>,
+    pub ai: ai::AiRuntime,
     /// Whether the AI gets a turn shortly after game events arrive. Off by
     /// default because automatic turns spend tokens without the player asking.
-    pub event_turns: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub event_turns: std::sync::atomic::AtomicBool,
     /// Whether the AI gets a turn every `PERIODIC_CHECK_INTERVAL` while the
     /// game runs. Off by default, for the same reason.
-    pub periodic_turns: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub periodic_turns: std::sync::atomic::AtomicBool,
 }
 
 impl CompanionApp {
@@ -99,10 +99,7 @@ impl CompanionApp {
     ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
-        let ai = std::sync::Arc::new(ai::AiRuntime::new(
-            configurations,
-            Notifier::new(notifications_tx.clone()),
-        ));
+        let ai = ai::AiRuntime::new(configurations, Notifier::new(notifications_tx.clone()));
         let history = NotificationHistory::record(&notifications_tx);
 
         (
