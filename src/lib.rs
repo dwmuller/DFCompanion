@@ -184,12 +184,7 @@ pub fn run_companion_worker(
                 }
                 Wake::Item(QueueItem::Orient) => {
                     if has_active_configuration(&state) {
-                        state
-                            .ai
-                            .conversation
-                            .lock()
-                            .await
-                            .push_user_message(ORIENT_MESSAGE);
+                        state.ai.push_user_message(ORIENT_MESSAGE).await;
                         suspended = !state.ai.try_ai_turn(TurnKind::Player).await;
                         flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -200,7 +195,7 @@ pub fn run_companion_worker(
                         run_chat_command(&state, command).await;
                         continue;
                     }
-                    state.ai.conversation.lock().await.push_user_message(&text);
+                    state.ai.push_user_message(&text).await;
                     suspended = !state.ai.try_ai_turn(TurnKind::Player).await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -210,7 +205,7 @@ pub fn run_companion_worker(
                         DisplayMessageKind::GameEvent,
                         format!("{} [{}] {}", event.date, event.category, event.text),
                     ));
-                    state.ai.conversation.lock().await.push_report(event);
+                    state.ai.push_report(event).await;
                     flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
                 }
                 Wake::Flush => {
@@ -518,15 +513,7 @@ mod tests {
             error.text.contains("Unknown chat command: /bogus"),
             "{error:?}"
         );
-        assert!(
-            state
-                .ai
-                .conversation
-                .lock()
-                .await
-                .pending_user_message_count()
-                == 0
-        );
+        assert!(state.ai.pending_user_message_count().await == 0);
         assert_eq!(state.history.display_history_markdown(), "**Diagnostic:**\n\nTool no_such_tool result:\n{ \"error\": \"Unknown tool: no_such_tool\" }\n\n\n**Diagnostic:**\n\nUnknown chat command: /bogus");
         worker.abort();
     }
@@ -741,10 +728,10 @@ mod tests {
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
         assert!(failure.text.contains("AI request failed"));
-        let conversation = state.ai.conversation.lock().await;
-        assert_eq!(conversation.pending_report_count(), 1);
-        assert_eq!(conversation.pending_user_message_count(), 1);
-        drop(conversation);
+        let conversation = state.ai.pending_report_count().await;
+        assert_eq!(conversation, 1);
+        let conversation = state.ai.pending_user_message_count().await;
+        assert_eq!(conversation, 1);
         worker.abort();
     }
 
@@ -796,7 +783,7 @@ mod tests {
         // Automatic turns stay paused after the failure, however long we wait.
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
-        assert_eq!(state.ai.conversation.lock().await.pending_report_count(), 1);
+        assert_eq!(state.ai.pending_report_count().await, 1);
         worker.abort();
     }
 

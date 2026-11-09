@@ -60,45 +60,45 @@ enum AiInput {
 }
 
 #[derive(Default)]
-pub struct Conversation {
+struct Conversation {
     history: Vec<ChatMessage>,
     pending_input: Vec<AiInput>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Prompt {
+struct Prompt {
     history: Vec<ChatMessage>,
     content: String,
     include_in_history: bool,
     included_inputs: usize,
-    pub token_estimates: AiPromptTokenEstimates,
+    token_estimates: AiPromptTokenEstimates,
 }
 
 impl Conversation {
-    pub fn pending_report_count(&self) -> usize {
+    fn pending_report_count(&self) -> usize {
         self.pending_input
             .iter()
             .filter(|i| matches!(i, AiInput::GameReport { .. }))
             .count()
     }
-    pub fn pending_user_message_count(&self) -> usize {
+    fn pending_user_message_count(&self) -> usize {
         self.pending_input
             .iter()
             .filter(|i| matches!(i, AiInput::UserRequest { .. }))
             .count()
     }
-    pub fn push_report(&mut self, event: GameEvent) {
+    fn push_report(&mut self, event: GameEvent) {
         self.pending_input
             .push(AiInput::GameReport { event: event });
     }
 
-    pub fn push_user_message(&mut self, message: &str) {
+    fn push_user_message(&mut self, message: &str) {
         self.pending_input.push(AiInput::UserRequest {
             text: message.to_owned(),
         });
     }
 
-    pub fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
+    fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
         let mut content = REQUESTS_PREFIX.to_string();
         let mut include_in_history = true;
         let system_text_tokens = estimate_token_count(system_text);
@@ -192,7 +192,7 @@ impl Conversation {
 
     /// Completes a prompt by adding the user's input and the AI's answer to the conversation history.
     /// Note that this *must* be the prompt most recently returned by `build_prompt`.
-    pub fn complete(&mut self, prompt: Prompt, answer: String) {
+    fn complete(&mut self, prompt: Prompt, answer: String) {
         let Prompt {
             history,
             content: current_user_content,
@@ -238,7 +238,7 @@ impl Prompt {
 
 pub struct AiRuntime {
     pub configurations: ConfigurationRepository,
-    pub conversation: Mutex<Conversation>,
+    conversation: Mutex<Conversation>,
     game_state: crate::game_state::GameState,
     notifier: Notifier,
 }
@@ -277,7 +277,23 @@ impl AiRuntime {
         crate::ai_tools::execute_named(&self.game_state, name, arguments).await
     }
 
-    pub async fn complete(
+    pub async fn push_user_message(&self, text: &str) {
+        self.conversation.lock().await.push_user_message(text);
+    }
+
+    pub async fn push_report(&self, event: GameEvent) {
+        self.conversation.lock().await.push_report(event);
+    }
+
+    pub async fn pending_user_message_count(&self) -> usize {
+        self.conversation.lock().await.pending_user_message_count()
+    }
+
+    pub async fn pending_report_count(&self) -> usize {
+        self.conversation.lock().await.pending_report_count()
+    }
+
+    async fn complete(
         &self,
         configuration: &AiConfiguration,
         prompt: &Prompt,
