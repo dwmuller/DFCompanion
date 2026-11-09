@@ -379,8 +379,9 @@ pub fn render_configuration_form_error(
 
 #[cfg(test)]
 mod test {
+    use crate::notifications::DisplayMessageKind;
+
     use super::*;
-    use crate::DisplayMessageKind;
 
     fn item(id: &str, name: &str, key_saved: bool) -> ConfigurationListItem {
         ConfigurationListItem {

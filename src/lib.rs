@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::time::Duration;
 
 use directories::ProjectDirs;
@@ -6,6 +5,8 @@ use itertools::Itertools;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{sleep_until, Instant};
+
+use crate::notifications::{DisplayMessage, DisplayMessageKind, NotificationHistory, Notifier};
 
 pub mod ai;
 pub mod ai_config;
@@ -15,6 +16,7 @@ pub mod ai_usage;
 pub mod chat_commands;
 pub mod diagnostics;
 pub mod game_state;
+pub mod notifications;
 
 pub mod api {
     tonic::include_proto!("dfcompanion.v1");
@@ -27,72 +29,6 @@ pub const EVENT_QUEUE_CAPACITY: usize = 50;
 pub fn project_dir() -> ProjectDirs {
     ProjectDirs::from("org", "DFCompanion", "DFCompanion")
         .expect("Could not locate the per-user project directory.")
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DisplayMessageKind {
-    User,
-    Companion,
-    GameEvent,
-    AiUsage,
-    Status,
-    Warning,
-    Diagnostic,
-}
-
-impl DisplayMessageKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::User => "You",
-            Self::Companion => "Companion",
-            Self::GameEvent => "Game event",
-            Self::AiUsage => "AI usage",
-            Self::Status => "Status",
-            Self::Warning => "Warning",
-            Self::Diagnostic => "Diagnostic",
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Companion => "companion",
-            Self::GameEvent => "game-event",
-            Self::AiUsage => "ai-usage",
-            Self::Status => "status",
-            Self::Warning => "warning",
-            Self::Diagnostic => "diagnostic",
-        }
-    }
-
-    pub fn is_markdown(self) -> bool {
-        match self {
-            Self::User | Self::Companion => true,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DisplayMessage {
-    pub kind: DisplayMessageKind,
-    pub text: String,
-    pub beep: bool,
-}
-
-impl DisplayMessage {
-    pub fn new(kind: DisplayMessageKind, text: impl Into<String>) -> Self {
-        Self {
-            kind,
-            text: text.into(),
-            beep: false,
-        }
-    }
-
-    pub fn with_beep(mut self) -> Self {
-        self.beep = true;
-        self
-    }
 }
 
 /// A game event in the format of the `get_recent_reports` tool.
@@ -140,98 +76,6 @@ pub enum QueueItem {
 
 const ORIENT_MESSAGE: &str = "[Automatic session start] You are now connected to the player's Dwarf Fortress game. Use the read-only game-state tools to get your bearings on the fortress, then give the player a brief greeting and summary of its situation.";
 
-const NOTIFICATION_HISTORY_LIMIT: usize = 500;
-
-/// Keeps recent UI notifications so a page that reloads (for example after
-/// visiting the configuration page) can replay the conversation.
-#[derive(Clone)]
-pub struct NotificationHistory {
-    inner: std::sync::Arc<std::sync::Mutex<HistoryState>>,
-    live_tx: broadcast::Sender<(u64, DisplayMessage)>,
-}
-
-#[derive(Default)]
-struct HistoryState {
-    entries: VecDeque<(u64, DisplayMessage)>,
-    last_id: u64,
-}
-
-impl NotificationHistory {
-    /// Records everything sent on `notifications_tx`. Without a Tokio runtime
-    /// nothing is recorded.
-    fn record(notifications_tx: &broadcast::Sender<DisplayMessage>) -> Self {
-        let history = Self {
-            inner: Default::default(),
-            live_tx: broadcast::channel(128).0,
-        };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let mut rx = notifications_tx.subscribe();
-            let recorder = history.clone();
-            runtime.spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(message) => recorder.push(message),
-                        Err(broadcast::error::RecvError::Lagged(count)) => {
-                            recorder.push(DisplayMessage::new(
-                                DisplayMessageKind::Warning,
-                                format!("{count} notifications were missed."),
-                            ))
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
-        }
-        history
-    }
-
-    fn push(&self, message: DisplayMessage) {
-        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.entries.len() == NOTIFICATION_HISTORY_LIMIT {
-            inner.entries.pop_front();
-        }
-        inner.last_id += 1;
-        let id = inner.last_id;
-        inner.entries.push_back((id, message.clone()));
-        // Sent under the lock so subscribers never see a gap or a duplicate.
-        let _ = self.live_tx.send((id, message));
-    }
-
-    /// The recorded messages with an id greater than `after` (all of them when
-    /// `after` is `None`) and a receiver for every message after those. Ids
-    /// increase with each message, so a reconnecting browser can resume where
-    /// it left off.
-    pub fn subscribe(
-        &self,
-        after: Option<u64>,
-    ) -> (
-        Vec<(u64, DisplayMessage)>,
-        broadcast::Receiver<(u64, DisplayMessage)>,
-    ) {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let backlog = inner
-            .entries
-            .iter()
-            .filter(|(id, _)| after.map_or(true, |after| *id > after))
-            .cloned()
-            .collect();
-        (backlog, self.live_tx.subscribe())
-    }
-
-    pub fn display_history_markdown(&self) -> String {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner
-            .entries
-            .iter()
-            .map(|(_, message)| {
-                let label = message.kind.label();
-                format!("**{label}:**\n\n{}", message.text)
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
-}
-
 #[derive(Clone)]
 pub struct AppState {
     pub queue_tx: mpsc::Sender<QueueItem>,
@@ -261,7 +105,10 @@ impl AppState {
     ) -> (Self, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
-        let ai = std::sync::Arc::new(ai::AiRuntime::new(configurations, notifications_tx.clone()));
+        let ai = std::sync::Arc::new(ai::AiRuntime::new(
+            configurations,
+            Notifier::new(notifications_tx.clone()),
+        ));
         let history = NotificationHistory::record(&notifications_tx);
 
         (
@@ -485,10 +332,6 @@ async fn try_ai_turn(state: &AppState, kind: TurnKind) -> bool {
         return true;
     }
     while let Some(prompt) = conversation.build_prompt(&configuration.system_text) {
-        state.notify(DisplayMessage::new(
-            DisplayMessageKind::AiUsage,
-            prompt.token_estimates_summary(),
-        ));
         match state.ai.complete(&configuration, &prompt).await {
             Ok(result) => {
                 let uneventful = kind == TurnKind::Periodic && ai::is_no_comment(&result.answer);

@@ -747,9 +747,10 @@ impl Default for ToolBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notifications::Notifier;
 
     fn game_state() -> GameState {
-        GameState::new(tokio::sync::broadcast::channel(1).0)
+        GameState::new(Notifier::new(tokio::sync::broadcast::channel(1).0))
     }
 
     #[tokio::test]

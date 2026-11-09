@@ -19,6 +19,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::notifications::{DisplayMessage, DisplayMessageKind, Notifier};
+
 const TESTED_DWARF_FORTRESS_VERSION: &str = "53.16";
 const TESTED_DFHACK_VERSION: &str = "53.16-r2";
 pub const MAX_CREATURE_PAGE_SIZE: usize = 50;
@@ -266,14 +268,14 @@ struct Connection {
 #[derive(Clone)]
 pub struct GameState {
     connection: Arc<Mutex<Connection>>,
-    notifications_tx: tokio::sync::broadcast::Sender<crate::DisplayMessage>,
+    notifier: Notifier,
 }
 
 impl GameState {
-    pub fn new(notifications_tx: tokio::sync::broadcast::Sender<crate::DisplayMessage>) -> Self {
+    pub fn new(notifier: Notifier) -> Self {
         Self {
             connection: Arc::default(),
-            notifications_tx,
+            notifier,
         }
     }
 
@@ -341,7 +343,7 @@ impl GameState {
         notify_version_warning(
             warning,
             &mut connection.last_version_warning,
-            &self.notifications_tx,
+            &self.notifier,
         );
         connection.client = Some(client);
         Ok(())
@@ -989,22 +991,18 @@ fn is_link_failure(error: &dfhack_remote::Error) -> bool {
 fn notify_version_warning(
     warning: Option<String>,
     previous_warning: &mut Option<String>,
-    notifications_tx: &tokio::sync::broadcast::Sender<crate::DisplayMessage>,
+    notifier: &Notifier,
 ) {
     if warning == *previous_warning {
         return;
     }
     match warning {
         Some(warning) => {
-            if notifications_tx
-                .send(crate::DisplayMessage::new(
-                    crate::DisplayMessageKind::Warning,
-                    warning.clone(),
-                ))
-                .is_ok()
-            {
-                *previous_warning = Some(warning);
-            }
+            notifier.notify(DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                warning.clone(),
+            ));
+            *previous_warning = Some(warning);
         }
         None => *previous_warning = None,
     }
@@ -1202,38 +1200,31 @@ mod tests {
     #[test]
     fn version_warning_is_notified_only_when_it_changes() {
         let (notifications_tx, mut notifications_rx) = tokio::sync::broadcast::channel(4);
+        let notifier = Notifier::new(notifications_tx);
         let first_warning = Some("first warning".to_owned());
         let mut previous_warning = None;
 
-        notify_version_warning(
-            first_warning.clone(),
-            &mut previous_warning,
-            &notifications_tx,
-        );
+        notify_version_warning(first_warning.clone(), &mut previous_warning, &notifier);
         assert_eq!(
             notifications_rx.try_recv().unwrap(),
-            crate::DisplayMessage::new(crate::DisplayMessageKind::Warning, "first warning")
+            DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
 
-        notify_version_warning(
-            first_warning.clone(),
-            &mut previous_warning,
-            &notifications_tx,
-        );
+        notify_version_warning(first_warning.clone(), &mut previous_warning, &notifier);
         assert!(notifications_rx.try_recv().is_err());
 
         let changed_warning = Some("changed warning".to_owned());
-        notify_version_warning(changed_warning, &mut previous_warning, &notifications_tx);
+        notify_version_warning(changed_warning, &mut previous_warning, &notifier);
         assert_eq!(
             notifications_rx.try_recv().unwrap(),
-            crate::DisplayMessage::new(crate::DisplayMessageKind::Warning, "changed warning")
+            DisplayMessage::new(DisplayMessageKind::Warning, "changed warning")
         );
 
-        notify_version_warning(None, &mut previous_warning, &notifications_tx);
-        notify_version_warning(first_warning, &mut previous_warning, &notifications_tx);
+        notify_version_warning(None, &mut previous_warning, &notifier);
+        notify_version_warning(first_warning, &mut previous_warning, &notifier);
         assert_eq!(
             notifications_rx.try_recv().unwrap(),
-            crate::DisplayMessage::new(crate::DisplayMessageKind::Warning, "first warning")
+            DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
     }
 }

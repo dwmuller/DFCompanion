@@ -11,6 +11,7 @@ use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
     diagnostics::write_ai_failure_dump,
+    notifications::{DisplayMessage, DisplayMessageKind, Notifier},
     GameEvent,
 };
 
@@ -239,17 +240,16 @@ pub struct AiRuntime {
     pub configurations: ConfigurationRepository,
     pub conversation: Mutex<Conversation>,
     game_state: crate::game_state::GameState,
+    notifier: Notifier,
 }
 
 impl AiRuntime {
-    pub fn new(
-        configurations: ConfigurationRepository,
-        notifications_tx: tokio::sync::broadcast::Sender<crate::DisplayMessage>,
-    ) -> Self {
+    pub fn new(configurations: ConfigurationRepository, notifier: Notifier) -> Self {
         Self {
             configurations,
             conversation: Mutex::new(Conversation::default()),
-            game_state: crate::game_state::GameState::new(notifications_tx),
+            game_state: crate::game_state::GameState::new(notifier.clone()),
+            notifier: notifier,
         }
     }
 
@@ -278,6 +278,11 @@ impl AiRuntime {
         configuration: &AiConfiguration,
         prompt: &Prompt,
     ) -> Result<AiTurnResult, String> {
+        self.notifier.notify(DisplayMessage::new(
+            DisplayMessageKind::AiUsage,
+            prompt.token_estimates_summary(),
+        ));
+
         let key = self.configurations.get_api_key(&configuration.id)?;
         self.complete_with_key(configuration, prompt, &key).await
     }
@@ -545,7 +550,7 @@ mod tests {
         use genai::adapter::AdapterKind;
 
         let (sender, _) = broadcast::channel(4);
-        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), sender);
+        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
         let prompt = Prompt {
             history: Vec::new(),
             content: "Hello.".to_owned(),
@@ -644,7 +649,7 @@ mod tests {
         use genai::adapter::AdapterKind;
 
         let (sender, _) = broadcast::channel(4);
-        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), sender);
+        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
         let (url, mut requests, server) = start_mock_provider(vec![
             json!({
                 "id": "msg_tools",
@@ -714,7 +719,7 @@ mod tests {
         use genai::adapter::AdapterKind;
 
         let (sender, _) = broadcast::channel(4);
-        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), sender);
+        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
         let (url, mut requests, server) = start_mock_provider(vec![
             json!({
                 "id": "chatcmpl-tool",

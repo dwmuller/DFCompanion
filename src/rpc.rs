@@ -4,6 +4,7 @@ use crate::{
     api::{
         companion_server::Companion, EventSubmissionResult, EventSubmissionStatus, SimulationEvent,
     },
+    notifications::{DisplayMessage, DisplayMessageKind},
     AppState, GameEvent, QueueItem,
 };
 
@@ -48,8 +49,8 @@ impl Companion for CompanionRpc {
                     "The event queue is full (capacity {}). The plugin was asked to pause the game; this event was not accepted.",
                     crate::EVENT_QUEUE_CAPACITY
                 );
-                self.state.notify(crate::DisplayMessage::new(
-                    crate::DisplayMessageKind::Warning,
+                self.state.notify(DisplayMessage::new(
+                    DisplayMessageKind::Warning,
                     message.clone(),
                 ));
                 Ok(Response::new(EventSubmissionResult {

@@ -16,6 +16,7 @@
 //! by hand and report every string field that is not valid UTF-8, with its
 //! field-number path (for example `1.8.20`).
 
+use dfcompanion::notifications::Notifier;
 use dfhack_remote::{BlockRequest, EmptyMessage, ListRequest};
 use prost_014::{Message as _, Name as _};
 use std::collections::BTreeMap;
@@ -192,7 +193,8 @@ fn reload_lua_module() {
 async fn ai_tools_end_to_end() {
     use dfcompanion::ai_tools::execute_named;
     reload_lua_module();
-    let game_state = dfcompanion::game_state::GameState::new(tokio::sync::broadcast::channel(16).0);
+    let channel = tokio::sync::broadcast::channel(16).0;
+    let game_state = dfcompanion::game_state::GameState::new(Notifier::new(channel));
     let call = |name: &'static str, args: serde_json::Value| {
         let game_state = game_state.clone();
         async move {
