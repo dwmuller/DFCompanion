@@ -12,7 +12,7 @@ use crate::{
     ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
     diagnostics::write_ai_failure_dump,
     notifications::{DisplayMessage, DisplayMessageKind, Notifier},
-    GameEvent,
+    GameEvent, TurnKind,
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -253,6 +253,10 @@ impl AiRuntime {
         }
     }
 
+    fn notify(&self, message: DisplayMessage) {
+        self.notifier.notify(message);
+    }
+
     /// Verifies the game link at startup. Returns the status line, or the error.
     pub async fn startup_summary(&self) -> Result<String, String> {
         self.game_state.run(|game| game.startup_summary()).await
@@ -278,7 +282,7 @@ impl AiRuntime {
         configuration: &AiConfiguration,
         prompt: &Prompt,
     ) -> Result<AiTurnResult, String> {
-        self.notifier.notify(DisplayMessage::new(
+        self.notify(DisplayMessage::new(
             DisplayMessageKind::AiUsage,
             prompt.token_estimates_summary(),
         ));
@@ -406,6 +410,70 @@ impl AiRuntime {
             }
             request = request.append_message(GenaiMessage::from(responses));
         }
+    }
+
+    /// Runs AI turns until all pending data has been processed and all messages are
+    /// answered. Returns false if the AI request failed.
+    pub async fn try_ai_turn(&self, kind: TurnKind) -> bool {
+        let configuration = match self.configurations.active() {
+            Ok(Some(configuration)) => configuration,
+            Ok(None) => {
+                if kind != TurnKind::Periodic {
+                    self.notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        "Select an AI configuration before sending a chat message.",
+                    ));
+                }
+                return kind == TurnKind::Periodic;
+            }
+            Err(error) => {
+                self.notify(DisplayMessage::new(DisplayMessageKind::Warning, error));
+                return false;
+            }
+        };
+        let mut conversation = self.conversation.lock().await;
+        if kind != TurnKind::Periodic && conversation.pending_user_message_count() == 0 {
+            self.notify(DisplayMessage::new(
+                DisplayMessageKind::Status,
+                "There is no failed AI request to retry.",
+            ));
+            return true;
+        }
+        while let Some(prompt) = conversation.build_prompt(&configuration.system_text) {
+            match self.complete(&configuration, &prompt).await {
+                Ok(result) => {
+                    let uneventful = kind == TurnKind::Periodic && is_no_comment(&result.answer);
+                    conversation.complete(prompt, result.answer.clone());
+                    if !uneventful {
+                        let message =
+                            DisplayMessage::new(DisplayMessageKind::Companion, result.answer);
+                        self.notify(if kind == TurnKind::Periodic {
+                            message.with_beep()
+                        } else {
+                            message
+                        });
+                        self.notify(DisplayMessage::new(
+                            DisplayMessageKind::AiUsage,
+                            result.usage.iter().map(|u| u.summary()).join("\n"),
+                        ));
+                    }
+                    if kind == TurnKind::Periodic || conversation.pending_user_message_count() == 0
+                    {
+                        return true;
+                    }
+                }
+                Err(error) => {
+                    self.notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        format!(
+                        "AI request failed. Your chat and collected reports are retained; automatic checks are paused until you send a message or retry. {error}"
+                        ),
+                    ));
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 }
 
