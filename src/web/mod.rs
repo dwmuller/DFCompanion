@@ -24,8 +24,9 @@ use crate::{
         ConfigurationRepository,
     },
     ai_providers::built_in_providers,
+    app::{CompanionApp, GameEvent, QueueItem},
+    notifications::{DisplayMessage, DisplayMessageKind},
     web::templates::{render_configuration_form_error, ConfigurationListItem, RenderError},
-    AppState, DisplayMessage, DisplayMessageKind, GameEvent, QueueItem,
 };
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
@@ -91,7 +92,7 @@ pub fn with_request_tracing(router: Router) -> Router {
     )
 }
 
-pub fn router(state: AppState) -> Router {
+pub fn router(state: CompanionApp) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/ai-configurations", get(configurations_page))
@@ -151,7 +152,7 @@ pub fn router(state: AppState) -> Router {
 
 /// Handles POST requests for events from DFHack plugin.
 async fn plugin_event(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     axum::Json(event): axum::Json<PluginEvent>,
 ) -> impl IntoResponse {
@@ -184,7 +185,7 @@ async fn plugin_event(
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let message = format!(
                 "The event queue is full (capacity {}). The event was not accepted; pause the game.",
-                crate::EVENT_QUEUE_CAPACITY
+                state.queue_tx.max_capacity()
             );
             state.notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
@@ -243,7 +244,7 @@ fn configuration_items(
 }
 
 /// Handles GET requests for the index page.
-async fn index(State(state): State<AppState>) -> Response {
+async fn index(State(state): State<CompanionApp>) -> Response {
     match configuration_items(&state.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
@@ -255,7 +256,7 @@ async fn index(State(state): State<AppState>) -> Response {
 }
 
 /// Handles GET requests for the AI configurations page.
-async fn configurations_page(State(state): State<AppState>) -> Response {
+async fn configurations_page(State(state): State<CompanionApp>) -> Response {
     match configuration_items(&state.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
@@ -285,7 +286,7 @@ fn fragment_response(
 }
 
 /// Handles GET requests for the AI configuration list fragment
-async fn configuration_list_fragment(State(state): State<AppState>) -> Response {
+async fn configuration_list_fragment(State(state): State<CompanionApp>) -> Response {
     let (items, _active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
         Err(err) => return render_error_response("AI configurations", err),
@@ -297,7 +298,7 @@ async fn configuration_list_fragment(State(state): State<AppState>) -> Response 
 }
 
 /// Handles GET requests for the new AI configuration form fragment
-async fn new_configuration_form_fragment(State(_state): State<AppState>) -> Response {
+async fn new_configuration_form_fragment(State(_state): State<CompanionApp>) -> Response {
     let providers = match built_in_providers() {
         Ok(providers) => providers,
         Err(error) => {
@@ -318,7 +319,7 @@ async fn new_configuration_form_fragment(State(_state): State<AppState>) -> Resp
 
 /// Handles GET requests for the edit AI configuration form fragment
 async fn edit_configuration_form_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     Path(id): Path<String>,
 ) -> Response {
     let config = match state.ai.configurations.try_get(&id) {
@@ -354,7 +355,7 @@ async fn edit_configuration_form_fragment(
 }
 
 /// Handles GET requests for the closed AI configuration form fragment
-async fn closed_new_configuration_form_fragment(State(_state): State<AppState>) -> Response {
+async fn closed_new_configuration_form_fragment(State(_state): State<CompanionApp>) -> Response {
     fragment_response(
         StatusCode::OK,
         templates::render_create_closed(),
@@ -366,7 +367,7 @@ async fn closed_new_configuration_form_fragment(State(_state): State<AppState>) 
 /// POST handler for creating a new AI configuration
 ///
 async fn create_configuration_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Form(form): Form<ConfigurationForm>,
 ) -> Response {
@@ -435,7 +436,7 @@ fn configuration_form_error_response(
 
 /// Handles PUT requests for updating an AI configuration
 async fn update_configuration_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ConfigurationForm>,
@@ -476,13 +477,13 @@ async fn update_configuration_fragment(
 }
 
 /// Handles GET requests for the active AI configuration fragment.
-async fn active_configuration_fragment(State(state): State<AppState>) -> Response {
+async fn active_configuration_fragment(State(state): State<CompanionApp>) -> Response {
     active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
 /// Handles POST requests to select an AI configuration.
 async fn select_configuration_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Form(form): Form<SelectConfigurationForm>,
 ) -> Response {
@@ -501,7 +502,11 @@ async fn select_configuration_fragment(
     active_configuration_response(&state, StatusCode::OK, String::new())
 }
 
-fn active_configuration_response(state: &AppState, status: StatusCode, error: String) -> Response {
+fn active_configuration_response(
+    state: &CompanionApp,
+    status: StatusCode,
+    error: String,
+) -> Response {
     let (items, active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
         Err(error) => return render_error_response("configuration items", error),
@@ -515,7 +520,7 @@ fn active_configuration_response(state: &AppState, status: StatusCode, error: St
 
 /// Looks up a configuration and builds its list item, or the error response.
 fn configuration_item(
-    state: &AppState,
+    state: &CompanionApp,
     configuration: &AiConfiguration,
 ) -> Result<ConfigurationListItem, Response> {
     let has_api_key = state
@@ -530,7 +535,7 @@ fn configuration_item(
 }
 
 fn existing_configuration_item(
-    state: &AppState,
+    state: &CompanionApp,
     id: &str,
 ) -> Result<ConfigurationListItem, Response> {
     let configuration = state
@@ -551,7 +556,7 @@ fn as_partial(html: &str, target: &str, swap: &str) -> String {
     format!("\n<hx-partial hx-target=\"{target}\" hx-swap=\"{swap}\">{html}</hx-partial>\n")
 }
 
-fn get_active_configuration_selector(state: &AppState) -> Result<String, RenderError> {
+fn get_active_configuration_selector(state: &CompanionApp) -> Result<String, RenderError> {
     let (items, active_id) = match configuration_items(&state.ai.configurations) {
         Ok(items) => items,
         Err(re) => return Err(re),
@@ -571,7 +576,7 @@ fn get_active_configuration_selector(state: &AppState) -> Result<String, RenderE
 /// the selector only, leaving the triggering element unchanged, use the result
 /// of get_active_configuration_selector directly. Note that this behavior can
 /// be affected by htmx global settings and the hx-swap swapEmpty modifier.
-fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> {
+fn with_selector(state: &CompanionApp, html: String) -> Result<String, RenderError> {
     // Note that there was a bug in htmx 4 where deleting the triggering element
     // would cause following partials to not find their targets. So we prepend,
     // rather than append, the selector to the HTML.
@@ -585,7 +590,7 @@ fn with_selector(state: &AppState, html: String) -> Result<String, RenderError> 
     }
 }
 
-fn summary_response(state: &AppState, item: &ConfigurationListItem) -> Response {
+fn summary_response(state: &CompanionApp, item: &ConfigurationListItem) -> Response {
     let rendered = templates::render_configuration_summary(item)
         .and_then(|summary| with_selector(state, summary));
     fragment_response(StatusCode::OK, rendered, "AI configuration")
@@ -593,7 +598,7 @@ fn summary_response(state: &AppState, item: &ConfigurationListItem) -> Response 
 
 /// Handles GET requests for the closed AI configuration summary fragment.
 async fn closed_configuration_summary_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     Path(id): Path<String>,
 ) -> Response {
     match existing_configuration_item(&state, &id) {
@@ -607,7 +612,10 @@ async fn closed_configuration_summary_fragment(
 }
 
 /// Handles GET requests for the API key form fragment.
-async fn api_key_form_fragment(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn api_key_form_fragment(
+    State(state): State<CompanionApp>,
+    Path(id): Path<String>,
+) -> Response {
     match existing_configuration_item(&state, &id) {
         Ok(item) => fragment_response(
             StatusCode::OK,
@@ -620,7 +628,7 @@ async fn api_key_form_fragment(State(state): State<AppState>, Path(id): Path<Str
 
 /// Handles POST requests to save an API key.
 async fn save_api_key_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Form(form): Form<ApiKeyForm>,
@@ -663,7 +671,7 @@ async fn save_api_key_fragment(
 
 /// Handles POST requests to forget an API key.
 async fn forget_api_key_fragment(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
@@ -684,7 +692,7 @@ async fn forget_api_key_fragment(
 
 /// Handles DELETE requests to remove an AI configuration.
 async fn delete_configuration(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
@@ -825,7 +833,7 @@ struct AutomaticTurnsForm {
 
 /// Handles POST requests to configure automatic turns.
 async fn set_automatic_turns(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Form(form): Form<AutomaticTurnsForm>,
 ) -> Response {
@@ -845,7 +853,7 @@ async fn set_automatic_turns(
 
 /// Handles GET requests for the server-sent events stream.
 async fn events(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     // A reconnecting browser says where it left off, so it isn't sent
@@ -883,7 +891,7 @@ async fn events(
 }
 
 /// Serves the user/companion transcript from typed message history, not rendered DOM.
-async fn copy_conversation(State(state): State<AppState>) -> Response {
+async fn copy_conversation(State(state): State<CompanionApp>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
@@ -896,7 +904,7 @@ async fn copy_conversation(State(state): State<AppState>) -> Response {
 
 /// Handles POST requests for chat messages.
 async fn chat(
-    State(state): State<AppState>,
+    State(state): State<CompanionApp>,
     headers: HeaderMap,
     Form(form): Form<ChatForm>,
 ) -> impl IntoResponse {
@@ -932,7 +940,7 @@ async fn chat(
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             let warning = format!(
                 "The event queue is full (capacity {}). New input was not accepted.",
-                crate::EVENT_QUEUE_CAPACITY
+                state.queue_tx.max_capacity()
             );
             state.notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
@@ -955,7 +963,7 @@ async fn chat(
 }
 
 /// Handles POST requests to retry the last AI action.
-async fn retry(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn retry(State(state): State<CompanionApp>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
@@ -1021,7 +1029,7 @@ fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{DisplayMessage, DisplayMessageKind};
+    use crate::app::CompanionApp;
     use axum::body::to_bytes;
     use tower::ServiceExt;
 
@@ -1061,7 +1069,7 @@ mod test {
 
     #[tokio::test]
     async fn conversation_markdown_endpoint_uses_all_messages() {
-        let (state, _) = AppState::new();
+        let (state, _) = CompanionApp::new();
         for message in [
             DisplayMessage::new(DisplayMessageKind::User, "Question"),
             DisplayMessage::new(DisplayMessageKind::GameEvent, "Arrival"),
@@ -1105,7 +1113,7 @@ mod test {
 
     #[tokio::test]
     async fn slash_chat_input_is_a_diagnostic_not_a_user_turn() {
-        let (state, mut queue_rx) = AppState::new();
+        let (state, mut queue_rx) = CompanionApp::new();
         let mut notifications = state.notifications_tx.subscribe();
         let response = router(state)
             .oneshot(

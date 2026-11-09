@@ -58,7 +58,8 @@ impl AiTurnUsage {
         let na = || "n/a".to_string();
         let prompt_tokens = self.prompt_tokens.map_or(na(), |t| t.to_string());
         let cached_tokens = self.cached_prompt_tokens.map_or(na(), |t| t.to_string());
-        let pct_cached = if let (Some(cached), Some(total)) = (self.cached_prompt_tokens, self.prompt_tokens) {
+        let pct_cached =
+            if let (Some(cached), Some(total)) = (self.cached_prompt_tokens, self.prompt_tokens) {
                 (cached * 100 / total).to_string()
             } else {
                 "N/A".to_string()

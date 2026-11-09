@@ -4,16 +4,16 @@ use crate::{
     api::{
         companion_server::Companion, EventSubmissionResult, EventSubmissionStatus, SimulationEvent,
     },
+    app::{CompanionApp, GameEvent, QueueItem},
     notifications::{DisplayMessage, DisplayMessageKind},
-    AppState, GameEvent, QueueItem,
 };
 
 #[derive(Clone)]
 pub struct CompanionRpc {
-    state: AppState,
+    state: CompanionApp,
 }
 
-pub fn service(state: AppState) -> CompanionRpc {
+pub fn service(state: CompanionApp) -> CompanionRpc {
     CompanionRpc { state }
 }
 
@@ -47,7 +47,7 @@ impl Companion for CompanionRpc {
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 let message = format!(
                     "The event queue is full (capacity {}). The plugin was asked to pause the game; this event was not accepted.",
-                    crate::EVENT_QUEUE_CAPACITY
+                    self.state.queue_tx.max_capacity()
                 );
                 self.state.notify(DisplayMessage::new(
                     DisplayMessageKind::Warning,

@@ -1,6 +1,10 @@
 use std::{error::Error, net::SocketAddr};
 
-use dfcompanion::{api::companion_server::CompanionServer, run_companion_worker, web, AppState};
+use dfcompanion::{
+    api::companion_server::CompanionServer,
+    app::{run_companion_worker, CompanionApp},
+    web,
+};
 use tokio::net::TcpListener;
 use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
 use tonic::transport::Server;
@@ -9,9 +13,9 @@ use tonic::transport::Server;
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let grpc_address: SocketAddr = "127.0.0.1:50051".parse()?;
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
-    let (state, queue_rx) = AppState::load().map_err(std::io::Error::other)?;
+    let (state, queue_rx) = CompanionApp::load().map_err(std::io::Error::other)?;
     let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
-    tokio::spawn(dfcompanion::check_game_at_startup(state.clone()));
+    state.check_game_at_startup().await;
 
     let grpc_listener = TcpListener::bind(grpc_address).await?;
     let http_listener = TcpListener::bind(http_address).await?;

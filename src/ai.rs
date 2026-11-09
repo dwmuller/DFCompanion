@@ -10,9 +10,9 @@ use tokio::sync::Mutex;
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
+    app::GameEvent,
     diagnostics::write_ai_failure_dump,
     notifications::{DisplayMessage, DisplayMessageKind, Notifier},
-    GameEvent,
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -377,10 +377,7 @@ impl AiRuntime {
                     configuration.interaction_method
                 )
             })?;
-            usage.push(AiTurnUsage::from_genai_usage(
-                &response.usage,
-                &purpose,
-            ));
+            usage.push(AiTurnUsage::from_genai_usage(&response.usage, &purpose));
 
             let tool_calls = response
                 .tool_calls()

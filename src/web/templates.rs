@@ -8,7 +8,7 @@ use askama::Template;
 use crate::{
     ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
-    DisplayMessage,
+    notifications::DisplayMessage,
 };
 
 #[derive(Debug)]

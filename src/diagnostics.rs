@@ -1,6 +1,6 @@
 use std::{fmt::Write as _, fs, io, path::PathBuf};
 
-use crate::project_dir;
+use crate::app::project_dir;
 use chrono::Local;
 
 pub fn write_ai_failure_dump(

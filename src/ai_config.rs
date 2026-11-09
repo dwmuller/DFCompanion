@@ -10,7 +10,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::project_dir;
+use crate::app::project_dir;
 
 const CONFIG_FILE_NAME: &str = "ai-configurations.json";
 const MAX_NAME_BYTES: usize = 128;
