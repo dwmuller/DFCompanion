@@ -178,14 +178,14 @@ pub fn run_companion_worker(
             };
             match wake {
                 Wake::Item(QueueItem::AiRetry) => {
-                    suspended = !state.ai.try_ai_turn(TurnKind::Retry).await;
+                    suspended = !state.ai.send_pending_messages(TurnKind::Retry).await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
                 Wake::Item(QueueItem::Orient) => {
                     if has_active_configuration(&state) {
                         state.ai.push_user_message(ORIENT_MESSAGE).await;
-                        suspended = !state.ai.try_ai_turn(TurnKind::Player).await;
+                        suspended = !state.ai.send_pending_messages(TurnKind::Player).await;
                         flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
@@ -196,7 +196,7 @@ pub fn run_companion_worker(
                         continue;
                     }
                     state.ai.push_user_message(&text).await;
-                    suspended = !state.ai.try_ai_turn(TurnKind::Player).await;
+                    suspended = !state.ai.send_pending_messages(TurnKind::Player).await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
@@ -212,7 +212,7 @@ pub fn run_companion_worker(
                     flush_at = None;
                     if state.event_turns_enabled() && !suspended && has_active_configuration(&state)
                     {
-                        suspended = !state.ai.try_ai_turn(TurnKind::Periodic).await;
+                        suspended = !state.ai.send_pending_messages(TurnKind::Periodic).await;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
                 }
@@ -224,7 +224,7 @@ pub fn run_companion_worker(
                         && state.ai.game_is_running().await == Some(true)
                     {
                         flush_at = None;
-                        suspended = !state.ai.try_ai_turn(TurnKind::Periodic).await;
+                        suspended = !state.ai.send_pending_messages(TurnKind::Periodic).await;
                     }
                 }
             }

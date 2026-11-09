@@ -238,6 +238,7 @@ impl Prompt {
 
 pub struct AiRuntime {
     pub configurations: ConfigurationRepository,
+    send_lock: Mutex<()>,
     conversation: Mutex<Conversation>,
     game_state: crate::game_state::GameState,
     notifier: Notifier,
@@ -248,6 +249,7 @@ impl AiRuntime {
         Self {
             configurations,
             conversation: Mutex::new(Conversation::default()),
+            send_lock: Mutex::new(()),
             game_state: crate::game_state::GameState::new(notifier.clone()),
             notifier: notifier,
         }
@@ -298,11 +300,6 @@ impl AiRuntime {
         configuration: &AiConfiguration,
         prompt: &Prompt,
     ) -> Result<AiTurnResult, String> {
-        self.notify(DisplayMessage::new(
-            DisplayMessageKind::AiUsage,
-            prompt.token_estimates_summary(),
-        ));
-
         let key = self.configurations.get_api_key(&configuration.id)?;
         self.complete_with_key(configuration, prompt, &key).await
     }
@@ -428,9 +425,23 @@ impl AiRuntime {
         }
     }
 
+    async fn start_interaction(&self, system_text: &str) -> Option<Prompt> {
+        let conversation = self.conversation.lock().await;
+        conversation.build_prompt(system_text)
+    }
+
+    async fn commit_interaction(&self, prompt: Prompt, answer: String) {
+        let mut conversation = self.conversation.lock().await;
+        conversation.complete(prompt, answer);
+    }
+
     /// Runs AI turns until all pending data has been processed and all messages are
     /// answered. Returns false if the AI request failed.
-    pub async fn try_ai_turn(&self, kind: TurnKind) -> bool {
+    pub async fn send_pending_messages(&self, kind: TurnKind) -> bool {
+        // Only one caller allowed at a time. This will block the queue
+        // processing loop that calls us, but its inputs come from async queues
+        // that should be able to cope with arriving requests.
+        let _turn = self.send_lock.lock().await;
         let configuration = match self.configurations.active() {
             Ok(Some(configuration)) => configuration,
             Ok(None) => {
@@ -447,19 +458,25 @@ impl AiRuntime {
                 return false;
             }
         };
-        let mut conversation = self.conversation.lock().await;
-        if kind != TurnKind::Periodic && conversation.pending_user_message_count() == 0 {
+        // TODO: This is should go away soon - retries will be handled
+        // differently, in the UI.
+        if kind != TurnKind::Periodic && self.pending_user_message_count().await == 0 {
             self.notify(DisplayMessage::new(
                 DisplayMessageKind::Status,
                 "There is no failed AI request to retry.",
             ));
             return true;
         }
-        while let Some(prompt) = conversation.build_prompt(&configuration.system_text) {
+        while let Some(prompt) = self.start_interaction(&configuration.system_text).await {
+            self.notify(DisplayMessage::new(
+                DisplayMessageKind::AiUsage,
+                prompt.token_estimates_summary(),
+            ));
+
             match self.complete(&configuration, &prompt).await {
                 Ok(result) => {
                     let uneventful = kind == TurnKind::Periodic && is_no_comment(&result.answer);
-                    conversation.complete(prompt, result.answer.clone());
+                    self.commit_interaction(prompt, result.answer.clone()).await;
                     if !uneventful {
                         let message =
                             DisplayMessage::new(DisplayMessageKind::Companion, result.answer);
@@ -473,8 +490,7 @@ impl AiRuntime {
                             result.usage.iter().map(|u| u.summary()).join("\n"),
                         ));
                     }
-                    if kind == TurnKind::Periodic || conversation.pending_user_message_count() == 0
-                    {
+                    if kind == TurnKind::Periodic || self.pending_user_message_count().await == 0 {
                         return true;
                     }
                 }
