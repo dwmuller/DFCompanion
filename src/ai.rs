@@ -12,7 +12,7 @@ use crate::{
     ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
     diagnostics::write_ai_failure_dump,
     notifications::{DisplayMessage, DisplayMessageKind, Notifier},
-    GameEvent, TurnKind,
+    GameEvent,
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -66,7 +66,31 @@ struct Conversation {
 }
 
 #[derive(Clone, Debug)]
+enum SendResult {
+    // No errors, and no pending interactions remaining to send.
+    Drained,
+    // A message was sent. More messages are pending.
+    Sent,
+    // Unable to send because no AI configuration is active.
+    NoActiveConfiguration,
+    // An error occurred while attempting to send the interaction.
+    Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PromptKind {
+    UserRequest,
+    Automated,
+}
+impl PromptKind {
+    fn is_user_interaction(&self) -> bool {
+        *self == PromptKind::UserRequest
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Prompt {
+    kind: PromptKind,
     history: Vec<ChatMessage>,
     content: String,
     include_in_history: bool,
@@ -99,6 +123,7 @@ impl Conversation {
     }
 
     fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
+        let mut kind = PromptKind::UserRequest;
         let mut content = REQUESTS_PREFIX.to_string();
         let mut include_in_history = true;
         let system_text_tokens = estimate_token_count(system_text);
@@ -136,6 +161,7 @@ impl Conversation {
             .collect::<Vec<_>>();
         let mut included_inputs = requests.len();
         if included_inputs == 0 {
+            kind = PromptKind::Automated;
             content = PERIODIC_PROMPT.to_string();
             if self
                 .pending_input
@@ -182,6 +208,7 @@ impl Conversation {
             total_tokens,
         };
         return Some(Prompt {
+            kind,
             history: self.history.clone(),
             content,
             include_in_history,
@@ -430,82 +457,92 @@ impl AiRuntime {
         conversation.build_prompt(system_text)
     }
 
-    async fn commit_interaction(&self, prompt: Prompt, answer: String) {
+    /// Updates conversation to relect successful completion of a previously
+    /// prepared prompt. Return true if there are more messages waiting to be
+    /// sent in the conversation.
+    async fn commit_interaction(&self, prompt: Prompt, answer: String) -> bool {
         let mut conversation = self.conversation.lock().await;
         conversation.complete(prompt, answer);
+        conversation.pending_input.len() > 0
     }
 
-    /// Runs AI turns until all pending data has been processed and all messages are
-    /// answered. Returns false if the AI request failed.
-    pub async fn send_pending_messages(&self, kind: TurnKind) -> bool {
-        // Only one caller allowed at a time. This will block the queue
-        // processing loop that calls us, but its inputs come from async queues
-        // that should be able to cope with arriving requests.
-        let _turn = self.send_lock.lock().await;
+    /// Sends the next interaction, which may be a batch of messages of similar
+    /// type. Replies intended for the user are sendtto the notification queue.
+    /// Also generates AI usage notifications.
+    async fn send_next_interaction(&self) -> SendResult {
         let configuration = match self.configurations.active() {
             Ok(Some(configuration)) => configuration,
             Ok(None) => {
-                if kind != TurnKind::Periodic {
-                    self.notify(DisplayMessage::new(
-                        DisplayMessageKind::Warning,
-                        "Select an AI configuration before sending a chat message.",
-                    ));
-                }
-                return kind == TurnKind::Periodic;
+                return SendResult::NoActiveConfiguration;
             }
             Err(error) => {
-                self.notify(DisplayMessage::new(DisplayMessageKind::Warning, error));
-                return false;
+                return SendResult::Failed(error);
             }
         };
-        // TODO: This is should go away soon - retries will be handled
-        // differently, in the UI.
-        if kind != TurnKind::Periodic && self.pending_user_message_count().await == 0 {
-            self.notify(DisplayMessage::new(
-                DisplayMessageKind::Status,
-                "There is no failed AI request to retry.",
-            ));
-            return true;
-        }
-        while let Some(prompt) = self.start_interaction(&configuration.system_text).await {
+        if let Some(prompt) = self.start_interaction(&configuration.system_text).await {
             self.notify(DisplayMessage::new(
                 DisplayMessageKind::AiUsage,
                 prompt.token_estimates_summary(),
             ));
-
+            let is_user_interaction = prompt.kind.is_user_interaction();
             match self.complete(&configuration, &prompt).await {
                 Ok(result) => {
-                    let uneventful = kind == TurnKind::Periodic && is_no_comment(&result.answer);
-                    self.commit_interaction(prompt, result.answer.clone()).await;
-                    if !uneventful {
-                        let message =
-                            DisplayMessage::new(DisplayMessageKind::Companion, result.answer);
-                        self.notify(if kind == TurnKind::Periodic {
-                            message.with_beep()
-                        } else {
-                            message
-                        });
-                        self.notify(DisplayMessage::new(
-                            DisplayMessageKind::AiUsage,
-                            result.usage.iter().map(|u| u.summary()).join("\n"),
-                        ));
+                    let notify_user = is_user_interaction || !is_no_comment(&result.answer);
+                    // Consume prompt and update the conversation.
+                    let more_pending = self.commit_interaction(prompt, result.answer.clone()).await;
+                    if notify_user {
+                        self.notify(
+                            DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
+                                .with_beep(!is_user_interaction),
+                        );
                     }
-                    if kind == TurnKind::Periodic || self.pending_user_message_count().await == 0 {
-                        return true;
+                    self.notify(DisplayMessage::new(
+                        DisplayMessageKind::AiUsage,
+                        result.usage.iter().map(|u| u.summary()).join("\n"),
+                    ));
+                    if more_pending {
+                        SendResult::Sent
+                    } else {
+                        SendResult::Drained
                     }
                 }
-                Err(error) => {
+                Err(error) => SendResult::Failed(error),
+            }
+        } else {
+            SendResult::Drained
+        }
+    }
+
+    /// Runs AI turns until all pending data has been processed and all messages are
+    /// answered. Returns false if the AI request failed.
+    pub async fn flush_pending_messages(&self) -> bool {
+        // Only one caller allowed at a time. This will block the queue
+        // processing loop that calls us, but its inputs come from async queues
+        // that should be able to cope with arriving requests.
+        let _turn = self.send_lock.lock().await;
+
+        loop {
+            match self.send_next_interaction().await {
+                SendResult::Sent => {}
+                SendResult::NoActiveConfiguration => {
+                    self.notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        "No active AI configuration.",
+                    ));
+                    break false;
+                }
+                SendResult::Drained => break true,
+                SendResult::Failed(error) => {
                     self.notify(DisplayMessage::new(
                         DisplayMessageKind::Warning,
                         format!(
-                        "AI request failed. Your chat and collected reports are retained; automatic checks are paused until you send a message or retry. {error}"
+                        "AI request failed. Your chat and collected reports are retained; AI processing is paused until you send a message or retry. {error}"
                         ),
                     ));
-                    return false;
+                    break false;
                 }
             }
         }
-        return true;
     }
 }
 
@@ -652,6 +689,7 @@ mod tests {
         let (sender, _) = broadcast::channel(4);
         let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
         let prompt = Prompt {
+            kind: PromptKind::UserRequest,
             history: Vec::new(),
             content: "Hello.".to_owned(),
             include_in_history: true,
@@ -783,6 +821,7 @@ mod tests {
             system_text: "Custom system instructions.".to_owned(),
         };
         let prompt = Prompt {
+            kind: PromptKind::Automated,
             history: Vec::new(),
             content: "Use tools.".to_owned(),
             include_in_history: true,
@@ -862,6 +901,7 @@ mod tests {
             system_text: "Custom system instructions.".to_owned(),
         };
         let prompt = Prompt {
+            kind: PromptKind::UserRequest,
             history: Vec::new(),
             content: "Use a tool.".to_owned(),
             include_in_history: true,

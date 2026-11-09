@@ -178,14 +178,22 @@ pub fn run_companion_worker(
             };
             match wake {
                 Wake::Item(QueueItem::AiRetry) => {
-                    suspended = !state.ai.send_pending_messages(TurnKind::Retry).await;
+                    // TODO: This should go away soon - retries will be handled by the UI.
+                    if state.ai.pending_user_message_count().await == 0 {
+                        state.notify(DisplayMessage::new(
+                            DisplayMessageKind::Status,
+                            "There is no failed AI request to retry.",
+                        ));
+                        continue;
+                    }
+                    suspended = !state.ai.flush_pending_messages().await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
                 Wake::Item(QueueItem::Orient) => {
                     if has_active_configuration(&state) {
                         state.ai.push_user_message(ORIENT_MESSAGE).await;
-                        suspended = !state.ai.send_pending_messages(TurnKind::Player).await;
+                        suspended = !state.ai.flush_pending_messages().await;
                         flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
@@ -196,7 +204,7 @@ pub fn run_companion_worker(
                         continue;
                     }
                     state.ai.push_user_message(&text).await;
-                    suspended = !state.ai.send_pending_messages(TurnKind::Player).await;
+                    suspended = !state.ai.flush_pending_messages().await;
                     flush_at = None;
                     next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                 }
@@ -212,7 +220,7 @@ pub fn run_companion_worker(
                     flush_at = None;
                     if state.event_turns_enabled() && !suspended && has_active_configuration(&state)
                     {
-                        suspended = !state.ai.send_pending_messages(TurnKind::Periodic).await;
+                        suspended = !state.ai.flush_pending_messages().await;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
                 }
@@ -224,7 +232,7 @@ pub fn run_companion_worker(
                         && state.ai.game_is_running().await == Some(true)
                     {
                         flush_at = None;
-                        suspended = !state.ai.send_pending_messages(TurnKind::Periodic).await;
+                        suspended = !state.ai.flush_pending_messages().await;
                     }
                 }
             }
@@ -286,16 +294,6 @@ async fn run_chat_command(state: &AppState, command: Result<chat_commands::ChatC
         )),
         Err(error) => state.notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, error)),
     }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum TurnKind {
-    /// Answers a chat message the player just sent.
-    Player,
-    /// Re-sends the player's pending messages after a failure.
-    Retry,
-    /// An automatic turn with no player message.
-    Periodic,
 }
 
 #[cfg(test)]

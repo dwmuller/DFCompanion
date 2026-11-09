@@ -1134,7 +1134,8 @@ mod test {
 
     #[test]
     fn replay_and_live_messages_render_identically_and_only_live_beeps() {
-        let message = DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**").with_beep();
+        let message =
+            DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**").with_beep(true);
         let replay = notification_events(7, &message, false);
         let live = notification_events(7, &message, true);
 

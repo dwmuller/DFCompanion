@@ -61,8 +61,8 @@ impl DisplayMessage {
         }
     }
 
-    pub fn with_beep(mut self) -> Self {
-        self.beep = true;
+    pub fn with_beep(mut self, beep: bool) -> Self {
+        self.beep = beep;
         self
     }
 }
