@@ -2,8 +2,9 @@
 //!
 //! [`GameState`] owns one cached DFHack connection. The version check runs only
 //! when a connection is (re)established. Query methods validate their arguments,
-//! make synchronous DFHack calls, and shape the data for the AI. They block, so
-//! async callers should use [`GameState::run`].
+//! make synchronous DFHack calls, and shape the data for the AI. The only
+//! mutating operation pauses a running fortress when AI processing is blocked.
+//! These calls block, so async callers should use [`GameState::run`].
 //!
 //! The AI should know only what the player knows. Creature information therefore
 //! comes from the `rpc.dfcompanion` Lua module (see `lua/rpc/dfcompanion.lua`),
@@ -453,6 +454,26 @@ impl GameState {
             })?
             .reply;
         Ok(reply)
+    }
+
+    /// Pauses a loaded, running fortress and records why so the Lua plugin can
+    /// notify the player. Returns false if the fortress was already paused.
+    pub fn pause_for_ai_block(&self, reason: &str) -> Result<bool, String> {
+        let result = self
+            .with_client(
+                "Could not pause Dwarf Fortress for blocked AI processing",
+                |client| {
+                    client.core().run_lua(CoreRunLuaRequest {
+                        module: LUA_MODULE.to_owned(),
+                        function: "pause_for_ai_block".to_owned(),
+                        arguments: vec![reason.to_owned()],
+                    })
+                },
+            )?
+            .reply
+            .value
+            .concat();
+        parse_lua_boolean_result(&result, "pause_for_ai_block")
     }
 
     /// Returns a high-level snapshot: world, save, pause state, view, and the
@@ -988,6 +1009,16 @@ fn is_link_failure(error: &dfhack_remote::Error) -> bool {
     )
 }
 
+fn parse_lua_boolean_result(result: &str, function: &str) -> Result<bool, String> {
+    match result.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(format!(
+            "DFHack Lua function {function} returned an invalid boolean result: {other:?}"
+        )),
+    }
+}
+
 fn notify_version_warning(
     warning: Option<String>,
     previous_warning: &mut Option<String>,
@@ -1226,5 +1257,13 @@ mod tests {
             notifications_rx.try_recv().unwrap(),
             DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
+    }
+
+    #[test]
+    fn lua_pause_result_must_be_a_boolean() {
+        assert_eq!(parse_lua_boolean_result("true", "pause"), Ok(true));
+        assert_eq!(parse_lua_boolean_result("false", "pause"), Ok(false));
+        assert!(parse_lua_boolean_result("", "pause").is_err());
+        assert!(parse_lua_boolean_result("true\nerror", "pause").is_err());
     }
 }

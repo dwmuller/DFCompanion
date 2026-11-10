@@ -126,6 +126,26 @@ local function report_failure(err)
     dfhack.printerr(MESSAGE_PREFIX .. ' ' .. tostring(err))
 end
 
+local function report_ai_block_pause(reason)
+    local detail = tostring(reason):gsub('%[', '[['):gsub('%]', ']]')
+    dfhack.gui.showAnnouncement(MESSAGE_PREFIX .. ' paused the game because AI processing is blocked.',
+        COLOR_LIGHTRED, true)
+    dfhack.gui.showPopupAnnouncement(
+        'DFCompanion paused Dwarf Fortress because AI processing is blocked.[B]' ..
+        detail .. '[B]Review the DFCompanion warning, then resume AI processing when ready.')
+end
+
+local function on_state_change(state)
+    if state == SC_MAP_UNLOADED then
+        disable()
+    elseif state == SC_PAUSED then
+        local reason = rpc.take_ai_block_pause_reason()
+        if reason ~= '' then
+            report_ai_block_pause(reason)
+        end
+    end
+end
+
 local function on_report(report_id)
     if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
         return
@@ -156,11 +176,7 @@ local function enable()
         eventful.enableEvent(eventful.eventType.REPORT, 1)
         eventful.onReport[STATE_KEY] = on_report
         enabled = true
-        dfhack.onStateChange[STATE_KEY] = function(state)
-            if state == SC_MAP_UNLOADED then
-                disable()
-            end
-        end
+        dfhack.onStateChange[STATE_KEY] = on_state_change
         print('DFCompanion Lua script enabled.')
     else
         print('DFCompanion Lua script is already enabled.')

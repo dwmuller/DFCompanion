@@ -139,6 +139,18 @@ impl CompanionApp {
         self.chat_state.send_replace(state)
     }
 
+    async fn block_chat(&self, reason: &str) {
+        let previous_state = self.set_chat_state(ChatState::Blocked);
+        if previous_state == ChatState::Blocked {
+            return;
+        }
+
+        self.notify(DisplayMessage::new(
+            DisplayMessageKind::Warning,
+            blocked_warning_message(reason, self.ai.pause_for_ai_block(reason).await),
+        ));
+    }
+
     fn has_active_configuration(&self) -> bool {
         matches!(self.ai.configurations.active(), Ok(Some(_)))
     }
@@ -251,11 +263,7 @@ impl CompanionApp {
             match self.ai.send_next_interaction().await {
                 SendResult::MorePending => {}
                 SendResult::NoActiveConfiguration => {
-                    self.notify(DisplayMessage::new(
-                        DisplayMessageKind::Warning,
-                        "No active AI configuration.",
-                    ));
-                    self.set_chat_state(ChatState::Blocked);
+                    self.block_chat("No active AI configuration.").await;
                     break;
                 }
                 SendResult::Drained => {
@@ -263,13 +271,10 @@ impl CompanionApp {
                     break;
                 }
                 SendResult::Failed(error) => {
-                    self.notify(DisplayMessage::new(
-                        DisplayMessageKind::Warning,
-                        format!(
+                    self.block_chat(&format!(
                         "AI request failed. Your chat and collected reports are retained; AI processing is paused until you send a message or retry. {error}"
-                        ),
-                    ));
-                    self.set_chat_state(ChatState::Blocked);
+                    ))
+                    .await;
                     break;
                 }
             }
@@ -365,6 +370,20 @@ impl CompanionApp {
     }
 }
 
+fn blocked_warning_message(reason: &str, pause_result: Result<bool, String>) -> String {
+    let pause_message = match pause_result {
+        Ok(true) => {
+            "DFCompanion paused Dwarf Fortress because AI processing is blocked.".to_owned()
+        }
+        Ok(false) => {
+            "Dwarf Fortress was already paused; DFCompanion did not change its pause state."
+                .to_owned()
+        }
+        Err(error) => format!("DFCompanion could not pause Dwarf Fortress: {error}"),
+    };
+    format!("{reason} {pause_message}")
+}
+
 async fn run_chat_command(
     state: &CompanionApp,
     command: Result<chat_commands::ChatCommand, String>,
@@ -418,6 +437,19 @@ mod tests {
                 return message;
             }
         }
+    }
+
+    #[test]
+    fn blocked_warning_does_not_claim_to_pause_an_already_paused_game() {
+        let paused = blocked_warning_message("AI request failed.", Ok(true));
+        assert!(paused.contains("DFCompanion paused Dwarf Fortress"));
+
+        let already_paused = blocked_warning_message("AI request failed.", Ok(false));
+        assert!(already_paused.contains("was already paused"));
+        assert!(!already_paused.contains("DFCompanion paused Dwarf Fortress"));
+
+        let failure = blocked_warning_message("AI request failed.", Err("DFHack offline".into()));
+        assert!(failure.contains("could not pause Dwarf Fortress: DFHack offline"));
     }
 
     #[tokio::test]

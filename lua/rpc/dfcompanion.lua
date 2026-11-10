@@ -2,15 +2,45 @@ local _ENV = mkmodule('rpc.dfcompanion')
 
 local json = require('json')
 
+local ai_block_pause_reason
+
 -- Functions the companion service calls through DFHack's RunLua RPC. DFHack only
 -- allows RunLua on modules whose names start with "rpc." (its documented
 -- "*-rpc" and "*.rpc" suffix forms are rejected by an inverted check in DFHack).
 -- RunLua stringifies each return value, so functions return JSON text. They
--- must be read-only and must not run caller-supplied code.
+-- must not run caller-supplied code. The pause function below is the one
+-- intentional mutation: it only pauses a running fortress.
 --
 -- The companion is meant to know what the player knows, so this module decides
 -- which creatures the player is aware of, grouped like the game's Creatures
 -- screen: residents, pets/livestock, other creatures, and dead/missing.
+
+-- Pauses a running fortress for a blocked AI turn. The reason is read by the
+-- local dfcompanion script when DFHack emits SC_PAUSED.
+function pause_for_ai_block(reason)
+    if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
+        error('Cannot pause Dwarf Fortress because no fortress is loaded.')
+    end
+    if df.global.pause_state then
+        return 'false'
+    end
+
+    local previous_reason = ai_block_pause_reason
+    ai_block_pause_reason = tostring(reason or '')
+    local ok, err = pcall(function() dfhack.world.SetPauseState(true) end)
+    if not ok then
+        ai_block_pause_reason = previous_reason
+        error(err)
+    end
+    return 'true'
+end
+
+-- Returns and clears the reason for the next pause caused by the companion.
+function take_ai_block_pause_reason()
+    local reason = ai_block_pause_reason
+    ai_block_pause_reason = nil
+    return reason or ''
+end
 
 local U = dfhack.units
 

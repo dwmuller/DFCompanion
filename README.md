@@ -20,7 +20,7 @@ DFCompanion and DFHack accept connections from localhost only; there is no share
 
 ## Using the DFHack script
 
-When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Only announcements are forwarded, in the same format as the `get_recent_reports` tool (game date, type, category, text). Forwarding is synchronous. If sending fails, the script pauses the game and raises an alert badge and a dismissible popup; fix or restart DFCompanion and unpause (or run `disable dfcompanion`). The script stays enabled, and the game pauses again if the problem persists.
+When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Only announcements are forwarded, in the same format as the `get_recent_reports` tool (game date, type, category, text). Forwarding is synchronous. If sending fails, the script pauses the game and raises an alert badge and a dismissible popup; fix or restart DFCompanion and unpause (or run `disable dfcompanion`). If AI processing becomes blocked while the game is running, DFCompanion pauses it and the script displays a popup with the reason. The script stays enabled, and the game pauses again if event forwarding fails.
 
 - `disable dfcompanion` stops forwarding reports.
 - `enable dfcompanion` re-enables it during the current DFHack session.

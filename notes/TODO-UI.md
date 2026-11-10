@@ -2,19 +2,6 @@
 
 ## Main page UI improvements
 
-- Enhance chat state change behavior:
-  - When entering Blocked state, pause DF.
-    - Add a function in GameState to interrogate game running state and to pause
-      it. Do not provide a method of unpausing. DFC does not need to remember
-      whether or not it paused a game, though it should refrain from saying it
-      paused it if it was already paused.
-    - Use these functions from CompanionApp to implement the behavior.
-    - Ensure that when DFCompanion pauses the game, the plugin displays a popup
-      to the user notifying them of this.
-    - Send a similar message to DFC's notification queue as a warning. If
-      available, include the reason for the block.
-      - Consider changing GameState to a struct so the Blocked state can carry
-        reason text.
 - Track the state of individual AI inputs and provide feedback in the
   Conversation control:
   - Pending: Not sent to AI yet. (Maybe lowlighted and/or italic text.)

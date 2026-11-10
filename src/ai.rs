@@ -293,6 +293,21 @@ impl AiRuntime {
             .flatten()
     }
 
+    /// Pauses a running fortress if AI processing becomes blocked.
+    #[cfg(not(test))]
+    pub async fn pause_for_ai_block(&self, reason: &str) -> Result<bool, String> {
+        let reason = reason.to_owned();
+        let game_state = self.game_state.clone();
+        tokio::task::spawn_blocking(move || game_state.pause_for_ai_block(&reason))
+            .await
+            .map_err(|error| format!("DFHack pause task failed: {error}"))?
+    }
+
+    #[cfg(test)]
+    pub async fn pause_for_ai_block(&self, _reason: &str) -> Result<bool, String> {
+        Err("Pausing a live game is disabled in unit tests.".to_owned())
+    }
+
     /// Runs a tool directly, as the model would, for manual testing.
     /// Returns the JSON text the model would receive.
     pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> String {
