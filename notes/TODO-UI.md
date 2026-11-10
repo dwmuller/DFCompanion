@@ -2,27 +2,23 @@
 
 ## Main page UI improvements
 
-- Define and display chat state.
+- Display chat state above the Chat control, next to its title.
   - Idle, Processing, Blocked
-  - Enter Blocked state when there's any failure to process AI input (not just
-    user requests) and receive a response.
-    - Pause the game. A prominent notification should appear in both DFC and DF
-      when this happens. This is arguably an exception to the policy of not
-      affecting the running game. Note that there will be no way to unpause the
-      game from DFC. DFC does not need to remember whether or not it paused a
-      game, though it should refrain from saying it paused it if it was already
-      paused.
-    - Send a System display message to indicate the reason.
-    - While Blocked, do not process pending user requests, pending reports, or
-      timed check-ins.
-    - Entering Blocked state has no effect on the ordering of pending AI input.
-    - Note that if the game is resumed, pending reports can accumulate while
-      chat is blocked, and normal elision/compaction processing occurs.
-  - Indicator should be hidden when Idle and there is no pending AI input.
-    - Otherwise, show chat state and user pending request count, and pending
-      game report count.
-    - When Blocked, include a button to resume AI processing in this indicator.
-      This is the only way to exit Blocked state.
+  - When Idle, hide this element.
+  - When Processing, show "Waiting for AI response".
+  - When Blocked, "AI processing is blocked", and a button that effects a call
+    to CompanionApp::resume_chat_if_blocked().
+- Enhance chat state change behavior:
+  - When entering Blocked state, pause DF.
+    - Add a function in GameState to interrogate game running state and to pause
+      it. Do not provide a method of unpausing. DFC does not need to remember
+      whether or not it paused a game, though it should refrain from saying it
+      paused it if it was already paused.
+    - Ensure that when DFCompanion pauses the game, the plugin displays a popup
+      to the user notifying them of this.
+    - Send a similar message to DFC's notification queue as a warning. If available, include the reason for the block.
+      - Consider changing GameState to a struct so the Blocked state can carry
+        reason text.
 - Track individual AI input states and provide feedback in the Conversation
   control:
   - Pending: Not sent to AI yet. (Maybe lowlighted and/or italic text.)
@@ -39,9 +35,11 @@
       but maybe they should be shown in some fashion and be included in these
       behaviors. I have not really been testing this feature.
     - Pending AI inputs retain their chronological ordering regardless of type.
-- Replace retry button with one that pulls all pending user requests off the
-  queue and places them back in the chat editor. This is independent of chat
-  state.
+- Replace retry button with a "Recall" button  that pulls all pending user
+  requests off the queue and places them back in the chat editor. This is
+  independent of chat state.
+  - Provide hover text that explains the button's purpose succinctly but
+    clearly.
   - These pending messages should disappear from the Conversation control
   - If the user currently has unsubmitted text in editor, the recalled messages
     precede it.
