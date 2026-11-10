@@ -2,9 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use directories::ProjectDirs;
 use serde::Serialize;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 
+use crate::ai::SendResult;
 use crate::game_state::validate_game_date;
 use crate::notifications::{DisplayMessage, DisplayMessageKind, NotificationHistory, Notifier};
 use crate::{ai, ai_config, ai_tools, chat_commands};
@@ -71,6 +73,13 @@ enum Wake {
     Check,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatState {
+    Idle,
+    Processing,
+    Blocked,
+}
+
 pub struct CompanionApp {
     pub queue_tx: mpsc::Sender<QueueItem>,
     pub notifications_tx: broadcast::Sender<DisplayMessage>,
@@ -82,6 +91,7 @@ pub struct CompanionApp {
     /// Whether the AI gets a turn every `PERIODIC_CHECK_INTERVAL` while the
     /// game runs. Off by default, for the same reason.
     pub periodic_turns: std::sync::atomic::AtomicBool,
+    chat_state: watch::Sender<ChatState>,
 }
 
 impl CompanionApp {
@@ -110,9 +120,26 @@ impl CompanionApp {
                 ai,
                 event_turns: Default::default(),
                 periodic_turns: Default::default(),
+                chat_state: watch::channel(ChatState::Idle).0,
             }),
             queue_rx,
         )
+    }
+
+    pub fn chat_state(&self) -> ChatState {
+        *self.chat_state.borrow()
+    }
+
+    pub fn subscribe_chat_state(&self) -> watch::Receiver<ChatState> {
+        self.chat_state.subscribe()
+    }
+
+    fn set_chat_state(&self, state: ChatState) -> ChatState {
+        self.chat_state.send_replace(state)
+    }
+
+    fn has_active_configuration(&self) -> bool {
+        matches!(self.ai.configurations.active(), Ok(Some(_)))
     }
 
     /// Checks the game connection once at startup, reports the result, and if the
@@ -150,91 +177,184 @@ impl CompanionApp {
         let _ = self.notifications_tx.send(message);
     }
 
-    fn has_active_configuration(&self) -> bool {
-        matches!(self.ai.configurations.active(), Ok(Some(_)))
+    pub fn chat_is_blocked(&self) -> bool {
+        matches!(*self.chat_state.borrow(), ChatState::Blocked)
     }
-}
 
-/// Processes the queue. Besides player input, the AI gets a turn (with all
-/// pending reports) at most `EVENT_FLUSH_DELAY` after a game event arrives,
-/// and every `PERIODIC_CHECK_INTERVAL` while the game is running. After an AI
-/// failure, automatic turns stop until the player sends a message or retries,
-/// so a broken configuration cannot flood the chat or burn requests.
-pub fn run_companion_worker(
-    mut queue_rx: mpsc::Receiver<QueueItem>,
-    state: Arc<CompanionApp>,
-) -> impl std::future::Future<Output = ()> + Send + 'static {
-    async move {
-        let mut flush_at: Option<Instant> = None;
-        let mut next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
-        let mut suspended = false;
+    pub fn resume_if_blocked(&self) -> bool {
+        self.chat_state.send_if_modified(|state| {
+            if *state == ChatState::Blocked {
+                *state = ChatState::Idle;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Sends a chat message to the AI.
+    pub fn chat(&self, message: String) -> Result<(), String> {
+        self.enqueue(QueueItem::UserInput(message))
+    }
+
+    fn enqueue(&self, item: QueueItem) -> Result<(), String> {
+        match self.queue_tx.try_send(item) {
+            Ok(_) => Ok(()),
+            Err(Full(item)) => Err(format!(
+                "The event queue is full (capacity {}), failed to send: {:#?}",
+                self.queue_tx.max_capacity(),
+                item
+            )),
+            Err(Closed(item)) => Err(format!(
+                "The event queue is closed, failed to send: {:#?}",
+                item
+            )),
+        }
+    }
+
+    fn try_begin_processing(&self) -> Result<(), ChatState> {
+        let mut previous_state = ChatState::Idle;
+        let changed = self.chat_state.send_if_modified(|state| {
+            previous_state = *state;
+            match *state {
+                ChatState::Idle => {
+                    *state = ChatState::Processing;
+                    true
+                }
+                ChatState::Processing | ChatState::Blocked => false,
+            }
+        });
+        if changed {
+            Ok(())
+        } else {
+            Err(previous_state)
+        }
+    }
+
+    /// Processes pending AI input until it is drained or an interaction fails.
+    async fn flush_pending_interactions(&self) {
+        match self.try_begin_processing() {
+            Ok(_) => {}
+            Err(ChatState::Processing) => {
+                // This shouldn't happen, likely concurrent processing attempt.
+                eprintln!("flush_pending_interactions: AI is already processing interactions");
+                return; // We were already processing.
+            }
+            _ => {
+                return;
+            }
+        }
         loop {
-            let flush_deadline = flush_at.unwrap_or(next_check);
-            let wake = tokio::select! {
-                item = queue_rx.recv() => match item {
-                    Some(item) => Wake::Item(item),
-                    None => break,
-                },
-                _ = sleep_until(flush_deadline), if flush_at.is_some() => Wake::Flush,
-                _ = sleep_until(next_check) => Wake::Check,
-            };
-            match wake {
-                Wake::Item(QueueItem::AiRetry) => {
-                    // TODO: This should go away soon - retries will be handled by the UI.
-                    if state.ai.pending_user_message_count().await == 0 {
-                        state.notify(DisplayMessage::new(
-                            DisplayMessageKind::Status,
-                            "There is no failed AI request to retry.",
-                        ));
-                        continue;
-                    }
-                    suspended = !state.ai.flush_pending_messages().await;
-                    flush_at = None;
-                    next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
-                }
-                Wake::Item(QueueItem::Orient) => {
-                    if state.has_active_configuration() {
-                        state.ai.push_user_message(ORIENT_MESSAGE).await;
-                        suspended = !state.ai.flush_pending_messages().await;
-                        flush_at = None;
-                        next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
-                    }
-                }
-                Wake::Item(QueueItem::UserInput(text)) => {
-                    if let Some(command) = chat_commands::ChatCommand::parse(&text) {
-                        run_chat_command(&state, command).await;
-                        continue;
-                    }
-                    state.ai.push_user_message(&text).await;
-                    suspended = !state.ai.flush_pending_messages().await;
-                    flush_at = None;
-                    next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
-                }
-                Wake::Item(QueueItem::GameEvent(event)) => {
-                    state.notify(DisplayMessage::new(
-                        DisplayMessageKind::GameEvent,
-                        format!("{} [{}] {}", event.date, event.category, event.text),
+            match self.ai.send_next_interaction().await {
+                SendResult::MorePending => {}
+                SendResult::NoActiveConfiguration => {
+                    self.notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        "No active AI configuration.",
                     ));
-                    state.ai.push_report(event).await;
-                    flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
+                    self.set_chat_state(ChatState::Blocked);
+                    break;
                 }
-                Wake::Flush => {
-                    flush_at = None;
-                    if state.event_turns_enabled() && !suspended && state.has_active_configuration()
-                    {
-                        suspended = !state.ai.flush_pending_messages().await;
+                SendResult::Drained => {
+                    self.set_chat_state(ChatState::Idle);
+                    break;
+                }
+                SendResult::Failed(error) => {
+                    self.notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        format!(
+                        "AI request failed. Your chat and collected reports are retained; AI processing is paused until you send a message or retry. {error}"
+                        ),
+                    ));
+                    self.set_chat_state(ChatState::Blocked);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Processes the queue. Besides player input, the AI gets a turn (with all
+    /// pending reports) at most `EVENT_FLUSH_DELAY` after a game event arrives,
+    /// and every `PERIODIC_CHECK_INTERVAL` while the game is running. After an AI
+    /// failure, automatic turns stop until the player sends a message or retries,
+    /// so a broken configuration cannot flood the chat or burn requests.
+    pub fn run_companion_worker(
+        self: Arc<CompanionApp>,
+        mut queue_rx: mpsc::Receiver<QueueItem>,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        async move {
+            let mut flush_at: Option<Instant> = None;
+            let mut next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+            loop {
+                let flush_deadline = flush_at.unwrap_or(next_check);
+                let wake = tokio::select! {
+                    item = queue_rx.recv() => match item {
+                        Some(item) => Wake::Item(item),
+                        None => break,
+                    },
+                    _ = sleep_until(flush_deadline), if flush_at.is_some() => Wake::Flush,
+                    _ = sleep_until(next_check) => Wake::Check,
+                };
+                match wake {
+                    Wake::Item(QueueItem::AiRetry) => {
+                        // TODO: This should go away soon - retries will be handled by the UI.
+                        if self.ai.pending_user_message_count().await == 0 {
+                            self.notify(DisplayMessage::new(
+                                DisplayMessageKind::Status,
+                                "There is no failed AI request to retry.",
+                            ));
+                            continue;
+                        }
+                        self.flush_pending_interactions().await;
+                        flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
-                }
-                Wake::Check => {
-                    next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
-                    if state.periodic_turns_enabled()
-                        && !suspended
-                        && state.has_active_configuration()
-                        && state.ai.game_is_running().await == Some(true)
-                    {
+                    Wake::Item(QueueItem::Orient) => {
+                        if self.has_active_configuration() {
+                            self.ai.push_user_message(ORIENT_MESSAGE).await;
+                            self.flush_pending_interactions().await;
+                            flush_at = None;
+                            next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                        }
+                    }
+                    Wake::Item(QueueItem::UserInput(text)) => {
+                        if let Some(command) = chat_commands::ChatCommand::parse(&text) {
+                            run_chat_command(&self, command).await;
+                            continue;
+                        }
+                        self.ai.push_user_message(&text).await;
+                        self.flush_pending_interactions().await;
                         flush_at = None;
-                        suspended = !state.ai.flush_pending_messages().await;
+                        next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                    }
+                    Wake::Item(QueueItem::GameEvent(event)) => {
+                        self.notify(DisplayMessage::new(
+                            DisplayMessageKind::GameEvent,
+                            format!("{} [{}] {}", event.date, event.category, event.text),
+                        ));
+                        self.ai.push_report(event).await;
+                        flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
+                    }
+                    Wake::Flush => {
+                        flush_at = None;
+                        if self.event_turns_enabled()
+                            && !self.chat_is_blocked()
+                            && self.has_active_configuration()
+                        {
+                            self.flush_pending_interactions().await;
+                            next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                        }
+                    }
+                    Wake::Check => {
+                        next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
+                        if self.periodic_turns_enabled()
+                            && !self.chat_is_blocked()
+                            && self.has_active_configuration()
+                            && self.ai.game_is_running().await == Some(true)
+                        {
+                            flush_at = None;
+                            self.flush_pending_interactions().await;
+                        }
                     }
                 }
             }
@@ -475,7 +595,7 @@ mod tests {
         let (state, queue_rx) = CompanionApp::new();
         let mut notifications = state.notifications_tx.subscribe();
         let queue_tx = state.queue_tx.clone();
-        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
         for text in ["/call no_such_tool a=1", "/bogus"] {
             queue_tx
                 .send(QueueItem::UserInput(text.to_owned()))
@@ -705,7 +825,7 @@ mod tests {
             .queue_tx
             .try_send(QueueItem::UserInput("What happened?".to_owned()))
             .unwrap();
-        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
@@ -753,7 +873,7 @@ mod tests {
         state
             .event_turns
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
         state.queue_tx.send(sample_event()).await.unwrap();
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
@@ -784,7 +904,7 @@ mod tests {
             )
             .unwrap();
         let mut notifications = state.notifications_tx.subscribe();
-        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
         state.queue_tx.send(sample_event()).await.unwrap();
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
@@ -796,7 +916,7 @@ mod tests {
     async fn periodic_checks_stay_silent_without_an_ai_configuration() {
         let (state, queue_rx) = CompanionApp::new();
         let mut notifications = state.notifications_tx.subscribe();
-        let worker = tokio::spawn(run_companion_worker(queue_rx, state.clone()));
+        let worker = tokio::spawn(state.run_companion_worker(queue_rx));
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
         worker.abort();

@@ -66,7 +66,7 @@ struct Conversation {
 }
 
 #[derive(Clone, Debug)]
-enum SendResult {
+pub enum SendResult {
     // Successful; no pending interactions remaining to send.
     Drained,
     // Successful; more interactions are pending.
@@ -463,7 +463,12 @@ impl AiRuntime {
     /// Sends the next interaction, which may be a batch of messages of similar
     /// type. Replies intended for the user are sent to the notification queue.
     /// Also generates AI usage notifications.
-    async fn send_next_interaction(&self) -> SendResult {
+    pub async fn send_next_interaction(&self) -> SendResult {
+        // Only one caller allowed at a time. This will block the queue
+        // processing loop that calls us, but its inputs come from async queues
+        // that should be able to cope with arriving requests.
+        let _turn = self.send_lock.lock().await;
+
         let configuration = match self.configurations.active() {
             Ok(Some(configuration)) => configuration,
             Ok(None) => {
@@ -508,37 +513,6 @@ impl AiRuntime {
             }
         } else {
             SendResult::Drained
-        }
-    }
-
-    /// Processes pending AI input until it is drained or an interaction fails.
-    pub async fn flush_pending_messages(&self) -> bool {
-        // Only one caller allowed at a time. This will block the queue
-        // processing loop that calls us, but its inputs come from async queues
-        // that should be able to cope with arriving requests.
-        let _turn = self.send_lock.lock().await;
-
-        loop {
-            match self.send_next_interaction().await {
-                SendResult::MorePending => {}
-                SendResult::NoActiveConfiguration => {
-                    self.notify(DisplayMessage::new(
-                        DisplayMessageKind::Warning,
-                        "No active AI configuration.",
-                    ));
-                    break false;
-                }
-                SendResult::Drained => break true,
-                SendResult::Failed(error) => {
-                    self.notify(DisplayMessage::new(
-                        DisplayMessageKind::Warning,
-                        format!(
-                        "AI request failed. Your chat and collected reports are retained; AI processing is paused until you send a message or retry. {error}"
-                        ),
-                    ));
-                    break false;
-                }
-            }
         }
     }
 }

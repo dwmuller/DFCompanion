@@ -926,10 +926,7 @@ async fn chat(
             .into_response();
     }
 
-    match state
-        .queue_tx
-        .try_send(QueueItem::UserInput(message.to_owned()))
-    {
+    match state.chat(message.to_owned()) {
         Ok(()) => {
             let kind = if crate::chat_commands::ChatCommand::parse(message).is_some() {
                 DisplayMessageKind::Diagnostic
@@ -939,27 +936,12 @@ async fn chat(
             state.notify(DisplayMessage::new(kind, message));
             fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let warning = format!(
-                "The event queue is full (capacity {}). New input was not accepted.",
-                state.queue_tx.max_capacity()
-            );
+        Err(err) => {
             state.notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
-                warning.clone(),
+                err.to_string(),
             ));
-            (StatusCode::SERVICE_UNAVAILABLE, warning).into_response()
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            state.notify(DisplayMessage::new(
-                DisplayMessageKind::Warning,
-                "The Companion queue is unavailable.",
-            ));
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "The Companion queue is unavailable.",
-            )
-                .into_response()
+            (StatusCode::SERVICE_UNAVAILABLE, err).into_response()
         }
     }
 }
