@@ -135,6 +135,7 @@ impl CompanionApp {
     }
 
     fn set_chat_state(&self, state: ChatState) -> ChatState {
+        println!("Setting chat state to {:?}", state);
         self.chat_state.send_replace(state)
     }
 
@@ -184,6 +185,7 @@ impl CompanionApp {
     pub fn resume_if_blocked(&self) -> bool {
         self.chat_state.send_if_modified(|state| {
             if *state == ChatState::Blocked {
+                println!("Setting chat state to Idle from Blocked.");
                 *state = ChatState::Idle;
                 true
             } else {
@@ -218,6 +220,7 @@ impl CompanionApp {
             previous_state = *state;
             match *state {
                 ChatState::Idle => {
+                    println!("Setting chat state to Processing from Idle.");
                     *state = ChatState::Processing;
                     true
                 }

@@ -97,6 +97,8 @@ pub fn router(state: Arc<CompanionApp>) -> Router {
         .route("/", get(index))
         .route("/ai-configurations", get(configurations_page))
         .route("/chat", post(chat))
+        .route("/chat/resume", post(resume_chat))
+        .route("/chat-state", get(chat_state_events))
         .route("/conversation.md", get(copy_conversation))
         .route("/retry", post(retry))
         .route(
@@ -248,7 +250,7 @@ async fn index(State(state): State<Arc<CompanionApp>>) -> Response {
     match configuration_items(&state.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
-            templates::render_index(&items, active_id.as_deref()),
+            templates::render_index(&items, active_id.as_deref(), state.chat_state()),
             "page",
         ),
         Err(err) => render_error_response("index", err),
@@ -946,6 +948,42 @@ async fn chat(
     }
 }
 
+/// Clears the blocked chat state; the state SSE stream updates the page.
+async fn resume_chat(State(state): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    state.resume_if_blocked();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Streams the current chat state and subsequent changes as server-rendered HTML.
+async fn chat_state_events(
+    State(state): State<Arc<CompanionApp>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream = futures_util::stream::unfold(
+        (state.subscribe_chat_state(), true),
+        |(mut receiver, initial)| async move {
+            let chat_state = if initial {
+                Some(*receiver.borrow_and_update())
+            } else if receiver.changed().await.is_ok() {
+                Some(*receiver.borrow_and_update())
+            } else {
+                None
+            }?;
+            let event = match templates::render_chat_state_content(chat_state) {
+                Ok(html) => Event::default().data(html),
+                Err(error) => {
+                    eprintln!("Could not render chat state: {error}");
+                    Event::default().data("Chat status is unavailable. Refresh the page.")
+                }
+            };
+            Some((Ok(event), (receiver, false)))
+        },
+    );
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 /// Handles POST requests to retry the last AI action.
 async fn retry(State(state): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
@@ -1013,7 +1051,7 @@ fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::app::CompanionApp;
+    use crate::app::{ChatState, CompanionApp};
     use axum::body::to_bytes;
     use tower::ServiceExt;
 
@@ -1122,6 +1160,99 @@ mod test {
             notifications.recv().await.unwrap(),
             DisplayMessage::new(DisplayMessageKind::Diagnostic, "/tools")
         );
+    }
+
+    #[tokio::test]
+    async fn resume_chat_requires_local_origin_and_clears_blocked_state() {
+        let (state, queue_rx) = CompanionApp::new();
+        let app = router(state.clone());
+        let status_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/chat-state")
+                    .header(header::HOST, HTTP_HOST)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status_response.status(), StatusCode::OK);
+        assert!(status_response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream"));
+        let mut status_events = status_response.into_body().into_data_stream();
+        let initial_status =
+            tokio::time::timeout(std::time::Duration::from_secs(2), status_events.next())
+                .await
+                .expect("initial chat status should be sent")
+                .unwrap()
+                .unwrap();
+        assert!(!String::from_utf8_lossy(&initial_status).contains("AI processing is blocked"));
+
+        let mut state_changes = state.subscribe_chat_state();
+        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
+        state
+            .chat("A request without an active configuration".to_owned())
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if *state_changes.borrow_and_update() == ChatState::Blocked {
+                    break;
+                }
+                state_changes.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("chat should become blocked without an active configuration");
+
+        let blocked_status =
+            tokio::time::timeout(std::time::Duration::from_secs(2), status_events.next())
+                .await
+                .expect("updated chat status should be sent")
+                .unwrap()
+                .unwrap();
+        assert!(String::from_utf8_lossy(&blocked_status).contains("AI processing is blocked"));
+
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat/resume")
+                    .header(header::HOST, HTTP_HOST)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        assert_eq!(state.chat_state(), ChatState::Blocked);
+
+        let resumed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chat/resume")
+                    .header(header::HOST, HTTP_HOST)
+                    .header(header::ORIGIN, HTTP_ORIGIN)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resumed.status(), StatusCode::NO_CONTENT);
+        assert_eq!(state.chat_state(), ChatState::Idle);
+        let idle_status =
+            tokio::time::timeout(std::time::Duration::from_secs(2), status_events.next())
+                .await
+                .expect("resumed chat status should be sent")
+                .unwrap()
+                .unwrap();
+        assert!(!String::from_utf8_lossy(&idle_status).contains("AI processing is blocked"));
+        worker.abort();
     }
 
     #[test]

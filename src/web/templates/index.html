@@ -76,7 +76,12 @@
       </div>
     </div>
     <div id="notifications" aria-live="polite" hx-sse:connect="/events" hx-swap="beforeend" hx-config="sse.pauseOnBackground:false"></div>
-    <h2>Chat</h2>
+    <div class="chat-heading">
+      <h2>Chat</h2>
+      <div id="chat-state" role="status" aria-live="polite" hx-sse:connect="/chat-state" hx-swap="innerHTML">
+        {% include "chat-state-content.html" %}
+      </div>
+    </div>
     <form id="chat-form"
         hx-post="/chat"
         hx-target="#chat-status"

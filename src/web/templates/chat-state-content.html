@@ -1,0 +1,10 @@
+{% if chat_state_message != "" %}
+  <span>{{ chat_state_message }}</span>
+{% else %}
+  <span hidden></span>
+{% endif %}
+{% if chat_state_blocked %}
+  <form hx-post="/chat/resume" hx-swap="none">
+    <button type="submit">Resume AI processing</button>
+  </form>
+{% endif %}

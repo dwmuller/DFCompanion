@@ -2,25 +2,21 @@
 
 ## Main page UI improvements
 
-- Display chat state above the Chat control, next to its title.
-  - Idle, Processing, Blocked
-  - When Idle, hide this element.
-  - When Processing, show "Waiting for AI response".
-  - When Blocked, "AI processing is blocked", and a button that effects a call
-    to CompanionApp::resume_chat_if_blocked().
 - Enhance chat state change behavior:
   - When entering Blocked state, pause DF.
     - Add a function in GameState to interrogate game running state and to pause
       it. Do not provide a method of unpausing. DFC does not need to remember
       whether or not it paused a game, though it should refrain from saying it
       paused it if it was already paused.
+    - Use these functions from CompanionApp to implement the behavior.
     - Ensure that when DFCompanion pauses the game, the plugin displays a popup
       to the user notifying them of this.
-    - Send a similar message to DFC's notification queue as a warning. If available, include the reason for the block.
+    - Send a similar message to DFC's notification queue as a warning. If
+      available, include the reason for the block.
       - Consider changing GameState to a struct so the Blocked state can carry
         reason text.
-- Track individual AI input states and provide feedback in the Conversation
-  control:
+- Track the state of individual AI inputs and provide feedback in the
+  Conversation control:
   - Pending: Not sent to AI yet. (Maybe lowlighted and/or italic text.)
   - Processing: Included in an AI turn currently being processed. (Perhaps a
     different shaded background?)
@@ -35,6 +31,9 @@
       but maybe they should be shown in some fashion and be included in these
       behaviors. I have not really been testing this feature.
     - Pending AI inputs retain their chronological ordering regardless of type.
+  - This may require adding an internal, reliable id to correlate items in the
+    notification history and in the Conversation queue, or some other way of
+    navigating between the two.
 - Replace retry button with a "Recall" button  that pulls all pending user
   requests off the queue and places them back in the chat editor. This is
   independent of chat state.

@@ -184,6 +184,29 @@ textarea {
   padding: 0.4rem;
 }
 
+.chat-heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+}
+
+.chat-heading h2 {
+  margin-bottom: 0.4rem;
+}
+
+#chat-state {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+}
+
+#chat-state form,
+#chat-state button {
+  margin: 0;
+}
+
 section {
   border-top: 1px solid #888;
   margin-top: 2rem;

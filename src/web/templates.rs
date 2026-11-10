@@ -8,6 +8,7 @@ use askama::Template;
 use crate::{
     ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
+    app::ChatState,
     notifications::DisplayMessage,
 };
 
@@ -123,8 +124,17 @@ struct ChatSentTemplate {
 struct IndexTemplate<'a> {
     configurations: &'a [ConfigurationListItem],
     active_id: Option<&'a str>,
+    chat_state_message: &'static str,
+    chat_state_blocked: bool,
     oob: bool,
     error: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "chat-state-content.html")]
+struct ChatStateContentTemplate {
+    chat_state_message: &'static str,
+    chat_state_blocked: bool,
 }
 
 #[derive(Template)]
@@ -247,14 +257,36 @@ pub fn render_chat_sent() -> Result<String, RenderError> {
 pub fn render_index(
     configurations: &[ConfigurationListItem],
     active_id: Option<&str>,
+    chat_state: ChatState,
 ) -> Result<String, RenderError> {
+    let (chat_state_message, chat_state_blocked) = chat_state_content(chat_state);
     Ok(IndexTemplate {
         configurations,
         active_id,
+        chat_state_message,
+        chat_state_blocked,
         oob: false,
         error: "",
     }
     .render()?)
+}
+
+pub fn render_chat_state_content(chat_state: ChatState) -> Result<String, RenderError> {
+    let (chat_state_message, chat_state_blocked) = chat_state_content(chat_state);
+    Ok(ChatStateContentTemplate {
+        chat_state_message,
+        chat_state_blocked,
+    }
+    .render()?
+    .replace('\r', ""))
+}
+
+fn chat_state_content(chat_state: ChatState) -> (&'static str, bool) {
+    match chat_state {
+        ChatState::Idle => ("", false),
+        ChatState::Processing => ("Waiting for AI response", false),
+        ChatState::Blocked => ("AI processing is blocked", true),
+    }
 }
 
 /// Renders the configuration management page with the selector and the list
@@ -463,7 +495,8 @@ mod test {
             true,
         )];
 
-        let index = render_index(&configurations, Some("one")).expect("index should render");
+        let index = render_index(&configurations, Some("one"), ChatState::Idle)
+            .expect("index should render");
         assert!(index.contains("id=\"active-configuration\""));
         assert!(index.contains("value=\"one\" checked"));
         assert!(index.contains("htmx-config"));
@@ -473,6 +506,8 @@ mod test {
         assert!(index.contains("id=\"copy-conversation\""));
         assert!(index.contains("Copy conversation as Markdown"));
         assert!(index.contains("id=\"copy-conversation-status\" role=\"status\""));
+        assert!(index.contains("id=\"chat-state\""));
+        assert!(!index.contains("Waiting for AI response"));
         assert!(!index.contains("hx-trigger=\"load\"\n           hx-swap"));
         assert!(!index.contains("hx-swap-oob"));
 
@@ -481,6 +516,24 @@ mod test {
         assert!(page.contains("id=\"configuration-list\""));
         assert!(page.contains("First"));
         assert!(!page.contains("Loading configurations"));
+    }
+
+    #[test]
+    fn chat_state_content_matches_each_state() {
+        let idle = render_chat_state_content(ChatState::Idle).expect("idle state should render");
+        assert!(idle.contains("<span hidden></span>"));
+        assert!(!idle.contains("Waiting for AI response"));
+
+        let processing = render_chat_state_content(ChatState::Processing)
+            .expect("processing state should render");
+        assert!(processing.contains("Waiting for AI response"));
+        assert!(!processing.contains("Resume AI processing"));
+
+        let blocked =
+            render_chat_state_content(ChatState::Blocked).expect("blocked state should render");
+        assert!(blocked.contains("AI processing is blocked"));
+        assert!(blocked.contains("hx-post=\"/chat/resume\""));
+        assert!(blocked.contains("Resume AI processing"));
     }
 
     #[test]
