@@ -12,6 +12,7 @@ use crate::{
     ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
     app::GameEvent,
     diagnostics::write_ai_failure_dump,
+    game_state::GameState,
     notifications::{DisplayMessage, DisplayMessageKind, Notifier},
 };
 
@@ -260,52 +261,29 @@ pub struct AiRuntime {
     pub configurations: ConfigurationRepository,
     send_lock: Mutex<()>,
     conversation: Mutex<Conversation>,
-    game_state: crate::game_state::GameState,
+    game_state: GameState, // Needed for tool calls.
     notifier: Notifier,
+    _marker: std::marker::PhantomData<()>,
 }
 
 impl AiRuntime {
-    pub fn new(configurations: ConfigurationRepository, notifier: Notifier) -> Self {
+    pub fn new(
+        configurations: ConfigurationRepository,
+        game_state: GameState,
+        notifier: Notifier,
+    ) -> Self {
         Self {
             configurations,
             conversation: Mutex::new(Conversation::default()),
             send_lock: Mutex::new(()),
-            game_state: crate::game_state::GameState::new(notifier.clone()),
-            notifier: notifier,
+            game_state,
+            notifier,
+            _marker: std::marker::PhantomData, // Prevent copying of struct
         }
     }
 
     fn notify(&self, message: DisplayMessage) {
         self.notifier.notify(message);
-    }
-
-    /// Verifies the game link at startup. Returns the status line, or the error.
-    pub async fn startup_summary(&self) -> Result<String, String> {
-        self.game_state.run(|game| game.startup_summary()).await
-    }
-
-    /// Whether the game is running; `None` when it cannot be reached.
-    pub async fn game_is_running(&self) -> Option<bool> {
-        let game_state = self.game_state.clone();
-        tokio::task::spawn_blocking(move || game_state.is_paused().ok().map(|paused| !paused))
-            .await
-            .ok()
-            .flatten()
-    }
-
-    /// Pauses a running fortress if AI processing becomes blocked.
-    #[cfg(not(test))]
-    pub async fn pause_for_ai_block(&self, reason: &str) -> Result<bool, String> {
-        let reason = reason.to_owned();
-        let game_state = self.game_state.clone();
-        tokio::task::spawn_blocking(move || game_state.pause_for_ai_block(&reason))
-            .await
-            .map_err(|error| format!("DFHack pause task failed: {error}"))?
-    }
-
-    #[cfg(test)]
-    pub async fn pause_for_ai_block(&self, _reason: &str) -> Result<bool, String> {
-        Err("Pausing a live game is disabled in unit tests.".to_owned())
     }
 
     /// Runs a tool directly, as the model would, for manual testing.
@@ -535,6 +513,7 @@ impl AiRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_config::AiConfiguration;
     use axum::{
         body::{to_bytes, Body},
         extract::State,
@@ -667,13 +646,19 @@ mod tests {
         assert!(!is_no_comment("The drink is low."));
     }
 
+    fn make_test_runtime() -> AiRuntime {
+        use crate::ai_config::ConfigurationRepository;
+        let (sender, _) = broadcast::channel(4);
+        let notifier = Notifier::new(sender.clone());
+        let game_state = GameState::new(notifier.clone());
+        AiRuntime::new(ConfigurationRepository::in_memory(), game_state, notifier)
+    }
+
     #[tokio::test]
     async fn genai_dispatches_to_each_configured_protocol_and_url() {
-        use crate::ai_config::{AiConfiguration, ConfigurationRepository};
         use genai::adapter::AdapterKind;
 
-        let (sender, _) = broadcast::channel(4);
-        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
+        let runtime = make_test_runtime();
         let prompt = Prompt {
             kind: PromptKind::UserRequest,
             history: Vec::new(),
@@ -768,11 +753,9 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_tool_results_share_one_message() {
-        use crate::ai_config::{AiConfiguration, ConfigurationRepository};
         use genai::adapter::AdapterKind;
 
-        let (sender, _) = broadcast::channel(4);
-        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
+        let runtime = make_test_runtime();
         let (url, mut requests, server) = start_mock_provider(vec![
             json!({
                 "id": "msg_tools",
@@ -838,11 +821,9 @@ mod tests {
 
     #[tokio::test]
     async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
-        use crate::ai_config::{AiConfiguration, ConfigurationRepository};
         use genai::adapter::AdapterKind;
 
-        let (sender, _) = broadcast::channel(4);
-        let runtime = AiRuntime::new(ConfigurationRepository::in_memory(), Notifier::new(sender));
+        let runtime = make_test_runtime();
         let (url, mut requests, server) = start_mock_provider(vec![
             json!({
                 "id": "chatcmpl-tool",

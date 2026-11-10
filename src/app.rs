@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 
 use crate::ai::SendResult;
-use crate::game_state::validate_game_date;
+use crate::game_state::{validate_game_date, GameState};
 use crate::notifications::{DisplayMessage, DisplayMessageKind, NotificationHistory, Notifier};
 use crate::{ai, ai_config, ai_tools, chat_commands};
 
@@ -91,6 +91,7 @@ pub struct CompanionApp {
     /// Whether the AI gets a turn every `PERIODIC_CHECK_INTERVAL` while the
     /// game runs. Off by default, for the same reason.
     pub periodic_turns: std::sync::atomic::AtomicBool,
+    game_state: GameState,
     chat_state: watch::Sender<ChatState>,
 }
 
@@ -109,7 +110,9 @@ impl CompanionApp {
     ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let (notifications_tx, _) = broadcast::channel(128);
-        let ai = ai::AiRuntime::new(configurations, Notifier::new(notifications_tx.clone()));
+        let notifier = Notifier::new(notifications_tx.clone());
+        let game_state = GameState::new(notifier.clone());
+        let ai = ai::AiRuntime::new(configurations, game_state.clone(), notifier);
         let history = NotificationHistory::record(&notifications_tx);
 
         (
@@ -120,6 +123,7 @@ impl CompanionApp {
                 ai,
                 event_turns: Default::default(),
                 periodic_turns: Default::default(),
+                game_state,
                 chat_state: watch::channel(ChatState::Idle).0,
             }),
             queue_rx,
@@ -135,8 +139,21 @@ impl CompanionApp {
     }
 
     fn set_chat_state(&self, state: ChatState) -> ChatState {
-        println!("Setting chat state to {:?}", state);
-        self.chat_state.send_replace(state)
+        let previous_state = self.chat_state.send_replace(state);
+        dbg!("chat state: {:?} -> {:?}", previous_state, state);
+        previous_state
+    }
+
+    /// Pauses a running fortress if AI processing becomes blocked.
+    pub async fn pause_for_ai_block(&self, reason: &str) -> Result<bool, String> {
+        // If this triggers we might have to move a test to live tests, or find
+        // another way to simulate AI blocking.
+        dbg!("Pausing for AI block: {}", reason);
+        let reason = reason.to_owned();
+        self.game_state
+            .run(move |game| game.pause_for_ai_block(&reason))
+            .await
+            .map_err(|error| format!("Failed to pause for AI block: {error}"))
     }
 
     async fn block_chat(&self, reason: &str) {
@@ -147,18 +164,31 @@ impl CompanionApp {
 
         self.notify(DisplayMessage::new(
             DisplayMessageKind::Warning,
-            blocked_warning_message(reason, self.ai.pause_for_ai_block(reason).await),
+            blocked_warning_message(reason, self.pause_for_ai_block(reason).await),
         ));
     }
 
     fn has_active_configuration(&self) -> bool {
         matches!(self.ai.configurations.active(), Ok(Some(_)))
     }
+    /// Verifies the game link at startup. Returns the status line, or the error.
+    async fn startup_summary(&self) -> Result<String, String> {
+        self.game_state.run(|game| game.startup_summary()).await
+    }
+
+    /// Whether the game is running; `None` when it cannot be reached.
+    async fn game_is_running(&self) -> Option<bool> {
+        self.game_state
+            .run(|game| game.is_paused())
+            .await
+            .ok()
+            .map(|paused| !paused)
+    }
 
     /// Checks the game connection once at startup, reports the result, and if the
     /// game responds gives the AI an orientation turn.
     pub async fn check_game_at_startup(&self) {
-        match self.ai.startup_summary().await {
+        match self.startup_summary().await {
             Ok(summary) => {
                 self.notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
                 if self.has_active_configuration() {
@@ -197,7 +227,7 @@ impl CompanionApp {
     pub fn resume_if_blocked(&self) -> bool {
         self.chat_state.send_if_modified(|state| {
             if *state == ChatState::Blocked {
-                println!("Setting chat state to Idle from Blocked.");
+                dbg!("chat state: {:?} -> Idle", &state);
                 *state = ChatState::Idle;
                 true
             } else {
@@ -232,7 +262,7 @@ impl CompanionApp {
             previous_state = *state;
             match *state {
                 ChatState::Idle => {
-                    println!("Setting chat state to Processing from Idle.");
+                    dbg!("chat state: {:?} -> Processing", &state);
                     *state = ChatState::Processing;
                     true
                 }
@@ -358,7 +388,7 @@ impl CompanionApp {
                         if self.periodic_turns_enabled()
                             && !self.chat_is_blocked()
                             && self.has_active_configuration()
-                            && self.ai.game_is_running().await == Some(true)
+                            && self.game_is_running().await == Some(true)
                         {
                             flush_at = None;
                             self.flush_pending_interactions().await;
