@@ -763,7 +763,7 @@ async fn delete_configuration(
 async fn configuration_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("static/ai-configurations.js"),
+        include_str!("web/static/ai-configurations.js"),
     )
 }
 
@@ -771,7 +771,7 @@ async fn configuration_script() -> impl IntoResponse {
 async fn app_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("static/app.js"),
+        include_str!("web/static/app.js"),
     )
 }
 
@@ -779,7 +779,7 @@ async fn app_script() -> impl IntoResponse {
 async fn htmx_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("static/vendor/htmx.min.js"),
+        include_str!("web/static/vendor/htmx.min.js"),
     )
 }
 
@@ -787,7 +787,7 @@ async fn htmx_script() -> impl IntoResponse {
 async fn htmx_sse_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("static/vendor/hx-sse.min.js"),
+        include_str!("web/static/vendor/hx-sse.min.js"),
     )
 }
 
@@ -795,7 +795,7 @@ async fn htmx_sse_script() -> impl IntoResponse {
 async fn stylesheet() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_str!("static/style.css"),
+        include_str!("web/static/style.css"),
     )
 }
 
