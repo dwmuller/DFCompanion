@@ -100,15 +100,23 @@ cloned in Notifier instances, which are ubiquituous.
 ### Event flow
 
 QueueItems flow from the RPC and HTTP services to CompanionApp to notify it
-mainly of user inputs and game events.
+mainly of user inputs and game events. In effect, this is the system's input
+queue.
 
 Notifications flow from the RPC, HTTP, and Companion services via numerous call
 paths to NotificationHistory, which is held by CompanionApp. These notifications
 cover many things, including AI responses, user requests to the AI, game events,
 and information about program operation such as status, diagnostic, and AI usage
-information. All of this is destined for possible display to the user.
+information. All of this is destined for possible display to the user. In
+effect, this is the system's output queue.
 
 NotificationHistory re-broadcasts every notification to a separate channel along
 with a unique, monotonically increasing id. The HTTP service subscribes to this
 on behalf of browsers that request an event stream connection, allowing
-notifications to be updated live in a browser page.
+notifications to be updated live in a browser page. This acts as a second,
+slightly more structured output queue.
+
+Within AiEngine, a Conversation object keeps a queue (not asynchronous) of
+inputs for the AI. These currently derive entirely from system input queue
+items, but in future may include internally generated items.
+
