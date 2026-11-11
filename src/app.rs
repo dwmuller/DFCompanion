@@ -1,13 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
 use directories::ProjectDirs;
-use serde::Serialize;
-use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::{sleep_until, Instant};
+use verbose_macros::debug;
 
 use crate::ai::SendResult;
-use crate::game_state::{validate_game_date, GameState};
+use crate::events::{EventQueue, QueueItem};
+use crate::game_state::GameState;
 use crate::notifications::{DisplayMessage, DisplayMessageKind, NotificationHistory, Notifier};
 use crate::{ai, ai_config, ai_tools, chat_commands};
 
@@ -24,49 +24,6 @@ pub fn project_dir() -> ProjectDirs {
         .expect("Could not locate the per-user project directory.")
 }
 
-/// A game event in the format of the `get_recent_reports` tool.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GameEvent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<i64>,
-    /// Game date, `YYYY-MM-DD:T`.
-    pub date: String,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub report_type: Option<String>,
-    pub category: String,
-    pub text: String,
-}
-
-impl GameEvent {
-    /// Checks the fields a sender controls.
-    pub fn validate(&self) -> Result<(), String> {
-        let category = self.category.trim();
-        if category.is_empty() || category.len() > 128 {
-            return Err("Category must contain between 1 and 128 bytes.".to_owned());
-        }
-        if self.report_type.as_ref().is_some_and(|t| t.len() > 128) {
-            return Err("Type must not exceed 128 bytes.".to_owned());
-        }
-        if self.text.trim().is_empty() {
-            return Err("Event text is required.".to_owned());
-        }
-        if self.text.len() > 8_000 {
-            return Err("Event text exceeds the 8000-byte limit.".to_owned());
-        }
-        validate_game_date(&self.date).map_err(|error| format!("Invalid date: {error}"))
-    }
-}
-
-/// Items that can be queued for processing by the companion AI.
-#[derive(Clone, Debug, PartialEq)]
-pub enum QueueItem {
-    UserInput(String),
-    AiRetry,
-    /// An AI configuration was just selected: give the AI a turn to look around.
-    Orient,
-    GameEvent(GameEvent),
-}
-
 enum Wake {
     Item(QueueItem),
     Flush,
@@ -81,8 +38,8 @@ pub enum ChatState {
 }
 
 pub struct CompanionApp {
-    pub queue_tx: mpsc::Sender<QueueItem>,
-    pub notifications_tx: broadcast::Sender<DisplayMessage>,
+    pub queue_tx: EventQueue,
+    notifier: Notifier,
     pub history: NotificationHistory,
     pub ai: ai::AiRuntime,
     /// Whether the AI gets a turn shortly after game events arrive. Off by
@@ -96,29 +53,45 @@ pub struct CompanionApp {
 }
 
 impl CompanionApp {
-    pub fn new() -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
-        Self::with_ai_configurations(ai_config::ConfigurationRepository::in_memory())
+    pub fn new() -> (
+        Arc<Self>,
+        mpsc::Receiver<QueueItem>,
+        broadcast::Sender<DisplayMessage>,
+    ) {
+        let (notifications_tx, _) = broadcast::channel(128);
+        let (s, r) = Self::with_config_and_channels(
+            ai_config::ConfigurationRepository::in_memory(),
+            notifications_tx.clone(),
+        );
+        (s, r, notifications_tx)
     }
 
     pub fn load() -> Result<(Arc<Self>, mpsc::Receiver<QueueItem>), String> {
         let configurations = ai_config::ConfigurationRepository::load_default()?;
-        Ok(Self::with_ai_configurations(configurations))
+        let (notifications_tx, _) = broadcast::channel(128);
+        Ok(Self::with_config_and_channels(
+            configurations,
+            notifications_tx,
+        ))
     }
 
-    fn with_ai_configurations(
+    fn with_config_and_channels(
         configurations: ai_config::ConfigurationRepository,
+        notifications_tx: broadcast::Sender<DisplayMessage>,
     ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
+        #[cfg(test)]
+        let _ = verbose_macros::try_set_debug(true);
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
-        let (notifications_tx, _) = broadcast::channel(128);
-        let notifier = Notifier::new(notifications_tx.clone());
+        let event_queue = EventQueue::new(queue_tx);
+        let history = NotificationHistory::record(notifications_tx.subscribe());
+        let notifier = Notifier::new(notifications_tx);
         let game_state = GameState::new(notifier.clone());
-        let ai = ai::AiRuntime::new(configurations, game_state.clone(), notifier);
-        let history = NotificationHistory::record(&notifications_tx);
+        let ai = ai::AiRuntime::new(configurations, game_state.clone(), notifier.clone());
 
         (
             Arc::new(Self {
-                queue_tx,
-                notifications_tx,
+                queue_tx: event_queue.clone(),
+                notifier,
                 history,
                 ai,
                 event_turns: Default::default(),
@@ -128,6 +101,14 @@ impl CompanionApp {
             }),
             queue_rx,
         )
+    }
+
+    pub fn get_notifier(&self) -> Notifier {
+        self.notifier.clone()
+    }
+
+    pub fn get_event_queue(&self) -> EventQueue {
+        self.queue_tx.clone()
     }
 
     pub fn chat_state(&self) -> ChatState {
@@ -140,7 +121,7 @@ impl CompanionApp {
 
     fn set_chat_state(&self, state: ChatState) -> ChatState {
         let previous_state = self.chat_state.send_replace(state);
-        dbg!("chat state: {:?} -> {:?}", previous_state, state);
+        debug!("chat state: {:?} -> {:?}", previous_state, state);
         previous_state
     }
 
@@ -148,8 +129,11 @@ impl CompanionApp {
     pub async fn pause_for_ai_block(&self, reason: &str) -> Result<bool, String> {
         // If this triggers we might have to move a test to live tests, or find
         // another way to simulate AI blocking.
-        dbg!("Pausing for AI block: {}", reason);
+        debug!("Pausing for AI block: {}", reason);
         let reason = reason.to_owned();
+        if cfg!(test) {
+            return Ok(false);
+        }
         self.game_state
             .run(move |game| game.pause_for_ai_block(&reason))
             .await
@@ -162,10 +146,14 @@ impl CompanionApp {
             return;
         }
 
-        self.notify(DisplayMessage::new(
-            DisplayMessageKind::Warning,
-            blocked_warning_message(reason, self.pause_for_ai_block(reason).await),
-        ));
+        {
+            let this = &self;
+            let message = DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                blocked_warning_message(reason, self.pause_for_ai_block(reason).await),
+            );
+            let _ = this.notifier.notify(message);
+        };
     }
 
     fn has_active_configuration(&self) -> bool {
@@ -190,15 +178,23 @@ impl CompanionApp {
     pub async fn check_game_at_startup(&self) {
         match self.startup_summary().await {
             Ok(summary) => {
-                self.notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
+                {
+                    let this = &self;
+                    let message = DisplayMessage::new(DisplayMessageKind::Status, summary);
+                    let _ = this.notifier.notify(message);
+                };
                 if self.has_active_configuration() {
-                    let _ = self.queue_tx.try_send(QueueItem::Orient);
+                    let _ = self.enqueue(QueueItem::Orient);
                 }
             }
-            Err(error) => self.notify(DisplayMessage::new(
-                DisplayMessageKind::Warning,
-                format!("The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"),
-            )),
+            Err(error) => {
+                let this = &self;
+                let message = DisplayMessage::new(
+                            DisplayMessageKind::Warning,
+                            format!("The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"),
+                        );
+                let _ = this.notifier.notify(message);
+            }
         }
     }
 
@@ -217,7 +213,7 @@ impl CompanionApp {
     /// This is a best-effort operation; if no clients are connected, the message is simply dropped.
     pub fn notify(&self, message: DisplayMessage) {
         // No connected browser is a normal state; notifications are best-effort.
-        let _ = self.notifications_tx.send(message);
+        let _ = self.notifier.notify(message);
     }
 
     pub fn chat_is_blocked(&self) -> bool {
@@ -227,7 +223,7 @@ impl CompanionApp {
     pub fn resume_if_blocked(&self) -> bool {
         self.chat_state.send_if_modified(|state| {
             if *state == ChatState::Blocked {
-                dbg!("chat state: {:?} -> Idle", &state);
+                debug!("chat state: {:?} -> Idle", &state);
                 *state = ChatState::Idle;
                 true
             } else {
@@ -242,18 +238,7 @@ impl CompanionApp {
     }
 
     fn enqueue(&self, item: QueueItem) -> Result<(), String> {
-        match self.queue_tx.try_send(item) {
-            Ok(_) => Ok(()),
-            Err(Full(item)) => Err(format!(
-                "The event queue is full (capacity {}), failed to send: {:#?}",
-                self.queue_tx.max_capacity(),
-                item
-            )),
-            Err(Closed(item)) => Err(format!(
-                "The event queue is closed, failed to send: {:#?}",
-                item
-            )),
-        }
+        self.queue_tx.try_send(item)
     }
 
     fn try_begin_processing(&self) -> Result<(), ChatState> {
@@ -262,7 +247,7 @@ impl CompanionApp {
             previous_state = *state;
             match *state {
                 ChatState::Idle => {
-                    dbg!("chat state: {:?} -> Processing", &state);
+                    debug!("chat state: {:?} -> Processing", &state);
                     *state = ChatState::Processing;
                     true
                 }
@@ -337,10 +322,14 @@ impl CompanionApp {
                     Wake::Item(QueueItem::AiRetry) => {
                         // TODO: This should go away soon - retries will be handled by the UI.
                         if self.ai.pending_user_message_count().await == 0 {
-                            self.notify(DisplayMessage::new(
-                                DisplayMessageKind::Status,
-                                "There is no failed AI request to retry.",
-                            ));
+                            {
+                                let this = &self;
+                                let message = DisplayMessage::new(
+                                    DisplayMessageKind::Status,
+                                    "There is no failed AI request to retry.",
+                                );
+                                let _ = this.notifier.notify(message);
+                            };
                             continue;
                         }
                         self.flush_pending_interactions().await;
@@ -366,10 +355,14 @@ impl CompanionApp {
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
                     Wake::Item(QueueItem::GameEvent(event)) => {
-                        self.notify(DisplayMessage::new(
-                            DisplayMessageKind::GameEvent,
-                            format!("{} [{}] {}", event.date, event.category, event.text),
-                        ));
+                        {
+                            let this = &self;
+                            let message = DisplayMessage::new(
+                                DisplayMessageKind::GameEvent,
+                                format!("{} [{}] {}", event.date, event.category, event.text),
+                            );
+                            let _ = this.notifier.notify(message);
+                        };
                         self.ai.push_report(event).await;
                         flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
                     }
@@ -421,26 +414,40 @@ async fn run_chat_command(
     match command {
         Ok(chat_commands::ChatCommand::CallTool { name, arguments }) => {
             let result = state.ai.call_tool(&name, arguments).await;
-            state.notify(DisplayMessage::new(
-                DisplayMessageKind::Diagnostic,
-                format!(
-                    "Tool {name} result:\n{}",
-                    format_tool_result(&result).unwrap_or_else(|error| {
-                        eprintln!("Error formatting tool result: {error}");
-                        result
-                    })
-                ),
-            ));
+            {
+                let this = &state;
+                let message = DisplayMessage::new(
+                    DisplayMessageKind::Diagnostic,
+                    format!(
+                        "Tool {name} result:\n{}",
+                        format_tool_result(&result).unwrap_or_else(|error| {
+                            eprintln!("Error formatting tool result: {error}");
+                            result
+                        })
+                    ),
+                );
+                let _ = this.notifier.notify(message);
+            };
         }
-        Ok(chat_commands::ChatCommand::ListTools) => state.notify(DisplayMessage::new(
-            DisplayMessageKind::Diagnostic,
-            ai_tools::describe_tools(),
-        )),
-        Ok(chat_commands::ChatCommand::DescribeTool { name }) => state.notify(DisplayMessage::new(
-            DisplayMessageKind::Diagnostic,
-            ai_tools::describe_tool(&name).unwrap_or_else(|error| error),
-        )),
-        Err(error) => state.notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, error)),
+        Ok(chat_commands::ChatCommand::ListTools) => {
+            let this = &state;
+            let message =
+                DisplayMessage::new(DisplayMessageKind::Diagnostic, ai_tools::describe_tools());
+            let _ = this.notifier.notify(message);
+        }
+        Ok(chat_commands::ChatCommand::DescribeTool { name }) => {
+            let this = &state;
+            let message = DisplayMessage::new(
+                DisplayMessageKind::Diagnostic,
+                ai_tools::describe_tool(&name).unwrap_or_else(|error| error),
+            );
+            let _ = this.notifier.notify(message);
+        }
+        Err(error) => {
+            let this = &state;
+            let message = DisplayMessage::new(DisplayMessageKind::Diagnostic, error);
+            let _ = this.notifier.notify(message);
+        }
     }
 }
 
@@ -455,6 +462,7 @@ fn format_tool_result(result: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::{GameEvent, QueueItem};
 
     // Find next message of specific kind in the notifications stream.
     async fn recv_kind(
@@ -484,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn notification_history_replays_then_streams_live() {
-        let (state, _queue_rx) = CompanionApp::new();
+        let (state, _queue_rx, _) = CompanionApp::new();
         state.notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
         state.notify(DisplayMessage::new(DisplayMessageKind::User, "hello"));
         state.notify(DisplayMessage::new(
@@ -533,7 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_plugin_event_flows_through_grpc_into_companion_queue() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         let (address, server_task) = start_test_grpc_server(state.clone()).await;
 
         let mut client = CompanionClient::connect(format!("http://{address}"))
@@ -587,8 +595,8 @@ mod tests {
 
     #[tokio::test]
     async fn full_event_queue_responds_with_pause_request_and_notifies_ui() {
-        let (state, _queue_rx) = CompanionApp::new();
-        let mut notifications = state.notifications_tx.subscribe();
+        let (state, _queue_rx, notifications_tx) = CompanionApp::new();
+        let mut notifications = notifications_tx.subscribe();
         for _ in 0..EVENT_QUEUE_CAPACITY {
             state.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
@@ -629,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn web_chat_input_is_enqueued_as_user_input() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
@@ -657,14 +665,13 @@ mod tests {
 
     #[tokio::test]
     async fn worker_runs_chat_commands_without_involving_the_ai() {
-        let (state, queue_rx) = CompanionApp::new();
-        let mut notifications = state.notifications_tx.subscribe();
+        let (state, queue_rx, notifications_tx) = CompanionApp::new();
+        let mut notifications = notifications_tx.subscribe();
         let queue_tx = state.queue_tx.clone();
         let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
         for text in ["/call no_such_tool a=1", "/bogus"] {
             queue_tx
-                .send(QueueItem::UserInput(text.to_owned()))
-                .await
+                .try_send(QueueItem::UserInput(text.to_owned()))
                 .unwrap();
         }
 
@@ -687,7 +694,7 @@ mod tests {
 
     #[tokio::test]
     async fn web_chat_rejects_cross_origin_request() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
@@ -708,7 +715,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_and_retry_routes_reject_cross_origin_requests() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         let router = crate::web::router(state);
         let settings_response = router
             .clone()
@@ -746,7 +753,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_api_supports_rename_and_delete() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         let router = crate::web::router(state.clone());
         let configurations = &state.ai.configurations;
         let create_body = |name: &str| {
@@ -803,7 +810,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_management_page_is_served_separately() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
@@ -824,7 +831,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_catalog_route_returns_setup_presets_without_configuration_ids() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
@@ -858,7 +865,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_without_api_key_retains_context_for_retry() {
-        let (state, queue_rx) = CompanionApp::new();
+        let (state, queue_rx, notifications_tx) = CompanionApp::new();
         let config = state
             .ai
             .configurations
@@ -875,7 +882,7 @@ mod tests {
             .configurations
             .set_active(Some(&config.id))
             .unwrap();
-        let mut notifications = state.notifications_tx.subscribe();
+        let mut notifications = notifications_tx.subscribe();
         state
             .queue_tx
             .try_send(QueueItem::GameEvent(GameEvent {
@@ -894,6 +901,9 @@ mod tests {
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
+        if !failure.text.contains("AI request failed") {
+            println!("Expected AI request failure, got: {:?}", failure);
+        }
         assert!(failure.text.contains("AI request failed"));
         let conversation = state.ai.pending_report_count().await;
         assert_eq!(conversation, 1);
@@ -917,7 +927,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure()
     {
-        let (state, queue_rx) = CompanionApp::new();
+        let (state, queue_rx, notifications_tx) = CompanionApp::new();
         let config = state
             .ai
             .configurations
@@ -934,12 +944,12 @@ mod tests {
             .configurations
             .set_active(Some(&config.id))
             .unwrap();
-        let mut notifications = state.notifications_tx.subscribe();
+        let mut notifications = notifications_tx.subscribe();
         state
             .event_turns
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
-        state.queue_tx.send(sample_event()).await.unwrap();
+        state.queue_tx.try_send(sample_event()).unwrap();
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let started = Instant::now();
@@ -956,7 +966,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn automatic_turns_are_off_by_default() {
-        let (state, queue_rx) = CompanionApp::new();
+        let (state, queue_rx, notifications_tx) = CompanionApp::new();
         state
             .ai
             .configurations
@@ -968,9 +978,9 @@ mod tests {
                 crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
-        let mut notifications = state.notifications_tx.subscribe();
+        let mut notifications = notifications_tx.subscribe();
         let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
-        state.queue_tx.send(sample_event()).await.unwrap();
+        state.queue_tx.try_send(sample_event()).unwrap();
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
@@ -979,8 +989,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn periodic_checks_stay_silent_without_an_ai_configuration() {
-        let (state, queue_rx) = CompanionApp::new();
-        let mut notifications = state.notifications_tx.subscribe();
+        let (state, queue_rx, notifications_tx) = CompanionApp::new();
+        let mut notifications = notifications_tx.subscribe();
         let worker = tokio::spawn(state.run_companion_worker(queue_rx));
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
@@ -1007,7 +1017,7 @@ mod tests {
 
     #[tokio::test]
     async fn automatic_turn_form_sets_each_trigger_independently() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         for (body, events, periodic) in [
             ("event_turns=on", true, false),
             ("periodic_turns=on", false, true),
@@ -1036,7 +1046,7 @@ mod tests {
 
     #[tokio::test]
     async fn main_page_prevents_caching_and_offers_the_event_toggle() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
@@ -1074,7 +1084,7 @@ mod tests {
 
     #[tokio::test]
     async fn htmx_scripts_are_served() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         for path in ["/assets/htmx.min.js", "/assets/hx-sse.min.js"] {
             let response = crate::web::router(state.clone())
                 .oneshot(
@@ -1092,7 +1102,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_is_enqueued() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         let response = post_plugin_event(state, EVENT_BODY).await;
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -1110,7 +1120,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_rejects_browser_requests() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         let response = crate::web::router(state)
             .oneshot(
                 HttpRequest::builder()
@@ -1131,7 +1141,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_rejects_invalid_events() {
-        let (state, mut queue_rx) = CompanionApp::new();
+        let (state, mut queue_rx, _) = CompanionApp::new();
         for body in [
             r#"{"date":"nope","category":"jobs","text":"bad date"}"#,
             r#"{"date":"254-07-05:1061","category":"","text":"no category"}"#,
@@ -1146,7 +1156,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_reports_full_queue_without_accepting_event() {
-        let (state, queue_rx) = CompanionApp::new();
+        let (state, queue_rx, _) = CompanionApp::new();
         for _ in 0..EVENT_QUEUE_CAPACITY {
             state.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
@@ -1156,6 +1166,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(queue_rx.len(), EVENT_QUEUE_CAPACITY);
     }
+
     async fn start_test_grpc_server(
         state: Arc<CompanionApp>,
     ) -> (

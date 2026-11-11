@@ -24,7 +24,8 @@ use crate::{
         ConfigurationRepository,
     },
     ai_providers::built_in_providers,
-    app::{CompanionApp, GameEvent, QueueItem},
+    app::CompanionApp,
+    events::{GameEvent, QueueItem},
     notifications::{DisplayMessage, DisplayMessageKind},
     web::templates::{render_configuration_form_error, ConfigurationListItem, RenderError},
 };
@@ -184,22 +185,13 @@ async fn plugin_event(
 
     match state.queue_tx.try_send(QueueItem::GameEvent(event)) {
         Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            let message = format!(
-                "The event queue is full (capacity {}). The event was not accepted; pause the game.",
-                state.queue_tx.max_capacity()
-            );
-            state.notify(DisplayMessage::new(
+        Err(message) => {
+            state.get_notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 message.clone(),
             ));
             plugin_event_response(StatusCode::TOO_MANY_REQUESTS, "queue_full", &message)
         }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => plugin_event_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable",
-            "The Companion queue is unavailable.",
-        ),
     }
 }
 
@@ -935,11 +927,13 @@ async fn chat(
             } else {
                 DisplayMessageKind::User
             };
-            state.notify(DisplayMessage::new(kind, message));
+            state
+                .get_notifier()
+                .notify(DisplayMessage::new(kind, message));
             fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
         Err(err) => {
-            state.notify(DisplayMessage::new(
+            state.get_notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 err.to_string(),
             ));
@@ -991,16 +985,7 @@ async fn retry(State(state): State<Arc<CompanionApp>>, headers: HeaderMap) -> Re
     }
     match state.queue_tx.try_send(QueueItem::AiRetry) {
         Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The event queue is full. Wait briefly, then retry.",
-        )
-            .into_response(),
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "The Companion queue is unavailable.",
-        )
-            .into_response(),
+        Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
     }
 }
 
@@ -1091,7 +1076,7 @@ mod test {
 
     #[tokio::test]
     async fn conversation_markdown_endpoint_uses_all_messages() {
-        let (state, _) = CompanionApp::new();
+        let (state, _, _) = CompanionApp::new();
         for message in [
             DisplayMessage::new(DisplayMessageKind::User, "Question"),
             DisplayMessage::new(DisplayMessageKind::GameEvent, "Arrival"),
@@ -1135,8 +1120,8 @@ mod test {
 
     #[tokio::test]
     async fn slash_chat_input_is_a_diagnostic_not_a_user_turn() {
-        let (state, mut queue_rx) = CompanionApp::new();
-        let mut notifications = state.notifications_tx.subscribe();
+        let (state, mut queue_rx, notifications_tx) = CompanionApp::new();
+        let mut notifications = notifications_tx.subscribe();
         let response = router(state)
             .oneshot(
                 Request::builder()
@@ -1164,7 +1149,7 @@ mod test {
 
     #[tokio::test]
     async fn resume_chat_requires_local_origin_and_clears_blocked_state() {
-        let (state, queue_rx) = CompanionApp::new();
+        let (state, queue_rx, _) = CompanionApp::new();
         let app = router(state.clone());
         let status_response = app
             .clone()

@@ -4,7 +4,8 @@ use crate::{
     api::{
         companion_server::Companion, EventSubmissionResult, EventSubmissionStatus, SimulationEvent,
     },
-    app::{CompanionApp, GameEvent, QueueItem},
+    app::CompanionApp,
+    events::{GameEvent, QueueItem},
     notifications::{DisplayMessage, DisplayMessageKind},
 };
 use std::sync::Arc;
@@ -45,11 +46,9 @@ impl Companion for CompanionRpc {
                 status: EventSubmissionStatus::Accepted as i32,
                 message: "event accepted".to_owned(),
             })),
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                let message = format!(
-                    "The event queue is full (capacity {}). The plugin was asked to pause the game; this event was not accepted.",
-                    self.state.queue_tx.max_capacity()
-                );
+            Err(message) => {
+                let message = message
+                    + " The plugin was asked to pause the game; this event was not accepted.";
                 self.state.notify(DisplayMessage::new(
                     DisplayMessageKind::Warning,
                     message.clone(),
@@ -58,9 +57,6 @@ impl Companion for CompanionRpc {
                     status: EventSubmissionStatus::PauseRequestedQueueFull as i32,
                     message,
                 }))
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                Err(Status::unavailable("event queue is closed"))
             }
         }
     }

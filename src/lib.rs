@@ -6,6 +6,7 @@ pub mod ai_usage;
 pub mod app;
 pub mod chat_commands;
 pub mod diagnostics;
+pub mod events;
 pub mod game_state;
 pub mod notifications;
 

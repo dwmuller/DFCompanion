@@ -100,13 +100,13 @@ const NOTIFICATION_HISTORY_LIMIT: usize = 500;
 impl NotificationHistory {
     /// Records everything sent on `notifications_tx`. Without a Tokio runtime
     /// nothing is recorded.
-    pub fn record(notifications_tx: &broadcast::Sender<DisplayMessage>) -> Self {
+    pub fn record(notifications_tx: broadcast::Receiver<DisplayMessage>) -> Self {
         let history = Self {
             inner: Default::default(),
             live_tx: broadcast::channel(128).0,
         };
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let mut rx = notifications_tx.subscribe();
+            let mut rx = notifications_tx;
             let recorder = history.clone();
             runtime.spawn(async move {
                 loop {

@@ -10,8 +10,8 @@ use tokio::sync::Mutex;
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
     ai_usage::{tools_tokens_estimate, AiPromptTokenEstimates, AiTurnUsage},
-    app::GameEvent,
     diagnostics::write_ai_failure_dump,
+    events::GameEvent,
     game_state::GameState,
     notifications::{DisplayMessage, DisplayMessageKind, Notifier},
 };
@@ -282,10 +282,6 @@ impl AiRuntime {
         }
     }
 
-    fn notify(&self, message: DisplayMessage) {
-        self.notifier.notify(message);
-    }
-
     /// Runs a tool directly, as the model would, for manual testing.
     /// Returns the JSON text the model would receive.
     pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> String {
@@ -472,10 +468,14 @@ impl AiRuntime {
             }
         };
         if let Some(prompt) = self.start_interaction(&configuration.system_text).await {
-            self.notify(DisplayMessage::new(
-                DisplayMessageKind::AiUsage,
-                prompt.token_estimates_summary(),
-            ));
+            {
+                let this = &self;
+                let message = DisplayMessage::new(
+                    DisplayMessageKind::AiUsage,
+                    prompt.token_estimates_summary(),
+                );
+                this.notifier.notify(message);
+            };
             let is_user_interaction = prompt.kind.is_user_interaction();
             match self.complete(&configuration, &prompt).await {
                 Ok(result) => {
@@ -487,15 +487,22 @@ impl AiRuntime {
                         .commit_interaction(prompt, result.answer.clone(), add_to_history)
                         .await;
                     if notify_user {
-                        self.notify(
-                            DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
-                                .with_beep(!is_user_interaction),
-                        );
+                        {
+                            let this = &self;
+                            let message =
+                                DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
+                                    .with_beep(!is_user_interaction);
+                            this.notifier.notify(message);
+                        };
                     }
-                    self.notify(DisplayMessage::new(
-                        DisplayMessageKind::AiUsage,
-                        result.usage.iter().map(|u| u.summary()).join("\n"),
-                    ));
+                    {
+                        let this = &self;
+                        let message = DisplayMessage::new(
+                            DisplayMessageKind::AiUsage,
+                            result.usage.iter().map(|u| u.summary()).join("\n"),
+                        );
+                        this.notifier.notify(message);
+                    };
                     if more_pending {
                         SendResult::MorePending
                     } else {

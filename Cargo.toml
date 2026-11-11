@@ -29,6 +29,7 @@ serde_json_pretty = "0.1.0"
 tokenx-rs = "0.1.0"
 itertools = "0.15.0"
 chrono = "0.4.45"
+verbose-macros = "0.1.1"
 
 [dev-dependencies]
 # Same prost version that dfhack-proto generates its messages with.
