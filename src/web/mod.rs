@@ -93,7 +93,7 @@ pub fn with_request_tracing(router: Router) -> Router {
     )
 }
 
-pub fn router(state: Arc<CompanionApp>) -> Router {
+pub fn router(app: Arc<CompanionApp>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/ai-configurations", get(configurations_page))
@@ -150,12 +150,12 @@ pub fn router(state: Arc<CompanionApp>) -> Router {
         .route("/assets/ai-configurations.js", get(configuration_script))
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
-        .with_state(state)
+        .with_state(app)
 }
 
 /// Handles POST requests for events from DFHack plugin.
 async fn plugin_event(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     axum::Json(event): axum::Json<PluginEvent>,
 ) -> impl IntoResponse {
@@ -183,10 +183,10 @@ async fn plugin_event(
         return plugin_event_response(status_code, "rejected", &message);
     }
 
-    match state.queue_tx.try_send(QueueItem::GameEvent(event)) {
+    match app.queue_tx.try_send(QueueItem::GameEvent(event)) {
         Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
         Err(message) => {
-            state.get_notifier().notify(DisplayMessage::new(
+            app.get_notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 message.clone(),
             ));
@@ -238,11 +238,11 @@ fn configuration_items(
 }
 
 /// Handles GET requests for the index page.
-async fn index(State(state): State<Arc<CompanionApp>>) -> Response {
-    match configuration_items(&state.ai.configurations) {
+async fn index(State(app): State<Arc<CompanionApp>>) -> Response {
+    match configuration_items(&app.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
-            templates::render_index(&items, active_id.as_deref(), state.chat_state()),
+            templates::render_index(&items, active_id.as_deref(), app.chat_state()),
             "page",
         ),
         Err(err) => render_error_response("index", err),
@@ -250,8 +250,8 @@ async fn index(State(state): State<Arc<CompanionApp>>) -> Response {
 }
 
 /// Handles GET requests for the AI configurations page.
-async fn configurations_page(State(state): State<Arc<CompanionApp>>) -> Response {
-    match configuration_items(&state.ai.configurations) {
+async fn configurations_page(State(app): State<Arc<CompanionApp>>) -> Response {
+    match configuration_items(&app.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
             templates::render_configurations_page(&items, active_id.as_deref()),
@@ -280,19 +280,19 @@ fn fragment_response(
 }
 
 /// Handles GET requests for the AI configuration list fragment
-async fn configuration_list_fragment(State(state): State<Arc<CompanionApp>>) -> Response {
-    let (items, _active_id) = match configuration_items(&state.ai.configurations) {
+async fn configuration_list_fragment(State(app): State<Arc<CompanionApp>>) -> Response {
+    let (items, _active_id) = match configuration_items(&app.ai.configurations) {
         Ok(items) => items,
         Err(err) => return render_error_response("AI configurations", err),
     };
 
     let rendered =
-        templates::render_configuration_list(&items).and_then(|list| with_selector(&state, list));
+        templates::render_configuration_list(&items).and_then(|list| with_selector(&app, list));
     fragment_response(StatusCode::OK, rendered, "AI configurations")
 }
 
 /// Handles GET requests for the new AI configuration form fragment
-async fn new_configuration_form_fragment(State(_state): State<Arc<CompanionApp>>) -> Response {
+async fn new_configuration_form_fragment(State(_app): State<Arc<CompanionApp>>) -> Response {
     let providers = match built_in_providers() {
         Ok(providers) => providers,
         Err(error) => {
@@ -313,10 +313,10 @@ async fn new_configuration_form_fragment(State(_state): State<Arc<CompanionApp>>
 
 /// Handles GET requests for the edit AI configuration form fragment
 async fn edit_configuration_form_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
 ) -> Response {
-    let config = match state.ai.configurations.try_get(&id) {
+    let config = match app.ai.configurations.try_get(&id) {
         Ok(Some(config)) => config,
         Ok(None) => {
             return (StatusCode::NOT_FOUND, "AI configuration was not found.").into_response()
@@ -349,9 +349,7 @@ async fn edit_configuration_form_fragment(
 }
 
 /// Handles GET requests for the closed AI configuration form fragment
-async fn closed_new_configuration_form_fragment(
-    State(_state): State<Arc<CompanionApp>>,
-) -> Response {
+async fn closed_new_configuration_form_fragment(State(_app): State<Arc<CompanionApp>>) -> Response {
     fragment_response(
         StatusCode::OK,
         templates::render_create_closed(),
@@ -363,7 +361,7 @@ async fn closed_new_configuration_form_fragment(
 /// POST handler for creating a new AI configuration
 ///
 async fn create_configuration_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<ConfigurationForm>,
 ) -> Response {
@@ -380,7 +378,7 @@ async fn create_configuration_fragment(
             );
         }
     };
-    let configuration = match state.ai.configurations.create(
+    let configuration = match app.ai.configurations.create(
         &form.name,
         method,
         &form.model_id,
@@ -392,12 +390,12 @@ async fn create_configuration_fragment(
             return configuration_form_error_response(StatusCode::BAD_REQUEST, "new", &error)
         }
     };
-    let item = match configuration_item(&state, &configuration) {
+    let item = match configuration_item(&app, &configuration) {
         Ok(item) => item,
         Err(response) => return response,
     };
     let rendered = templates::render_created_configuration(&item)
-        .and_then(|created| with_selector(&state, created));
+        .and_then(|created| with_selector(&app, created));
     fragment_response(StatusCode::OK, rendered, "created configuration")
 }
 
@@ -432,7 +430,7 @@ fn configuration_form_error_response(
 
 /// Handles PUT requests for updating an AI configuration
 async fn update_configuration_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Form(form): Form<ConfigurationForm>,
@@ -450,7 +448,7 @@ async fn update_configuration_fragment(
             );
         }
     };
-    let configuration = match state.ai.configurations.update(
+    let configuration = match app.ai.configurations.update(
         &id,
         &form.name,
         method,
@@ -463,23 +461,23 @@ async fn update_configuration_fragment(
             return configuration_form_error_response(StatusCode::BAD_REQUEST, &id, &error);
         }
     };
-    let item = match configuration_item(&state, &configuration) {
+    let item = match configuration_item(&app, &configuration) {
         Ok(item) => item,
         Err(response) => return response,
     };
     let rendered = templates::render_configuration_summary(&item)
-        .and_then(|created| with_selector(&state, created));
+        .and_then(|created| with_selector(&app, created));
     fragment_response(StatusCode::OK, rendered, "updated configuration")
 }
 
 /// Handles GET requests for the active AI configuration fragment.
-async fn active_configuration_fragment(State(state): State<Arc<CompanionApp>>) -> Response {
-    active_configuration_response(&state, StatusCode::OK, String::new())
+async fn active_configuration_fragment(State(app): State<Arc<CompanionApp>>) -> Response {
+    active_configuration_response(&app, StatusCode::OK, String::new())
 }
 
 /// Handles POST requests to select an AI configuration.
 async fn select_configuration_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<SelectConfigurationForm>,
 ) -> Response {
@@ -488,22 +486,22 @@ async fn select_configuration_fragment(
     }
 
     let id = Some(form.id.as_str()).filter(|id| !id.is_empty());
-    if let Err(error) = state.ai.configurations.set_active(id) {
-        return active_configuration_response(&state, StatusCode::BAD_REQUEST, error);
+    if let Err(error) = app.ai.configurations.set_active(id) {
+        return active_configuration_response(&app, StatusCode::BAD_REQUEST, error);
     }
     if id.is_some() {
-        let _ = state.queue_tx.try_send(QueueItem::Orient);
+        let _ = app.queue_tx.try_send(QueueItem::Orient);
     }
 
-    active_configuration_response(&state, StatusCode::OK, String::new())
+    active_configuration_response(&app, StatusCode::OK, String::new())
 }
 
 fn active_configuration_response(
-    state: &CompanionApp,
+    app: &CompanionApp,
     status: StatusCode,
     error: String,
 ) -> Response {
-    let (items, active_id) = match configuration_items(&state.ai.configurations) {
+    let (items, active_id) = match configuration_items(&app.ai.configurations) {
         Ok(items) => items,
         Err(error) => return render_error_response("configuration items", error),
     };
@@ -516,10 +514,10 @@ fn active_configuration_response(
 
 /// Looks up a configuration and builds its list item, or the error response.
 fn configuration_item(
-    state: &CompanionApp,
+    app: &CompanionApp,
     configuration: &AiConfiguration,
 ) -> Result<ConfigurationListItem, Response> {
-    let has_api_key = state
+    let has_api_key = app
         .ai
         .configurations
         .has_api_key(&configuration.id)
@@ -531,10 +529,10 @@ fn configuration_item(
 }
 
 fn existing_configuration_item(
-    state: &CompanionApp,
+    app: &CompanionApp,
     id: &str,
 ) -> Result<ConfigurationListItem, Response> {
-    let configuration = state
+    let configuration = app
         .ai
         .configurations
         .try_get(id)
@@ -545,15 +543,15 @@ fn existing_configuration_item(
             return Err((StatusCode::NOT_FOUND, "AI configuration was not found.").into_response())
         }
     };
-    configuration_item(state, &configuration)
+    configuration_item(app, &configuration)
 }
 
 fn as_partial(html: &str, target: &str, swap: &str) -> String {
     format!("\n<hx-partial hx-target=\"{target}\" hx-swap=\"{swap}\">{html}</hx-partial>\n")
 }
 
-fn get_active_configuration_selector(state: &CompanionApp) -> Result<String, RenderError> {
-    let (items, active_id) = match configuration_items(&state.ai.configurations) {
+fn get_active_configuration_selector(app: &CompanionApp) -> Result<String, RenderError> {
+    let (items, active_id) = match configuration_items(&app.ai.configurations) {
         Ok(items) => items,
         Err(re) => return Err(re),
     };
@@ -572,13 +570,13 @@ fn get_active_configuration_selector(state: &CompanionApp) -> Result<String, Ren
 /// the selector only, leaving the triggering element unchanged, use the result
 /// of get_active_configuration_selector directly. Note that this behavior can
 /// be affected by htmx global settings and the hx-swap swapEmpty modifier.
-fn with_selector(state: &CompanionApp, html: String) -> Result<String, RenderError> {
+fn with_selector(app: &CompanionApp, html: String) -> Result<String, RenderError> {
     // Note that there was a bug in htmx 4 where deleting the triggering element
     // would cause following partials to not find their targets. So we prepend,
     // rather than append, the selector to the HTML.
     //
     // Note that hx-target="this" does not seem to work as expected.
-    let selector = get_active_configuration_selector(state)?;
+    let selector = get_active_configuration_selector(app)?;
     if html.is_empty() {
         Ok(selector + &as_partial("", "closest li", "delete"))
     } else {
@@ -586,18 +584,18 @@ fn with_selector(state: &CompanionApp, html: String) -> Result<String, RenderErr
     }
 }
 
-fn summary_response(state: &CompanionApp, item: &ConfigurationListItem) -> Response {
+fn summary_response(app: &CompanionApp, item: &ConfigurationListItem) -> Response {
     let rendered = templates::render_configuration_summary(item)
-        .and_then(|summary| with_selector(state, summary));
+        .and_then(|summary| with_selector(app, summary));
     fragment_response(StatusCode::OK, rendered, "AI configuration")
 }
 
 /// Handles GET requests for the closed AI configuration summary fragment.
 async fn closed_configuration_summary_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
 ) -> Response {
-    match existing_configuration_item(&state, &id) {
+    match existing_configuration_item(&app, &id) {
         Ok(item) => fragment_response(
             StatusCode::OK,
             templates::render_configuration_summary(&item),
@@ -609,10 +607,10 @@ async fn closed_configuration_summary_fragment(
 
 /// Handles GET requests for the API key form fragment.
 async fn api_key_form_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     Path(id): Path<String>,
 ) -> Response {
-    match existing_configuration_item(&state, &id) {
+    match existing_configuration_item(&app, &id) {
         Ok(item) => fragment_response(
             StatusCode::OK,
             templates::render_api_key_form(&item, ""),
@@ -624,7 +622,7 @@ async fn api_key_form_fragment(
 
 /// Handles POST requests to save an API key.
 async fn save_api_key_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Form(form): Form<ApiKeyForm>,
@@ -632,7 +630,7 @@ async fn save_api_key_fragment(
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    let item = match existing_configuration_item(&state, &id) {
+    let item = match existing_configuration_item(&app, &id) {
         Ok(item) => item,
         Err(response) => return response,
     };
@@ -652,43 +650,43 @@ async fn save_api_key_fragment(
         );
     }
 
-    if let Err(error) = state.ai.configurations.save_api_key(&id, &form.api_key) {
+    if let Err(error) = app.ai.configurations.save_api_key(&id, &form.api_key) {
         return fragment_response(
             StatusCode::SERVICE_UNAVAILABLE,
             templates::render_api_key_form(&item, &error),
             "API key form",
         );
     }
-    match existing_configuration_item(&state, &id) {
-        Ok(item) => summary_response(&state, &item),
+    match existing_configuration_item(&app, &id) {
+        Ok(item) => summary_response(&app, &item),
         Err(response) => response,
     }
 }
 
 /// Handles POST requests to forget an API key.
 async fn forget_api_key_fragment(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    if let Err(response) = existing_configuration_item(&state, &id) {
+    if let Err(response) = existing_configuration_item(&app, &id) {
         return response;
     }
-    if let Err(error) = state.ai.configurations.forget_api_key(&id) {
+    if let Err(error) = app.ai.configurations.forget_api_key(&id) {
         return (StatusCode::SERVICE_UNAVAILABLE, error).into_response();
     }
-    match existing_configuration_item(&state, &id) {
-        Ok(item) => summary_response(&state, &item),
+    match existing_configuration_item(&app, &id) {
+        Ok(item) => summary_response(&app, &item),
         Err(response) => response,
     }
 }
 
 /// Handles DELETE requests to remove an AI configuration.
 async fn delete_configuration(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
@@ -702,15 +700,15 @@ async fn delete_configuration(
     // control. On failure, we return an out-of-band form error and don't swap
     // the form out.
 
-    match state.ai.configurations.try_get(&id) {
+    match app.ai.configurations.try_get(&id) {
         Err(error) => return configuration_form_error_response(StatusCode::NOT_FOUND, &id, &error),
         Ok(None) => (), // Already gone. Odd, but no harm done. Desired state already achieved.
         Ok(Some(_)) => {
             // If the configuration has an associated API key, we attempt to
             // retrieve it so that we can roll it back in case the deletion
             // fails.
-            let previous_key = match state.ai.configurations.has_api_key(&id) {
-                Ok(true) => match state.ai.configurations.get_api_key(&id) {
+            let previous_key = match app.ai.configurations.has_api_key(&id) {
+                Ok(true) => match app.ai.configurations.get_api_key(&id) {
                     Ok(key) => Some(key),
                     Err(error) => {
                         return configuration_form_error_response(
@@ -729,17 +727,16 @@ async fn delete_configuration(
                     )
                 }
             };
-            if let Err(error) = state.ai.configurations.forget_api_key(&id) {
+            if let Err(error) = app.ai.configurations.forget_api_key(&id) {
                 return configuration_form_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     &id,
                     &error,
                 );
             }
-            if let Err(error) = state.ai.configurations.delete(&id) {
-                let rollback = previous_key.map_or(Ok(()), |key| {
-                    state.ai.configurations.save_api_key(&id, &key)
-                });
+            if let Err(error) = app.ai.configurations.delete(&id) {
+                let rollback = previous_key
+                    .map_or(Ok(()), |key| app.ai.configurations.save_api_key(&id, &key));
                 if let Err(rollback_error) = rollback {
                     return configuration_form_error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -758,7 +755,7 @@ async fn delete_configuration(
     // Note that since we're sending an out-of-band response, and we want the
     // current triggering element to go away, we have to send something trivial
     // to replace it.
-    let rendered = with_selector(&state, "".to_string());
+    let rendered = with_selector(&app, "".to_string());
     fragment_response(StatusCode::OK, rendered, "deleted configuration")
 }
 
@@ -829,18 +826,18 @@ struct AutomaticTurnsForm {
 
 /// Handles POST requests to configure automatic turns.
 async fn set_automatic_turns(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<AutomaticTurnsForm>,
 ) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    state.event_turns.store(
+    app.event_turns.store(
         form.event_turns.is_some(),
         std::sync::atomic::Ordering::Relaxed,
     );
-    state.periodic_turns.store(
+    app.periodic_turns.store(
         form.periodic_turns.is_some(),
         std::sync::atomic::Ordering::Relaxed,
     );
@@ -849,7 +846,7 @@ async fn set_automatic_turns(
 
 /// Handles GET requests for the server-sent events stream.
 async fn events(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     // A reconnecting browser says where it left off, so it isn't sent
@@ -858,7 +855,7 @@ async fn events(
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let (backlog, live) = state.history.subscribe(last_event_id);
+    let (backlog, live) = app.history.subscribe(last_event_id);
     let backlog = tokio_stream::iter(backlog.into_iter().flat_map(|(id, message)| {
         notification_events(id, &message, false)
             .into_iter()
@@ -887,20 +884,20 @@ async fn events(
 }
 
 /// Serves the user/companion transcript from typed message history, not rendered DOM.
-async fn copy_conversation(State(state): State<Arc<CompanionApp>>) -> Response {
+async fn copy_conversation(State(app): State<Arc<CompanionApp>>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        state.history.display_history_markdown(),
+        app.history.display_history_markdown(),
     )
         .into_response()
 }
 
 /// Handles POST requests for chat messages.
 async fn chat(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
     Form(form): Form<ChatForm>,
 ) -> impl IntoResponse {
@@ -920,20 +917,19 @@ async fn chat(
             .into_response();
     }
 
-    match state.chat(message.to_owned()) {
+    match app.chat(message.to_owned()) {
         Ok(()) => {
             let kind = if crate::chat_commands::ChatCommand::parse(message).is_some() {
                 DisplayMessageKind::Diagnostic
             } else {
                 DisplayMessageKind::User
             };
-            state
-                .get_notifier()
+            app.get_notifier()
                 .notify(DisplayMessage::new(kind, message));
             fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
         Err(err) => {
-            state.get_notifier().notify(DisplayMessage::new(
+            app.get_notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 err.to_string(),
             ));
@@ -943,20 +939,20 @@ async fn chat(
 }
 
 /// Clears the blocked chat state; the state SSE stream updates the page.
-async fn resume_chat(State(state): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
+async fn resume_chat(State(app): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    state.resume_if_blocked();
+    app.resume_if_blocked();
     StatusCode::NO_CONTENT.into_response()
 }
 
 /// Streams the current chat state and subsequent changes as server-rendered HTML.
 async fn chat_state_events(
-    State(state): State<Arc<CompanionApp>>,
+    State(app): State<Arc<CompanionApp>>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let stream = futures_util::stream::unfold(
-        (state.subscribe_chat_state(), true),
+        (app.subscribe_chat_state(), true),
         |(mut receiver, initial)| async move {
             let chat_state = if initial {
                 Some(*receiver.borrow_and_update())
@@ -979,11 +975,11 @@ async fn chat_state_events(
 }
 
 /// Handles POST requests to retry the last AI action.
-async fn retry(State(state): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
+async fn retry(State(app): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    match state.queue_tx.try_send(QueueItem::AiRetry) {
+    match app.queue_tx.try_send(QueueItem::AiRetry) {
         Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
         Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
     }
@@ -1076,7 +1072,7 @@ mod test {
 
     #[tokio::test]
     async fn conversation_markdown_endpoint_uses_all_messages() {
-        let (state, _, _) = CompanionApp::new();
+        let (app, _, _) = CompanionApp::new();
         for message in [
             DisplayMessage::new(DisplayMessageKind::User, "Question"),
             DisplayMessage::new(DisplayMessageKind::GameEvent, "Arrival"),
@@ -1086,16 +1082,16 @@ mod test {
             DisplayMessage::new(DisplayMessageKind::Warning, "Heads up"),
             DisplayMessage::new(DisplayMessageKind::Companion, "**Answer**"),
         ] {
-            state.notify(message);
+            app.get_notifier().notify(message);
         }
         for _ in 0..50 {
-            if state.history.subscribe(None).0.len() == 7 {
+            if app.history.subscribe(None).0.len() == 7 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
-        let response = router(state)
+        let response = router(app)
             .oneshot(
                 Request::builder()
                     .uri("/conversation.md")
@@ -1120,9 +1116,9 @@ mod test {
 
     #[tokio::test]
     async fn slash_chat_input_is_a_diagnostic_not_a_user_turn() {
-        let (state, mut queue_rx, notifications_tx) = CompanionApp::new();
+        let (app, mut queue_rx, notifications_tx) = CompanionApp::new();
         let mut notifications = notifications_tx.subscribe();
-        let response = router(state)
+        let response = router(app)
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -1149,9 +1145,9 @@ mod test {
 
     #[tokio::test]
     async fn resume_chat_requires_local_origin_and_clears_blocked_state() {
-        let (state, queue_rx, _) = CompanionApp::new();
-        let app = router(state.clone());
-        let status_response = app
+        let (app, queue_rx, _) = CompanionApp::new();
+        let svc = router(app.clone());
+        let status_response = svc
             .clone()
             .oneshot(
                 Request::builder()
@@ -1176,10 +1172,9 @@ mod test {
                 .unwrap();
         assert!(!String::from_utf8_lossy(&initial_status).contains("AI processing is blocked"));
 
-        let mut state_changes = state.subscribe_chat_state();
-        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
-        state
-            .chat("A request without an active configuration".to_owned())
+        let mut state_changes = app.subscribe_chat_state();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        app.chat("A request without an active configuration".to_owned())
             .unwrap();
 
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -1201,7 +1196,7 @@ mod test {
                 .unwrap();
         assert!(String::from_utf8_lossy(&blocked_status).contains("AI processing is blocked"));
 
-        let rejected = app
+        let rejected = svc
             .clone()
             .oneshot(
                 Request::builder()
@@ -1214,9 +1209,9 @@ mod test {
             .await
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
-        assert_eq!(state.chat_state(), ChatState::Blocked);
+        assert_eq!(app.chat_state(), ChatState::Blocked);
 
-        let resumed = app
+        let resumed = svc
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -1229,7 +1224,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(resumed.status(), StatusCode::NO_CONTENT);
-        assert_eq!(state.chat_state(), ChatState::Idle);
+        assert_eq!(app.chat_state(), ChatState::Idle);
         let idle_status =
             tokio::time::timeout(std::time::Duration::from_secs(2), status_events.next())
                 .await

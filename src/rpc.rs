@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct CompanionRpc {
-    state: Arc<CompanionApp>,
+    app: Arc<CompanionApp>,
 }
 
 pub fn service(state: Arc<CompanionApp>) -> CompanionRpc {
-    CompanionRpc { state }
+    CompanionRpc { app: state }
 }
 
 #[tonic::async_trait]
@@ -41,7 +41,7 @@ impl Companion for CompanionRpc {
         };
         event.validate().map_err(Status::invalid_argument)?;
 
-        match self.state.queue_tx.try_send(QueueItem::GameEvent(event)) {
+        match self.app.queue_tx.try_send(QueueItem::GameEvent(event)) {
             Ok(()) => Ok(Response::new(EventSubmissionResult {
                 status: EventSubmissionStatus::Accepted as i32,
                 message: "event accepted".to_owned(),
@@ -49,7 +49,7 @@ impl Companion for CompanionRpc {
             Err(message) => {
                 let message = message
                     + " The plugin was asked to pause the game; this event was not accepted.";
-                self.state.notify(DisplayMessage::new(
+                self.app.get_notifier().notify(DisplayMessage::new(
                     DisplayMessageKind::Warning,
                     message.clone(),
                 ));

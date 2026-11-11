@@ -207,15 +207,6 @@ impl CompanionApp {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    ///
-    /// Sends a notification to clients.
-    ///
-    /// This is a best-effort operation; if no clients are connected, the message is simply dropped.
-    pub fn notify(&self, message: DisplayMessage) {
-        // No connected browser is a normal state; notifications are best-effort.
-        let _ = self.notifier.notify(message);
-    }
-
     pub fn chat_is_blocked(&self) -> bool {
         matches!(*self.chat_state.borrow(), ChatState::Blocked)
     }
@@ -492,37 +483,38 @@ mod tests {
 
     #[tokio::test]
     async fn notification_history_replays_then_streams_live() {
-        let (state, _queue_rx, _) = CompanionApp::new();
-        state.notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
-        state.notify(DisplayMessage::new(DisplayMessageKind::User, "hello"));
-        state.notify(DisplayMessage::new(
+        let (app, _queue_rx, _) = CompanionApp::new();
+        let notifier = app.get_notifier();
+        notifier.notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
+        notifier.notify(DisplayMessage::new(DisplayMessageKind::User, "hello"));
+        notifier.notify(DisplayMessage::new(
             DisplayMessageKind::Diagnostic,
             "/tools",
         ));
-        state.notify(DisplayMessage::new(DisplayMessageKind::Companion, "**hi**"));
+        notifier.notify(DisplayMessage::new(DisplayMessageKind::Companion, "**hi**"));
         for _ in 0..50 {
-            if state.history.subscribe(None).0.len() == 4 {
+            if app.history.subscribe(None).0.len() == 4 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        let (backlog, mut live) = state.history.subscribe(None);
+        let (backlog, mut live) = app.history.subscribe(None);
         assert_eq!(backlog.len(), 4);
         assert_eq!(backlog[0].1.kind, DisplayMessageKind::Status);
         assert_eq!(backlog[1].1.kind, DisplayMessageKind::User);
         assert_eq!(backlog[2].1.kind, DisplayMessageKind::Diagnostic);
         assert_eq!(backlog[3].1.kind, DisplayMessageKind::Companion);
         assert_eq!(
-            state.history.display_history_markdown(),
+            app.history.display_history_markdown(),
             "**Status:**\n\nfirst\n\n**You:**\n\nhello\n\n**Diagnostic:**\n\n/tools\n\n**Companion:**\n\n**hi**"
         );
-        state.notify(DisplayMessage::new(DisplayMessageKind::Warning, "third"));
+        notifier.notify(DisplayMessage::new(DisplayMessageKind::Warning, "third"));
         assert_eq!(
             live.recv().await.unwrap(),
             (5, DisplayMessage::new(DisplayMessageKind::Warning, "third"))
         );
 
-        let (resumed, _) = state.history.subscribe(Some(4));
+        let (resumed, _) = app.history.subscribe(Some(4));
         assert_eq!(resumed.len(), 1);
         assert_eq!(resumed[0].1.kind, DisplayMessageKind::Warning);
     }
@@ -541,8 +533,8 @@ mod tests {
 
     #[tokio::test]
     async fn mock_plugin_event_flows_through_grpc_into_companion_queue() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
-        let (address, server_task) = start_test_grpc_server(state.clone()).await;
+        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (address, server_task) = start_test_grpc_server(app.clone()).await;
 
         let mut client = CompanionClient::connect(format!("http://{address}"))
             .await
@@ -595,12 +587,12 @@ mod tests {
 
     #[tokio::test]
     async fn full_event_queue_responds_with_pause_request_and_notifies_ui() {
-        let (state, _queue_rx, notifications_tx) = CompanionApp::new();
+        let (app, _queue_rx, notifications_tx) = CompanionApp::new();
         let mut notifications = notifications_tx.subscribe();
         for _ in 0..EVENT_QUEUE_CAPACITY {
-            state.queue_tx.try_send(QueueItem::AiRetry).unwrap();
+            app.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
-        let (address, server_task) = start_test_grpc_server(state.clone()).await;
+        let (address, server_task) = start_test_grpc_server(app.clone()).await;
         let mut client = CompanionClient::connect(format!("http://{address}"))
             .await
             .unwrap();
@@ -637,8 +629,8 @@ mod tests {
 
     #[tokio::test]
     async fn web_chat_input_is_enqueued_as_user_input() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
-        let response = crate::web::router(state)
+        let (app, mut queue_rx, _) = CompanionApp::new();
+        let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
@@ -665,37 +657,37 @@ mod tests {
 
     #[tokio::test]
     async fn worker_runs_chat_commands_without_involving_the_ai() {
-        let (state, queue_rx, notifications_tx) = CompanionApp::new();
-        let mut notifications = notifications_tx.subscribe();
-        let queue_tx = state.queue_tx.clone();
-        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
+        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        let mut notifier = notifications_tx.subscribe();
+        let queue_tx = app.queue_tx.clone();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
         for text in ["/call no_such_tool a=1", "/bogus"] {
             queue_tx
                 .try_send(QueueItem::UserInput(text.to_owned()))
                 .unwrap();
         }
 
-        let result = notifications.recv().await.unwrap();
+        let result = notifier.recv().await.unwrap();
         assert_eq!(result.kind, DisplayMessageKind::Diagnostic);
         assert!(
             result.text.contains("Unknown tool: no_such_tool"),
             "{result:?}"
         );
-        let error = notifications.recv().await.unwrap();
+        let error = notifier.recv().await.unwrap();
         assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
         assert!(
             error.text.contains("Unknown chat command: /bogus"),
             "{error:?}"
         );
-        assert!(state.ai.pending_user_message_count().await == 0);
-        assert_eq!(state.history.display_history_markdown(), "**Diagnostic:**\n\nTool no_such_tool result:\n{ \"error\": \"Unknown tool: no_such_tool\" }\n\n\n**Diagnostic:**\n\nUnknown chat command: /bogus");
+        assert!(app.ai.pending_user_message_count().await == 0);
+        assert_eq!(app.history.display_history_markdown(), "**Diagnostic:**\n\nTool no_such_tool result:\n{ \"error\": \"Unknown tool: no_such_tool\" }\n\n\n**Diagnostic:**\n\nUnknown chat command: /bogus");
         worker.abort();
     }
 
     #[tokio::test]
     async fn web_chat_rejects_cross_origin_request() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
-        let response = crate::web::router(state)
+        let (app, mut queue_rx, _) = CompanionApp::new();
+        let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
@@ -715,8 +707,8 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_and_retry_routes_reject_cross_origin_requests() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
-        let router = crate::web::router(state);
+        let (app, mut queue_rx, _) = CompanionApp::new();
+        let router = crate::web::router(app);
         let settings_response = router
             .clone()
             .oneshot(
@@ -753,9 +745,9 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_api_supports_rename_and_delete() {
-        let (state, _, _) = CompanionApp::new();
-        let router = crate::web::router(state.clone());
-        let configurations = &state.ai.configurations;
+        let (app, _, _) = CompanionApp::new();
+        let router = crate::web::router(app.clone());
+        let configurations = &app.ai.configurations;
         let create_body = |name: &str| {
             format!(
                 "name={name}&interaction_method=OpenAI&model_id=gpt-test&url=https%3A%2F%2Fapi.openai.com%2Fv1%2F&system_text=Use+the+provided+evidence."
@@ -810,8 +802,8 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_management_page_is_served_separately() {
-        let (state, _, _) = CompanionApp::new();
-        let response = crate::web::router(state)
+        let (app, _, _) = CompanionApp::new();
+        let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .uri("/ai-configurations")
@@ -831,8 +823,8 @@ mod tests {
 
     #[tokio::test]
     async fn provider_catalog_route_returns_setup_presets_without_configuration_ids() {
-        let (state, _, _) = CompanionApp::new();
-        let response = crate::web::router(state)
+        let (app, _, _) = CompanionApp::new();
+        let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/ai-providers")
@@ -865,8 +857,8 @@ mod tests {
 
     #[tokio::test]
     async fn chat_without_api_key_retains_context_for_retry() {
-        let (state, queue_rx, notifications_tx) = CompanionApp::new();
-        let config = state
+        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        let config = app
             .ai
             .configurations
             .create(
@@ -877,14 +869,9 @@ mod tests {
                 crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
-        state
-            .ai
-            .configurations
-            .set_active(Some(&config.id))
-            .unwrap();
+        app.ai.configurations.set_active(Some(&config.id)).unwrap();
         let mut notifications = notifications_tx.subscribe();
-        state
-            .queue_tx
+        app.queue_tx
             .try_send(QueueItem::GameEvent(GameEvent {
                 id: None,
                 date: "254-07-05:1061".to_owned(),
@@ -893,11 +880,10 @@ mod tests {
                 text: "A caravan arrived.".to_owned(),
             }))
             .unwrap();
-        state
-            .queue_tx
+        app.queue_tx
             .try_send(QueueItem::UserInput("What happened?".to_owned()))
             .unwrap();
-        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
@@ -905,9 +891,9 @@ mod tests {
             println!("Expected AI request failure, got: {:?}", failure);
         }
         assert!(failure.text.contains("AI request failed"));
-        let conversation = state.ai.pending_report_count().await;
+        let conversation = app.ai.pending_report_count().await;
         assert_eq!(conversation, 1);
-        let conversation = state.ai.pending_user_message_count().await;
+        let conversation = app.ai.pending_user_message_count().await;
         assert_eq!(conversation, 1);
         worker.abort();
     }
@@ -927,8 +913,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure()
     {
-        let (state, queue_rx, notifications_tx) = CompanionApp::new();
-        let config = state
+        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        let config = app
             .ai
             .configurations
             .create(
@@ -939,17 +925,12 @@ mod tests {
                 crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
-        state
-            .ai
-            .configurations
-            .set_active(Some(&config.id))
-            .unwrap();
+        app.ai.configurations.set_active(Some(&config.id)).unwrap();
         let mut notifications = notifications_tx.subscribe();
-        state
-            .event_turns
+        app.event_turns
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
-        state.queue_tx.try_send(sample_event()).unwrap();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        app.queue_tx.try_send(sample_event()).unwrap();
 
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let started = Instant::now();
@@ -960,15 +941,14 @@ mod tests {
         // Automatic turns stay paused after the failure, however long we wait.
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
-        assert_eq!(state.ai.pending_report_count().await, 1);
+        assert_eq!(app.ai.pending_report_count().await, 1);
         worker.abort();
     }
 
     #[tokio::test(start_paused = true)]
     async fn automatic_turns_are_off_by_default() {
-        let (state, queue_rx, notifications_tx) = CompanionApp::new();
-        state
-            .ai
+        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        app.ai
             .configurations
             .create(
                 "test config",
@@ -979,8 +959,8 @@ mod tests {
             )
             .unwrap();
         let mut notifications = notifications_tx.subscribe();
-        let worker = tokio::spawn(state.clone().run_companion_worker(queue_rx));
-        state.queue_tx.try_send(sample_event()).unwrap();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        app.queue_tx.try_send(sample_event()).unwrap();
         assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
@@ -989,19 +969,19 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn periodic_checks_stay_silent_without_an_ai_configuration() {
-        let (state, queue_rx, notifications_tx) = CompanionApp::new();
+        let (app, queue_rx, notifications_tx) = CompanionApp::new();
         let mut notifications = notifications_tx.subscribe();
-        let worker = tokio::spawn(state.run_companion_worker(queue_rx));
+        let worker = tokio::spawn(app.run_companion_worker(queue_rx));
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
         worker.abort();
     }
 
     async fn post_plugin_event(
-        state: Arc<CompanionApp>,
+        app: Arc<CompanionApp>,
         body: &'static str,
     ) -> axum::response::Response {
-        crate::web::router(state)
+        crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
@@ -1017,14 +997,14 @@ mod tests {
 
     #[tokio::test]
     async fn automatic_turn_form_sets_each_trigger_independently() {
-        let (state, _, _) = CompanionApp::new();
+        let (app, _, _) = CompanionApp::new();
         for (body, events, periodic) in [
             ("event_turns=on", true, false),
             ("periodic_turns=on", false, true),
             ("event_turns=on&periodic_turns=on", true, true),
             ("", false, false),
         ] {
-            let response = crate::web::router(state.clone())
+            let response = crate::web::router(app.clone())
                 .oneshot(
                     HttpRequest::builder()
                         .method("PUT")
@@ -1039,15 +1019,15 @@ mod tests {
                 .unwrap();
 
             assert_eq!(response.status(), StatusCode::NO_CONTENT, "{body}");
-            assert_eq!(state.event_turns_enabled(), events, "{body}");
-            assert_eq!(state.periodic_turns_enabled(), periodic, "{body}");
+            assert_eq!(app.event_turns_enabled(), events, "{body}");
+            assert_eq!(app.periodic_turns_enabled(), periodic, "{body}");
         }
     }
 
     #[tokio::test]
     async fn main_page_prevents_caching_and_offers_the_event_toggle() {
-        let (state, _, _) = CompanionApp::new();
-        let response = crate::web::router(state)
+        let (app, _, _) = CompanionApp::new();
+        let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .uri("/")
@@ -1084,9 +1064,9 @@ mod tests {
 
     #[tokio::test]
     async fn htmx_scripts_are_served() {
-        let (state, _, _) = CompanionApp::new();
+        let (app, _, _) = CompanionApp::new();
         for path in ["/assets/htmx.min.js", "/assets/hx-sse.min.js"] {
-            let response = crate::web::router(state.clone())
+            let response = crate::web::router(app.clone())
                 .oneshot(
                     HttpRequest::builder()
                         .uri(path)
@@ -1102,8 +1082,8 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_is_enqueued() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
-        let response = post_plugin_event(state, EVENT_BODY).await;
+        let (app, mut queue_rx, _) = CompanionApp::new();
+        let response = post_plugin_event(app, EVENT_BODY).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -1120,8 +1100,8 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_rejects_browser_requests() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
-        let response = crate::web::router(state)
+        let (app, mut queue_rx, _) = CompanionApp::new();
+        let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
                     .method("POST")
@@ -1141,14 +1121,14 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_rejects_invalid_events() {
-        let (state, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx, _) = CompanionApp::new();
         for body in [
             r#"{"date":"nope","category":"jobs","text":"bad date"}"#,
             r#"{"date":"254-07-05:1061","category":"","text":"no category"}"#,
             r#"{"date":"254-07-05:1061","category":"jobs","text":"  "}"#,
             r#"{"date":"254-07-05:1061","category":"jobs","text":"x","real_world_time_utc":1}"#,
         ] {
-            let response = post_plugin_event(state.clone(), body).await;
+            let response = post_plugin_event(app.clone(), body).await;
             assert!(response.status().is_client_error(), "{body}");
         }
         assert!(queue_rx.try_recv().is_err());
@@ -1156,19 +1136,19 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_reports_full_queue_without_accepting_event() {
-        let (state, queue_rx, _) = CompanionApp::new();
+        let (app, queue_rx, _) = CompanionApp::new();
         for _ in 0..EVENT_QUEUE_CAPACITY {
-            state.queue_tx.try_send(QueueItem::AiRetry).unwrap();
+            app.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
 
-        let response = post_plugin_event(state, EVENT_BODY).await;
+        let response = post_plugin_event(app, EVENT_BODY).await;
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(queue_rx.len(), EVENT_QUEUE_CAPACITY);
     }
 
     async fn start_test_grpc_server(
-        state: Arc<CompanionApp>,
+        app: Arc<CompanionApp>,
     ) -> (
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
@@ -1176,7 +1156,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = Server::builder()
-            .add_service(CompanionServer::new(crate::rpc::service(state)))
+            .add_service(CompanionServer::new(crate::rpc::service(app)))
             .serve_with_incoming(TcpListenerStream::new(listener));
 
         (address, tokio::spawn(server))
