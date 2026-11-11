@@ -75,3 +75,40 @@ of tools suitable to the task the AI was working on. In particular, it
 repeatedly called get_unit_details to infer religious affiliation from indirect
 data because explicit religion/sect membership was not available through the
 tools.
+
+## High-level architectural structure
+
+There's an **RPC service** that receives calls from the dfcompanion game plugin.
+
+There's an **HTTP service** that provides the user interface and Web API.f
+
+The CompanionApp is a singleton that tracks app state and coordinates
+interaction with the AI through an AiRuntime.
+CompanionApp::run_companion_worker() is the main loop of the main thread, and
+can be thought of as the **Companion service**.
+
+AiRuntime keeps a queue of pending AI requests/inputs and handles all
+interactions with the AI. It's used by CompanionApp.
+
+NotificationHistory keeps a limited length list of DisplayMessage. When a
+message is added, it assigns an increasing id to each and notifies all
+subscribers. The web server's /events GET handler subscribes on behalf of
+connected browsers. NotificationHistory also listens for DisplayMessages sent to
+it on a broadcast channel created and held by CompanionApp. This channel is
+cloned in Notifier instances, which are ubiquituous.
+
+### Event flow
+
+QueueItems flow from the RPC and HTTP services to CompanionApp to notify it
+mainly of user inputs and game events.
+
+Notifications flow from the RPC, HTTP, and Companion services via numerous call
+paths to NotificationHistory, which is held by CompanionApp. These notifications
+cover many things, including AI responses, user requests to the AI, game events,
+and information about program operation such as status, diagnostic, and AI usage
+information. All of this is destined for possible display to the user.
+
+NotificationHistory re-broadcasts every notification to a separate channel along
+with a unique, monotonically increasing id. The HTTP service subscribes to this
+on behalf of browsers that request an event stream connection, allowing
+notifications to be updated live in a browser page.
