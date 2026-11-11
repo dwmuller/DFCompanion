@@ -183,10 +183,10 @@ async fn plugin_event(
         return plugin_event_response(status_code, "rejected", &message);
     }
 
-    match app.queue_tx.try_send(QueueItem::GameEvent(event)) {
+    match app.event_queue().try_send(QueueItem::GameEvent(event)) {
         Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
         Err(message) => {
-            app.get_notifier().notify(DisplayMessage::new(
+            app.notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 message.clone(),
             ));
@@ -490,7 +490,7 @@ async fn select_configuration_fragment(
         return active_configuration_response(&app, StatusCode::BAD_REQUEST, error);
     }
     if id.is_some() {
-        let _ = app.queue_tx.try_send(QueueItem::Orient);
+        let _ = app.event_queue().try_send(QueueItem::Orient);
     }
 
     active_configuration_response(&app, StatusCode::OK, String::new())
@@ -924,12 +924,11 @@ async fn chat(
             } else {
                 DisplayMessageKind::User
             };
-            app.get_notifier()
-                .notify(DisplayMessage::new(kind, message));
+            app.notifier().notify(DisplayMessage::new(kind, message));
             fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
         Err(err) => {
-            app.get_notifier().notify(DisplayMessage::new(
+            app.notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 err.to_string(),
             ));
@@ -979,7 +978,7 @@ async fn retry(State(app): State<Arc<CompanionApp>>, headers: HeaderMap) -> Resp
     if let Err(status) = validate_local_origin(&headers) {
         return (status, "Request origin not allowed.").into_response();
     }
-    match app.queue_tx.try_send(QueueItem::AiRetry) {
+    match app.event_queue().try_send(QueueItem::AiRetry) {
         Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
         Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
     }
@@ -1082,7 +1081,7 @@ mod test {
             DisplayMessage::new(DisplayMessageKind::Warning, "Heads up"),
             DisplayMessage::new(DisplayMessageKind::Companion, "**Answer**"),
         ] {
-            app.get_notifier().notify(message);
+            app.notifier().notify(message);
         }
         for _ in 0..50 {
             if app.history.subscribe(None).0.len() == 7 {

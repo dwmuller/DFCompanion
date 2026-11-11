@@ -38,7 +38,7 @@ pub enum ChatState {
 }
 
 pub struct CompanionApp {
-    pub queue_tx: EventQueue,
+    queue_tx: EventQueue,
     notifier: Notifier,
     pub history: NotificationHistory,
     pub ai: ai::AiRuntime,
@@ -103,12 +103,12 @@ impl CompanionApp {
         )
     }
 
-    pub fn get_notifier(&self) -> Notifier {
-        self.notifier.clone()
+    pub fn notifier(&self) -> &Notifier {
+        &self.notifier
     }
 
-    pub fn get_event_queue(&self) -> EventQueue {
-        self.queue_tx.clone()
+    pub fn event_queue(&self) -> &EventQueue {
+        &self.queue_tx
     }
 
     pub fn chat_state(&self) -> ChatState {
@@ -184,7 +184,7 @@ impl CompanionApp {
                     let _ = this.notifier.notify(message);
                 };
                 if self.has_active_configuration() {
-                    let _ = self.enqueue(QueueItem::Orient);
+                    let _ = (&self).queue_tx.try_send(QueueItem::Orient);
                 }
             }
             Err(error) => {
@@ -225,11 +225,7 @@ impl CompanionApp {
 
     /// Sends a chat message to the AI.
     pub fn chat(&self, message: String) -> Result<(), String> {
-        self.enqueue(QueueItem::UserInput(message))
-    }
-
-    fn enqueue(&self, item: QueueItem) -> Result<(), String> {
-        self.queue_tx.try_send(item)
+        (&self).queue_tx.try_send(QueueItem::UserInput(message))
     }
 
     fn try_begin_processing(&self) -> Result<(), ChatState> {
@@ -484,7 +480,7 @@ mod tests {
     #[tokio::test]
     async fn notification_history_replays_then_streams_live() {
         let (app, _queue_rx, _) = CompanionApp::new();
-        let notifier = app.get_notifier();
+        let notifier = app.notifier();
         notifier.notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
         notifier.notify(DisplayMessage::new(DisplayMessageKind::User, "hello"));
         notifier.notify(DisplayMessage::new(
