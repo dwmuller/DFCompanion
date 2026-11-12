@@ -22,6 +22,7 @@ prepare underlying infrastructure.
 - Rename the queues and their items to reflect their input/output roles. Instead
   "notifications" and "queue items", they're really "outputs" and "inputs" of
   the companion.
+- ? Refactor AI tools as an MCP service.
 
 ## AI interaction
 
