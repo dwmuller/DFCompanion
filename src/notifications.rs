@@ -69,15 +69,16 @@ impl DisplayMessage {
 
 #[derive(Clone)]
 pub struct Notifier {
-    tx: broadcast::Sender<DisplayMessage>,
+    history: NotificationHistory,
 }
 
 impl Notifier {
-    pub fn new(tx: broadcast::Sender<DisplayMessage>) -> Self {
-        Self { tx }
+    pub fn new(history: NotificationHistory) -> Self {
+        Self { history }
     }
-    pub fn notify(&self, message: DisplayMessage) {
-        let _ = self.tx.send(message);
+    /// Sends a notification and returns its assigned id.
+    pub fn notify(&self, message: DisplayMessage) -> NotificationId {
+        self.history.push(message)
     }
 }
 
@@ -97,36 +98,18 @@ struct HistoryState {
 
 const NOTIFICATION_HISTORY_LIMIT: usize = 500;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NotificationId(pub u64);
+
 impl NotificationHistory {
-    /// Records everything sent on `notifications_tx`. Without a Tokio runtime
-    /// nothing is recorded.
-    pub fn record(notifications_tx: broadcast::Receiver<DisplayMessage>) -> Self {
-        let history = Self {
+    pub fn new() -> Self {
+        Self {
             inner: Default::default(),
             live_tx: broadcast::channel(128).0,
-        };
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let mut rx = notifications_tx;
-            let recorder = history.clone();
-            runtime.spawn(async move {
-                loop {
-                    match rx.recv().await {
-                        Ok(message) => recorder.push(message),
-                        Err(broadcast::error::RecvError::Lagged(count)) => {
-                            recorder.push(DisplayMessage::new(
-                                DisplayMessageKind::Warning,
-                                format!("{count} notifications were missed."),
-                            ))
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            });
         }
-        history
     }
 
-    fn push(&self, message: DisplayMessage) {
+    fn push(&self, message: DisplayMessage) -> NotificationId {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.entries.len() == NOTIFICATION_HISTORY_LIMIT {
             inner.entries.pop_front();
@@ -136,6 +119,7 @@ impl NotificationHistory {
         inner.entries.push_back((id, message.clone()));
         // Sent under the lock so subscribers never see a gap or a duplicate.
         let _ = self.live_tx.send((id, message));
+        NotificationId(id)
     }
 
     /// The recorded messages with an id greater than `after` (all of them when

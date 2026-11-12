@@ -511,7 +511,7 @@ impl AiRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai_config::AiConfiguration;
+    use crate::{ai_config::AiConfiguration, notifications::NotificationHistory};
     use axum::{
         body::{to_bytes, Body},
         extract::State,
@@ -521,7 +521,7 @@ mod tests {
         Router,
     };
     use serde_json::{json, Value};
-    use tokio::{net::TcpListener, sync::broadcast};
+    use tokio::net::TcpListener;
 
     #[derive(Clone)]
     struct MockProviderState {
@@ -646,8 +646,8 @@ mod tests {
 
     fn make_test_runtime() -> AiRuntime {
         use crate::ai_config::ConfigurationRepository;
-        let (sender, _) = broadcast::channel(4);
-        let notifier = Notifier::new(sender.clone());
+        let history = NotificationHistory::new();
+        let notifier = Notifier::new(history);
         let game_state = GameState::new(notifier.clone());
         AiRuntime::new(ConfigurationRepository::in_memory(), game_state, notifier)
     }

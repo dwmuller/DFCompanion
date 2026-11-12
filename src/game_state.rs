@@ -1106,6 +1106,8 @@ pub(crate) fn validate_game_date(value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::notifications::NotificationHistory;
+
     use super::*;
 
     #[test]
@@ -1230,14 +1232,15 @@ mod tests {
 
     #[test]
     fn version_warning_is_notified_only_when_it_changes() {
-        let (notifications_tx, mut notifications_rx) = tokio::sync::broadcast::channel(4);
-        let notifier = Notifier::new(notifications_tx);
+        let history = NotificationHistory::new();
+        let mut notifications_rx = history.subscribe(None).1;
+        let notifier = Notifier::new(history);
         let first_warning = Some("first warning".to_owned());
         let mut previous_warning = None;
 
         notify_version_warning(first_warning.clone(), &mut previous_warning, &notifier);
         assert_eq!(
-            notifications_rx.try_recv().unwrap(),
+            notifications_rx.try_recv().unwrap().1,
             DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
 
@@ -1247,14 +1250,14 @@ mod tests {
         let changed_warning = Some("changed warning".to_owned());
         notify_version_warning(changed_warning, &mut previous_warning, &notifier);
         assert_eq!(
-            notifications_rx.try_recv().unwrap(),
+            notifications_rx.try_recv().unwrap().1,
             DisplayMessage::new(DisplayMessageKind::Warning, "changed warning")
         );
 
         notify_version_warning(None, &mut previous_warning, &notifier);
         notify_version_warning(first_warning, &mut previous_warning, &notifier);
         assert_eq!(
-            notifications_rx.try_recv().unwrap(),
+            notifications_rx.try_recv().unwrap().1,
             DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
     }

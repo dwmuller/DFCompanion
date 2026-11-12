@@ -1071,7 +1071,7 @@ mod test {
 
     #[tokio::test]
     async fn conversation_markdown_endpoint_uses_all_messages() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         for message in [
             DisplayMessage::new(DisplayMessageKind::User, "Question"),
             DisplayMessage::new(DisplayMessageKind::GameEvent, "Arrival"),
@@ -1115,7 +1115,7 @@ mod test {
 
     #[tokio::test]
     async fn resume_chat_requires_local_origin_and_clears_blocked_state() {
-        let (app, queue_rx, _) = CompanionApp::new();
+        let (app, queue_rx) = CompanionApp::new();
         let svc = router(app.clone());
         let status_response = svc
             .clone()

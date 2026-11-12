@@ -9,9 +9,7 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Save notifications in NotificationHistory synchronously and assign and return
-  an ID.
-  - Eliminates recorder task and "N notifications were missed" condition.
+- Integrate notification ID into the Notification struct.
 - Include the notification ID in corresponding Conversation queue items. This
   allows correlation of AI processing state with outputs (notifications), for
   enhanced UI behavior.

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 use verbose_macros::debug;
 
@@ -47,41 +47,36 @@ pub struct CompanionApp {
 }
 
 impl CompanionApp {
-    pub fn new() -> (
-        Arc<Self>,
-        mpsc::Receiver<QueueItem>,
-        broadcast::Sender<DisplayMessage>,
-    ) {
-        let (notifications_tx, _) = broadcast::channel(128);
+    pub fn new() -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
+        // Create a fresh NotificationHistory and pass it in.
+        let history = NotificationHistory::new();
         let (s, r) = Self::with_config_and_channels(
             ai_config::ConfigurationRepository::in_memory(),
-            notifications_tx.clone(),
+            history,
         );
-        (s, r, notifications_tx)
+        (s, r)
     }
 
     pub fn load() -> Result<(Arc<Self>, mpsc::Receiver<QueueItem>), String> {
         let configurations = ai_config::ConfigurationRepository::load_default()?;
-        let (notifications_tx, _) = broadcast::channel(128);
-        Ok(Self::with_config_and_channels(
-            configurations,
-            notifications_tx,
-        ))
+        // Build a fresh NotificationHistory for the loaded configuration.
+        let history = NotificationHistory::new();
+        Ok(Self::with_config_and_channels(configurations, history))
     }
 
+    // Updated to accept a ready-to-use NotificationHistory.
     fn with_config_and_channels(
         configurations: ai_config::ConfigurationRepository,
-        notifications_tx: broadcast::Sender<DisplayMessage>,
+        history: NotificationHistory,
     ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
         #[cfg(test)]
         let _ = verbose_macros::try_set_debug(true);
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let event_queue = EventQueue::new(queue_tx);
-        let history = NotificationHistory::record(notifications_tx.subscribe());
-        let notifier = Notifier::new(notifications_tx);
+        // `history` is passed in directly.
+        let notifier = Notifier::new(history.clone());
         let game_state = GameState::new(notifier.clone());
         let ai = ai::AiRuntime::new(configurations, game_state.clone(), notifier.clone());
-
         (
             Arc::new(Self {
                 queue_tx: event_queue.clone(),
@@ -438,14 +433,15 @@ fn format_tool_result(result: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::events::{GameEvent, QueueItem};
+    use tokio::sync::broadcast;
 
     // Find next message of specific kind in the notifications stream.
     async fn recv_kind(
-        notifications: &mut broadcast::Receiver<DisplayMessage>,
+        notifications: &mut broadcast::Receiver<(u64, DisplayMessage)>,
         kind: DisplayMessageKind,
     ) -> DisplayMessage {
         loop {
-            let message = notifications.recv().await.unwrap();
+            let message = notifications.recv().await.unwrap().1;
             if message.kind == kind {
                 return message;
             }
@@ -467,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn notification_history_replays_then_streams_live() {
-        let (app, _queue_rx, _) = CompanionApp::new();
+        let (app, _queue_rx) = CompanionApp::new();
         let notifier = app.notifier();
         notifier.notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
         notifier.notify(DisplayMessage::new(DisplayMessageKind::User, "hello"));
@@ -517,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_plugin_event_flows_through_grpc_into_companion_queue() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         let (address, server_task) = start_test_grpc_server(app.clone()).await;
 
         let mut client = CompanionClient::connect(format!("http://{address}"))
@@ -571,8 +567,8 @@ mod tests {
 
     #[tokio::test]
     async fn full_event_queue_responds_with_pause_request_and_notifies_ui() {
-        let (app, _queue_rx, notifications_tx) = CompanionApp::new();
-        let mut notifications = notifications_tx.subscribe();
+        let (app, _queue_rx) = CompanionApp::new();
+        let (_, mut notifications_rx) = app.history.subscribe(None);
         for _ in 0..EVENT_QUEUE_CAPACITY {
             app.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
@@ -601,10 +597,11 @@ mod tests {
             EventSubmissionStatus::PauseRequestedQueueFull
         );
         assert!(response.message.contains("asked to pause"));
-        assert!(notifications
+        assert!(notifications_rx
             .recv()
             .await
             .unwrap()
+            .1
             .text
             .contains("queue is full"));
 
@@ -613,7 +610,7 @@ mod tests {
 
     #[tokio::test]
     async fn web_chat_input_is_enqueued_as_user_input() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
@@ -641,8 +638,8 @@ mod tests {
 
     #[tokio::test]
     async fn worker_runs_chat_commands_without_involving_the_ai() {
-        let (app, queue_rx, notifications_tx) = CompanionApp::new();
-        let mut notifier = notifications_tx.subscribe();
+        let (app, queue_rx) = CompanionApp::new();
+        let mut notifier = app.history.subscribe(None).1;
         let queue_tx = app.queue_tx.clone();
         let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
         for text in ["/call no_such_tool a=1", "/bogus"] {
@@ -651,19 +648,19 @@ mod tests {
                 .unwrap();
         }
 
-        let call = notifier.recv().await.unwrap();
+        let call = notifier.recv().await.unwrap().1;
         assert_eq!(call.kind, DisplayMessageKind::Diagnostic);
         assert!(call.text.contains("/call no_such_tool"), "{call:?}");
-        let error = notifier.recv().await.unwrap();
+        let error = notifier.recv().await.unwrap().1;
         assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
         assert!(
             error.text.contains("Unknown tool: no_such_tool"),
             "{error:?}"
         );
-        let call = notifier.recv().await.unwrap();
+        let call = notifier.recv().await.unwrap().1;
         assert_eq!(call.kind, DisplayMessageKind::Diagnostic);
         assert!(call.text.contains("/bogus"), "{call:?}");
-        let error = notifier.recv().await.unwrap();
+        let error = notifier.recv().await.unwrap().1;
         assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
         assert!(
             error.text.contains("Unknown chat command: /bogus"),
@@ -675,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn web_chat_rejects_cross_origin_request() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
@@ -696,7 +693,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_and_retry_routes_reject_cross_origin_requests() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         let router = crate::web::router(app);
         let settings_response = router
             .clone()
@@ -734,7 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_api_supports_rename_and_delete() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         let router = crate::web::router(app.clone());
         let configurations = &app.ai.configurations;
         let create_body = |name: &str| {
@@ -791,7 +788,7 @@ mod tests {
 
     #[tokio::test]
     async fn configuration_management_page_is_served_separately() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
@@ -812,7 +809,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_catalog_route_returns_setup_presets_without_configuration_ids() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
@@ -846,7 +843,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_without_api_key_retains_context_for_retry() {
-        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        let (app, queue_rx) = CompanionApp::new();
         let config = app
             .ai
             .configurations
@@ -859,7 +856,7 @@ mod tests {
             )
             .unwrap();
         app.ai.configurations.set_active(Some(&config.id)).unwrap();
-        let mut notifications = notifications_tx.subscribe();
+        let (_, mut notifications_rx) = app.history.subscribe(None);
         app.queue_tx
             .try_send(QueueItem::GameEvent(GameEvent {
                 id: None,
@@ -874,8 +871,8 @@ mod tests {
             .unwrap();
         let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
 
-        assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
-        let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
+        assert!(notifications_rx.recv().await.unwrap().1.kind == DisplayMessageKind::GameEvent);
+        let failure = recv_kind(&mut notifications_rx, DisplayMessageKind::Warning).await;
         if !failure.text.contains("AI request failed") {
             println!("Expected AI request failure, got: {:?}", failure);
         }
@@ -902,7 +899,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure()
     {
-        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        let (app, queue_rx) = CompanionApp::new();
         let config = app
             .ai
             .configurations
@@ -915,13 +912,13 @@ mod tests {
             )
             .unwrap();
         app.ai.configurations.set_active(Some(&config.id)).unwrap();
-        let mut notifications = notifications_tx.subscribe();
+        let mut notifications = app.history.subscribe(None).1;
         app.event_turns
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
         app.queue_tx.try_send(sample_event()).unwrap();
 
-        assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
+        assert!(notifications.recv().await.unwrap().1.kind == DisplayMessageKind::GameEvent);
         let started = Instant::now();
         let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
         assert!(failure.text.contains("AI request failed"), "{failure:?}");
@@ -936,7 +933,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn automatic_turns_are_off_by_default() {
-        let (app, queue_rx, notifications_tx) = CompanionApp::new();
+        let (app, queue_rx) = CompanionApp::new();
         app.ai
             .configurations
             .create(
@@ -947,10 +944,10 @@ mod tests {
                 crate::ai::DEFAULT_SYSTEM_TEXT,
             )
             .unwrap();
-        let mut notifications = notifications_tx.subscribe();
+        let mut notifications = app.history.subscribe(None).1;
         let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
         app.queue_tx.try_send(sample_event()).unwrap();
-        assert!(notifications.recv().await.unwrap().kind == DisplayMessageKind::GameEvent);
+        assert!(notifications.recv().await.unwrap().1.kind == DisplayMessageKind::GameEvent);
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
         worker.abort();
@@ -958,8 +955,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn periodic_checks_stay_silent_without_an_ai_configuration() {
-        let (app, queue_rx, notifications_tx) = CompanionApp::new();
-        let mut notifications = notifications_tx.subscribe();
+        let (app, queue_rx) = CompanionApp::new();
+        let mut notifications = app.history.subscribe(None).1;
         let worker = tokio::spawn(app.run_companion_worker(queue_rx));
         let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
         assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
@@ -986,7 +983,7 @@ mod tests {
 
     #[tokio::test]
     async fn automatic_turn_form_sets_each_trigger_independently() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         for (body, events, periodic) in [
             ("event_turns=on", true, false),
             ("periodic_turns=on", false, true),
@@ -1015,7 +1012,7 @@ mod tests {
 
     #[tokio::test]
     async fn main_page_prevents_caching_and_offers_the_event_toggle() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
@@ -1053,7 +1050,7 @@ mod tests {
 
     #[tokio::test]
     async fn htmx_scripts_are_served() {
-        let (app, _, _) = CompanionApp::new();
+        let (app, _) = CompanionApp::new();
         for path in ["/assets/htmx.min.js", "/assets/hx-sse.min.js"] {
             let response = crate::web::router(app.clone())
                 .oneshot(
@@ -1071,7 +1068,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_is_enqueued() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         let response = post_plugin_event(app, EVENT_BODY).await;
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -1089,7 +1086,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_rejects_browser_requests() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         let response = crate::web::router(app)
             .oneshot(
                 HttpRequest::builder()
@@ -1110,7 +1107,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_rejects_invalid_events() {
-        let (app, mut queue_rx, _) = CompanionApp::new();
+        let (app, mut queue_rx) = CompanionApp::new();
         for body in [
             r#"{"date":"nope","category":"jobs","text":"bad date"}"#,
             r#"{"date":"254-07-05:1061","category":"","text":"no category"}"#,
@@ -1125,7 +1122,7 @@ mod tests {
 
     #[tokio::test]
     async fn lua_http_event_reports_full_queue_without_accepting_event() {
-        let (app, queue_rx, _) = CompanionApp::new();
+        let (app, queue_rx) = CompanionApp::new();
         for _ in 0..EVENT_QUEUE_CAPACITY {
             app.queue_tx.try_send(QueueItem::AiRetry).unwrap();
         }
