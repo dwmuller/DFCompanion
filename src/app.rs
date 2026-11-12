@@ -157,21 +157,18 @@ impl CompanionApp {
         match self.startup_summary().await {
             Ok(summary) => {
                 {
-                    let this = &self;
-                    let message = DisplayMessage::new(DisplayMessageKind::Status, summary);
-                    let _ = this.notifier.notify(message);
+                    self.notifier
+                        .notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
                 };
                 if self.has_active_configuration() {
                     let _ = (&self).queue_tx.try_send(QueueItem::Orient);
                 }
             }
             Err(error) => {
-                let this = &self;
-                let message = DisplayMessage::new(
+                self.notifier.notify(DisplayMessage::new(
                             DisplayMessageKind::Warning,
                             format!("The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"),
-                        );
-                let _ = this.notifier.notify(message);
+                        ));
             }
         }
     }
@@ -238,12 +235,10 @@ impl CompanionApp {
         }
 
         {
-            let this = &self;
-            let message = DisplayMessage::new(
+            self.notifier.notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 blocked_warning_message(reason, self.pause_for_ai_block(reason).await),
-            );
-            let _ = this.notifier.notify(message);
+            ));
         };
     }
 
@@ -310,14 +305,10 @@ impl CompanionApp {
                     Wake::Item(QueueItem::AiRetry) => {
                         // TODO: This should go away soon - retries will be handled by the UI.
                         if self.ai.pending_user_message_count().await == 0 {
-                            {
-                                let this = &self;
-                                let message = DisplayMessage::new(
-                                    DisplayMessageKind::Status,
-                                    "There is no failed AI request to retry.",
-                                );
-                                let _ = this.notifier.notify(message);
-                            };
+                            self.notifier.notify(DisplayMessage::new(
+                                DisplayMessageKind::Status,
+                                "There is no failed AI request to retry.",
+                            ));
                             continue;
                         }
                         self.flush_pending_interactions().await;
@@ -344,12 +335,10 @@ impl CompanionApp {
                     }
                     Wake::Item(QueueItem::GameEvent(event)) => {
                         {
-                            let this = &self;
-                            let message = DisplayMessage::new(
+                            self.notifier.notify(DisplayMessage::new(
                                 DisplayMessageKind::GameEvent,
                                 format!("{} [{}] {}", event.date, event.category, event.text),
-                            );
-                            let _ = this.notifier.notify(message);
+                            ));
                         };
                         self.ai.push_report(event).await;
                         flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
@@ -402,39 +391,33 @@ async fn run_chat_command(
     match command {
         Ok(chat_commands::ChatCommand::CallTool { name, arguments }) => {
             let result = state.ai.call_tool(&name, arguments).await;
-            {
-                let this = &state;
-                let message = DisplayMessage::new(
-                    DisplayMessageKind::Diagnostic,
-                    format!(
-                        "Tool {name} result:\n{}",
-                        format_tool_result(&result).unwrap_or_else(|error| {
-                            eprintln!("Error formatting tool result: {error}");
-                            result
-                        })
-                    ),
-                );
-                let _ = this.notifier.notify(message);
-            };
+            state.notifier.notify(DisplayMessage::new(
+                DisplayMessageKind::Diagnostic,
+                format!(
+                    "Tool {name} result:\n{}",
+                    format_tool_result(&result).unwrap_or_else(|error| {
+                        eprintln!("Error formatting tool result: {error}");
+                        result
+                    })
+                ),
+            ));
         }
         Ok(chat_commands::ChatCommand::ListTools) => {
-            let this = &state;
-            let message =
-                DisplayMessage::new(DisplayMessageKind::Diagnostic, ai_tools::describe_tools());
-            let _ = this.notifier.notify(message);
+            state.notifier.notify(DisplayMessage::new(
+                DisplayMessageKind::Diagnostic,
+                ai_tools::describe_tools(),
+            ));
         }
         Ok(chat_commands::ChatCommand::DescribeTool { name }) => {
-            let this = &state;
-            let message = DisplayMessage::new(
+            state.notifier.notify(DisplayMessage::new(
                 DisplayMessageKind::Diagnostic,
                 ai_tools::describe_tool(&name).unwrap_or_else(|error| error),
-            );
-            let _ = this.notifier.notify(message);
+            ));
         }
         Err(error) => {
-            let this = &state;
-            let message = DisplayMessage::new(DisplayMessageKind::Diagnostic, error);
-            let _ = this.notifier.notify(message);
+            state
+                .notifier
+                .notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, error));
         }
     }
 }

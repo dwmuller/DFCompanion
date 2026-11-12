@@ -469,12 +469,10 @@ impl AiRuntime {
         };
         if let Some(prompt) = self.start_interaction(&configuration.system_text).await {
             {
-                let this = &self;
-                let message = DisplayMessage::new(
+                self.notifier.notify(DisplayMessage::new(
                     DisplayMessageKind::AiUsage,
                     prompt.token_estimates_summary(),
-                );
-                this.notifier.notify(message);
+                ));
             };
             let is_user_interaction = prompt.kind.is_user_interaction();
             match self.complete(&configuration, &prompt).await {
@@ -487,22 +485,15 @@ impl AiRuntime {
                         .commit_interaction(prompt, result.answer.clone(), add_to_history)
                         .await;
                     if notify_user {
-                        {
-                            let this = &self;
-                            let message =
-                                DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
-                                    .with_beep(!is_user_interaction);
-                            this.notifier.notify(message);
-                        };
-                    }
-                    {
-                        let this = &self;
-                        let message = DisplayMessage::new(
-                            DisplayMessageKind::AiUsage,
-                            result.usage.iter().map(|u| u.summary()).join("\n"),
+                        self.notifier.notify(
+                            DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
+                                .with_beep(!is_user_interaction),
                         );
-                        this.notifier.notify(message);
-                    };
+                    }
+                    self.notifier.notify(DisplayMessage::new(
+                        DisplayMessageKind::AiUsage,
+                        result.usage.iter().map(|u| u.summary()).join("\n"),
+                    ));
                     if more_pending {
                         SendResult::MorePending
                     } else {
