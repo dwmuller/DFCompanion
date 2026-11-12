@@ -9,11 +9,6 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Allow AI worker to run without holding up the worker loop.
-  - This could work using a one-shot channel in calls to
-    send_next_interaction(), and given the desire to be able to recall pending
-    inputs, it's probably best to stick to that. Otherwise AI inputs could be
-    stuck in a larger channel where they can't be recalled.
 - Save notifications in NotificationHistory synchronously and assign and return
   an ID.
   - Eliminates recorder task and "N notifications were missed" condition.

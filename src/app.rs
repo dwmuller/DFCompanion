@@ -140,22 +140,6 @@ impl CompanionApp {
             .map_err(|error| format!("Failed to pause for AI block: {error}"))
     }
 
-    async fn block_chat(&self, reason: &str) {
-        let previous_state = self.set_chat_state(ChatState::Blocked);
-        if previous_state == ChatState::Blocked {
-            return;
-        }
-
-        {
-            let this = &self;
-            let message = DisplayMessage::new(
-                DisplayMessageKind::Warning,
-                blocked_warning_message(reason, self.pause_for_ai_block(reason).await),
-            );
-            let _ = this.notifier.notify(message);
-        };
-    }
-
     fn has_active_configuration(&self) -> bool {
         matches!(self.ai.configurations.active(), Ok(Some(_)))
     }
@@ -253,19 +237,24 @@ impl CompanionApp {
         }
     }
 
-    /// Processes pending AI input until it is drained or an interaction fails.
-    async fn flush_pending_interactions(&self) {
-        match self.try_begin_processing() {
-            Ok(_) => {}
-            Err(ChatState::Processing) => {
-                // This shouldn't happen, likely concurrent processing attempt.
-                eprintln!("flush_pending_interactions: AI is already processing interactions");
-                return; // We were already processing.
-            }
-            _ => {
-                return;
-            }
+    async fn block_chat(&self, reason: &str) {
+        let previous_state = self.set_chat_state(ChatState::Blocked);
+        if previous_state == ChatState::Blocked {
+            return;
         }
+
+        {
+            let this = &self;
+            let message = DisplayMessage::new(
+                DisplayMessageKind::Warning,
+                blocked_warning_message(reason, self.pause_for_ai_block(reason).await),
+            );
+            let _ = this.notifier.notify(message);
+        };
+    }
+
+    /// Processes pending AI input until it is drained or an interaction fails.
+    async fn flush_pending_interactions_loop(&self) {
         loop {
             match self.ai.send_next_interaction().await {
                 SendResult::MorePending => {}
@@ -286,6 +275,19 @@ impl CompanionApp {
                 }
             }
         }
+    }
+    async fn flush_pending_interactions(self: &Arc<Self>) {
+        match self.try_begin_processing() {
+            Ok(_) => {}
+            Err(ChatState::Processing) => {
+                return; // We were already processing.
+            }
+            _ => {
+                return;
+            }
+        };
+        let this = self.clone();
+        tokio::task::spawn(async move { this.flush_pending_interactions_loop().await });
     }
 
     /// Processes the queue. Besides player input, the AI gets a turn (with all
