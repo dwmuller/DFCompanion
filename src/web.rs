@@ -917,8 +917,8 @@ async fn chat(
             .into_response();
     }
 
-    let kind = match app.classify_chat_message(message) {
-        Ok(kind) => kind,
+    match app.is_chat_message(message) {
+        Ok(_) => {}
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
 
@@ -926,10 +926,7 @@ async fn chat(
         .event_queue()
         .try_send(QueueItem::UserInput(message.to_owned()))
     {
-        Ok(()) => {
-            app.notifier().notify(DisplayMessage::new(kind, message));
-            fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
-        }
+        Ok(()) => fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status"),
         Err(error) => {
             app.notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
@@ -1113,35 +1110,6 @@ mod test {
         assert_eq!(
             String::from_utf8(body.to_vec()).unwrap(),
             "**You:**\n\nQuestion\n\n**Game event:**\n\nArrival\n\n**Diagnostic:**\n\n/tools\n\n**AI usage:**\n\n2 requests\n\n**Status:**\n\nConnected\n\n**Warning:**\n\nHeads up\n\n**Companion:**\n\n**Answer**"
-        );
-    }
-
-    #[tokio::test]
-    async fn slash_chat_input_is_a_diagnostic_not_a_user_turn() {
-        let (app, mut queue_rx, notifications_tx) = CompanionApp::new();
-        let mut notifications = notifications_tx.subscribe();
-        let response = router(app)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/chat")
-                    .header(header::HOST, HTTP_HOST)
-                    .header(header::ORIGIN, HTTP_ORIGIN)
-                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .body(Body::from("message=%2Ftools"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            queue_rx.recv().await.unwrap(),
-            QueueItem::UserInput("/tools".to_owned())
-        );
-        assert_eq!(
-            notifications.recv().await.unwrap(),
-            DisplayMessage::new(DisplayMessageKind::Diagnostic, "/tools")
         );
     }
 

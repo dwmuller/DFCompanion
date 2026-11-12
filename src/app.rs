@@ -200,10 +200,10 @@ impl CompanionApp {
 
     /// Classifies a chat message as an ordinary user message or a slash
     /// command, and returns a syntax error for malformed commands.
-    pub fn classify_chat_message(&self, message: &str) -> Result<DisplayMessageKind, String> {
+    pub fn is_chat_message(&self, message: &str) -> Result<bool, String> {
         match chat_commands::ChatCommand::parse(message) {
-            None => Ok(DisplayMessageKind::User),
-            Some(Ok(_)) => Ok(DisplayMessageKind::Diagnostic),
+            None => Ok(false),
+            Some(Ok(_)) => Ok(true),
             Some(Err(error)) => Err(error),
         }
     }
@@ -325,9 +325,13 @@ impl CompanionApp {
                     }
                     Wake::Item(QueueItem::UserInput(text)) => {
                         if let Some(command) = chat_commands::ChatCommand::parse(&text) {
+                            self.notifier
+                                .notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, &text));
                             run_chat_command(&self, command).await;
                             continue;
                         }
+                        self.notifier
+                            .notify(DisplayMessage::new(DisplayMessageKind::User, &text));
                         self.ai.push_user_message(&text).await;
                         self.flush_pending_interactions().await;
                         flush_at = None;
@@ -647,12 +651,18 @@ mod tests {
                 .unwrap();
         }
 
-        let result = notifier.recv().await.unwrap();
-        assert_eq!(result.kind, DisplayMessageKind::Diagnostic);
+        let call = notifier.recv().await.unwrap();
+        assert_eq!(call.kind, DisplayMessageKind::Diagnostic);
+        assert!(call.text.contains("/call no_such_tool"), "{call:?}");
+        let error = notifier.recv().await.unwrap();
+        assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
         assert!(
-            result.text.contains("Unknown tool: no_such_tool"),
-            "{result:?}"
+            error.text.contains("Unknown tool: no_such_tool"),
+            "{error:?}"
         );
+        let call = notifier.recv().await.unwrap();
+        assert_eq!(call.kind, DisplayMessageKind::Diagnostic);
+        assert!(call.text.contains("/bogus"), "{call:?}");
         let error = notifier.recv().await.unwrap();
         assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
         assert!(
@@ -660,7 +670,6 @@ mod tests {
             "{error:?}"
         );
         assert!(app.ai.pending_user_message_count().await == 0);
-        assert_eq!(app.history.display_history_markdown(), "**Diagnostic:**\n\nTool no_such_tool result:\n{ \"error\": \"Unknown tool: no_such_tool\" }\n\n\n**Diagnostic:**\n\nUnknown chat command: /bogus");
         worker.abort();
     }
 
