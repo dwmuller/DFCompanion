@@ -223,9 +223,14 @@ impl CompanionApp {
         })
     }
 
-    /// Sends a chat message to the AI.
-    pub fn chat(&self, message: String) -> Result<(), String> {
-        (&self).queue_tx.try_send(QueueItem::UserInput(message))
+    /// Classifies a chat message as an ordinary user message or a slash
+    /// command, and returns a syntax error for malformed commands.
+    pub fn classify_chat_message(&self, message: &str) -> Result<DisplayMessageKind, String> {
+        match chat_commands::ChatCommand::parse(message) {
+            None => Ok(DisplayMessageKind::User),
+            Some(Ok(_)) => Ok(DisplayMessageKind::Diagnostic),
+            Some(Err(error)) => Err(error),
+        }
     }
 
     fn try_begin_processing(&self) -> Result<(), ChatState> {

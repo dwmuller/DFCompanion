@@ -9,10 +9,6 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Move chat enqueuing from web router to companion input queue processing.
-  - Currently web.rs calls CompanionApp::chat() and differentiates between chat
-    commands and AI requests. Both of these functions belong in CompanionApp,
-    not here.
 - Allow AI worker to run without holding up the worker loop.
   - This could work using a one-shot channel in calls to
     send_next_interaction(), and given the desire to be able to recall pending

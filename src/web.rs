@@ -917,22 +917,25 @@ async fn chat(
             .into_response();
     }
 
-    match app.chat(message.to_owned()) {
+    let kind = match app.classify_chat_message(message) {
+        Ok(kind) => kind,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+
+    match app
+        .event_queue()
+        .try_send(QueueItem::UserInput(message.to_owned()))
+    {
         Ok(()) => {
-            let kind = if crate::chat_commands::ChatCommand::parse(message).is_some() {
-                DisplayMessageKind::Diagnostic
-            } else {
-                DisplayMessageKind::User
-            };
             app.notifier().notify(DisplayMessage::new(kind, message));
             fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status")
         }
-        Err(err) => {
+        Err(error) => {
             app.notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
-                err.to_string(),
+                error.clone(),
             ));
-            (StatusCode::SERVICE_UNAVAILABLE, err).into_response()
+            (StatusCode::SERVICE_UNAVAILABLE, error).into_response()
         }
     }
 }
@@ -1173,7 +1176,10 @@ mod test {
 
         let mut state_changes = app.subscribe_chat_state();
         let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
-        app.chat("A request without an active configuration".to_owned())
+        app.event_queue()
+            .try_send(QueueItem::UserInput(
+                "A request without an active configuration".to_owned(),
+            ))
             .unwrap();
 
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
