@@ -4,13 +4,17 @@ use std::{
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use directories::ProjectDirs;
 use genai::adapter::AdapterKind;
 use keyring::Entry;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::app::project_dir;
+pub fn project_dir() -> ProjectDirs {
+    ProjectDirs::from("org", "DFCompanion", "DFCompanion")
+        .expect("Could not locate the per-user project directory.")
+}
 
 const CONFIG_FILE_NAME: &str = "ai-configurations.json";
 const MAX_NAME_BYTES: usize = 128;
@@ -132,7 +136,7 @@ impl ConfigurationRepository {
     }
 
     pub fn load_default() -> Result<Self, String> {
-        Self::load(project_dir().data_local_dir().join(CONFIG_FILE_NAME))
+        Self::load(project_dir().config_local_dir().join(CONFIG_FILE_NAME))
     }
 
     fn load(path: PathBuf) -> Result<Self, String> {

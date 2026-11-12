@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use directories::ProjectDirs;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 use verbose_macros::debug;
@@ -18,11 +17,6 @@ const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const EVENT_FLUSH_DELAY: Duration = Duration::from_secs(5);
 
 const ORIENT_MESSAGE: &str = "[Automatic session start] You are now connected to the player's Dwarf Fortress game. Use the read-only game-state tools to get your bearings on the fortress, then give the player a brief greeting and summary of its situation.";
-
-pub fn project_dir() -> ProjectDirs {
-    ProjectDirs::from("org", "DFCompanion", "DFCompanion")
-        .expect("Could not locate the per-user project directory.")
-}
 
 enum Wake {
     Item(QueueItem),
