@@ -66,6 +66,9 @@ it can't examine a workspace on your drive. But for some reason the Github MCP
 connector started breaking in some sessions, and then stopped working entirely,
 and I wasn't able to get it working again. (2026-11-10 through 13).
 
+This problem, and the somewhat high cost of using Copilot, drove me to start
+experimenting with alternatives.
+
 ### VSCode Cline extension
 
 Trying this out now. (2026-11-13) 
