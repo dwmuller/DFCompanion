@@ -9,9 +9,13 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Include the notification ID in corresponding Conversation queue items. This
-  allows correlation of AI processing state with outputs (notifications), for
-  enhanced UI behavior.
+- (Done: pending AI inputs carry an optional notification ID, and each turn
+  names the last one it includes as a watermark. `DisplayMessage::input_state`
+  tracks Pending/Processing/Done and the worker loop updates it. Not yet done:
+  broadcasting state changes to the browser, and rendering them.) Include the
+  notification ID in corresponding Conversation queue items. This allows
+  correlation of AI processing state with outputs (notifications), for enhanced
+  UI behavior.
     - Maybe move queue out of Conversation and into CompanionApp for much easier
       control of the AI input queue when we add the "Recall" feature. (See UI
       to-do list below.) The app would let the AiRuntime pull what it wants from

@@ -13,7 +13,7 @@ use crate::{
     diagnostics::write_ai_failure_dump,
     events::GameEvent,
     game_state::GameState,
-    notifications::{DisplayMessage, DisplayMessageKind, Notifier},
+    notifications::{DisplayMessage, DisplayMessageKind, NotificationId, Notifier},
 };
 
 pub const MAX_INPUT_TOKENS: usize = 16_000;
@@ -55,9 +55,26 @@ pub struct AiTurnResult {
     pub usage: Vec<AiTurnUsage>,
 }
 
+/// An item waiting to be sent to the AI. `id` is the id of the notification
+/// that displays the item to the player, when there is one. It is never sent to
+/// the AI.
 enum AiInput {
-    UserRequest { text: String },
-    GameReport { event: GameEvent },
+    UserRequest {
+        text: String,
+        id: Option<NotificationId>,
+    },
+    GameReport {
+        event: GameEvent,
+        id: Option<NotificationId>,
+    },
+}
+
+impl AiInput {
+    fn notification_id(&self) -> Option<NotificationId> {
+        match self {
+            AiInput::UserRequest { id, .. } | AiInput::GameReport { id, .. } => *id,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -95,6 +112,10 @@ struct Prompt {
     history: Vec<ChatMessage>,
     content: String,
     included_inputs: usize,
+    /// The id of the last included input that has a notification. Inputs are
+    /// always taken from the head of the queue, so this one id stands for every
+    /// included input with a notification.
+    through: Option<NotificationId>,
     token_estimates: AiPromptTokenEstimates,
 }
 
@@ -111,14 +132,22 @@ impl Conversation {
             .filter(|i| matches!(i, AiInput::UserRequest { .. }))
             .count()
     }
-    fn push_report(&mut self, event: GameEvent) {
+    /// The id of the last pending input that has a notification.
+    fn pending_through(&self) -> Option<NotificationId> {
         self.pending_input
-            .push(AiInput::GameReport { event: event });
+            .iter()
+            .rev()
+            .find_map(AiInput::notification_id)
     }
 
-    fn push_user_message(&mut self, message: &str) {
+    fn push_report(&mut self, event: GameEvent, id: Option<NotificationId>) {
+        self.pending_input.push(AiInput::GameReport { event, id });
+    }
+
+    fn push_user_message(&mut self, message: &str, id: Option<NotificationId>) {
         self.pending_input.push(AiInput::UserRequest {
             text: message.to_owned(),
+            id,
         });
     }
 
@@ -140,7 +169,7 @@ impl Conversation {
             .pending_input
             .iter()
             .take_while(|&i| {
-                if let AiInput::UserRequest { text } = i {
+                if let AiInput::UserRequest { text, .. } = i {
                     content.push_str("\n");
                     content.push_str(&text);
                     // Note: We don't assume that summing estimates for
@@ -159,6 +188,7 @@ impl Conversation {
             })
             .collect::<Vec<_>>();
         let mut included_inputs = requests.len();
+        let mut through = requests.iter().rev().find_map(|i| i.notification_id());
         if included_inputs == 0 {
             kind = PromptKind::Automated;
             content = PERIODIC_PROMPT.to_string();
@@ -174,7 +204,7 @@ impl Conversation {
                 .pending_input
                 .iter()
                 .take_while(|&i| {
-                    if let AiInput::GameReport { event } = i {
+                    if let AiInput::GameReport { event, .. } = i {
                         let line =
                             serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
                         content.push_str("\n");
@@ -192,6 +222,7 @@ impl Conversation {
                 })
                 .collect::<Vec<_>>();
             included_inputs = reports.len();
+            through = reports.iter().rev().find_map(|i| i.notification_id());
         }
         if included_inputs == 0 {
             return None;
@@ -210,6 +241,7 @@ impl Conversation {
             history: self.history.clone(),
             content,
             included_inputs,
+            through,
             token_estimates,
         });
     }
@@ -288,12 +320,22 @@ impl AiRuntime {
         crate::ai_tools::execute_named(&self.game_state, name, arguments).await
     }
 
-    pub async fn push_user_message(&self, text: &str) {
-        self.conversation.lock().await.push_user_message(text);
+    /// Queues a player message for the AI. `id` identifies the notification
+    /// that displays it, if any.
+    pub async fn push_user_message(&self, text: &str, id: Option<NotificationId>) {
+        self.conversation.lock().await.push_user_message(text, id);
     }
 
-    pub async fn push_report(&self, event: GameEvent) {
-        self.conversation.lock().await.push_report(event);
+    /// Queues a game report for the AI. `id` identifies the notification that
+    /// displays it, if any.
+    pub async fn push_report(&self, event: GameEvent, id: Option<NotificationId>) {
+        self.conversation.lock().await.push_report(event, id);
+    }
+
+    /// The id of the newest input still waiting to be sent that has a
+    /// notification. Everything pending with a notification is at or before it.
+    pub async fn pending_through(&self) -> Option<NotificationId> {
+        self.conversation.lock().await.pending_through()
     }
 
     pub async fn pending_user_message_count(&self) -> usize {
@@ -452,7 +494,17 @@ impl AiRuntime {
     /// Sends the next interaction, which may be a batch of messages of similar
     /// type. Replies intended for the user are sent to the notification queue.
     /// Also generates AI usage notifications.
-    pub async fn send_next_interaction(&self) -> SendResult {
+    ///
+    /// `on_start` is called, before the AI is contacted, with the id of the last
+    /// input in the batch that has a notification. It is not called when there
+    /// is nothing to send, when no configuration is active, or when the batch
+    /// has no input with a notification. If the result is `MorePending` or
+    /// `Drained` after `on_start` was called, the batch was consumed; if it is
+    /// `Failed`, the batch remains pending.
+    pub async fn send_next_interaction(
+        &self,
+        on_start: impl FnOnce(NotificationId),
+    ) -> SendResult {
         // Only one caller allowed at a time. This will block the queue
         // processing loop that calls us, but its inputs come from async queues
         // that should be able to cope with arriving requests.
@@ -468,6 +520,9 @@ impl AiRuntime {
             }
         };
         if let Some(prompt) = self.start_interaction(&configuration.system_text).await {
+            if let Some(through) = prompt.through {
+                on_start(through);
+            }
             {
                 self.notifier.notify(DisplayMessage::new(
                     DisplayMessageKind::AiUsage,
@@ -601,8 +656,8 @@ mod tests {
     #[test]
     fn successful_chat_completion_clears_pending_inputs_of_same_type() {
         let mut conversation = Conversation::default();
-        conversation.push_report(build_game_event(1, "just testing"));
-        conversation.push_user_message("question");
+        conversation.push_report(build_game_event(1, "just testing"), None);
+        conversation.push_user_message("question", None);
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
         conversation.complete(prompt, "answer".to_owned(), true);
@@ -614,7 +669,7 @@ mod tests {
     #[test]
     fn periodic_turn_without_a_player_message_asks_for_no_comment_when_idle() {
         let mut conversation = Conversation::default();
-        conversation.push_report(build_game_event(1, "a report"));
+        conversation.push_report(build_game_event(1, "a report"), None);
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
         assert_eq!(prompt.included_inputs, 1);
@@ -629,11 +684,59 @@ mod tests {
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT);
         assert!(prompt.is_none());
 
-        conversation.push_report(build_game_event(1, "a report"));
+        conversation.push_report(build_game_event(1, "a report"), None);
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
         conversation.complete(prompt, NO_COMMENT.to_owned(), false);
         assert_eq!(conversation.history.len(), 0);
         assert!(conversation.pending_input.is_empty());
+    }
+
+    #[test]
+    fn turns_name_the_last_included_input_that_has_a_notification() {
+        let mut conversation = Conversation::default();
+        assert_eq!(conversation.pending_through(), None);
+        conversation.push_report(build_game_event(1, "a report"), Some(NotificationId(1)));
+        conversation.push_user_message("first", Some(NotificationId(2)));
+        conversation.push_user_message("second", Some(NotificationId(4)));
+        // The orientation prompt has no notification, so it never becomes the
+        // watermark even when it is last.
+        conversation.push_user_message("orient", None);
+        assert_eq!(conversation.pending_through(), Some(NotificationId(4)));
+
+        // No request leads the queue, so the first turn is an automated one for
+        // the report alone.
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
+        assert_eq!(prompt.kind, PromptKind::Automated);
+        assert_eq!(prompt.through, Some(NotificationId(1)));
+        conversation.complete(prompt, NO_COMMENT.to_owned(), false);
+
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
+        assert_eq!(prompt.kind, PromptKind::UserRequest);
+        assert_eq!(prompt.included_inputs, 3);
+        assert_eq!(prompt.through, Some(NotificationId(4)));
+        conversation.complete(prompt, "answer".to_owned(), true);
+        assert_eq!(conversation.pending_through(), None);
+    }
+
+    #[test]
+    fn a_turn_of_inputs_without_notifications_has_no_watermark() {
+        let mut conversation = Conversation::default();
+        conversation.push_user_message("orient", None);
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
+        assert_eq!(prompt.included_inputs, 1);
+        assert_eq!(prompt.through, None);
+    }
+
+    #[test]
+    fn ids_never_appear_in_the_prompt_text() {
+        let mut conversation = Conversation::default();
+        conversation.push_report(
+            build_game_event(7, "a report"),
+            Some(NotificationId(987_654)),
+        );
+        let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
+        assert!(!prompt.content.contains("987654"));
+        assert!(!prompt.content.contains("987_654"));
     }
 
     #[test]
@@ -662,6 +765,7 @@ mod tests {
             history: Vec::new(),
             content: "Hello.".to_owned(),
             included_inputs: 1,
+            through: None,
             token_estimates: AiPromptTokenEstimates::default(),
         };
         let responses = [
@@ -791,6 +895,7 @@ mod tests {
             history: Vec::new(),
             content: "Use tools.".to_owned(),
             included_inputs: 1,
+            through: None,
             token_estimates: AiPromptTokenEstimates::default(),
         };
 
@@ -868,6 +973,7 @@ mod tests {
             history: Vec::new(),
             content: "Use a tool.".to_owned(),
             included_inputs: 1,
+            through: None,
             token_estimates: AiPromptTokenEstimates::default(),
         };
 

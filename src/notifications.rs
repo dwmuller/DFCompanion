@@ -45,11 +45,30 @@ impl DisplayMessageKind {
     }
 }
 
+/// Where a message that is also an input to the AI stands in the AI's queue.
+///
+/// Inputs are processed strictly in order from the head of the queue, so at any
+/// time the `Done` inputs precede the `Processing` ones, which precede the
+/// `Pending` ones. The state of a run of inputs is therefore changed by naming
+/// the last notification id in the run (see
+/// [`NotificationHistory::transition_inputs`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputState {
+    /// Queued; not yet part of a turn sent to the AI.
+    Pending,
+    /// Part of the turn currently being processed.
+    Processing,
+    /// Consumed by a successfully completed turn.
+    Done,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayMessage {
     pub kind: DisplayMessageKind,
     pub text: String,
     pub beep: bool,
+    /// `None` unless this message is also an input to the AI.
+    pub input_state: Option<InputState>,
 }
 
 impl DisplayMessage {
@@ -58,11 +77,18 @@ impl DisplayMessage {
             kind,
             text: text.into(),
             beep: false,
+            input_state: None,
         }
     }
 
     pub fn with_beep(mut self, beep: bool) -> Self {
         self.beep = beep;
+        self
+    }
+
+    /// Marks the message as an AI input in the given state.
+    pub fn with_input_state(mut self, state: InputState) -> Self {
+        self.input_state = Some(state);
         self
     }
 }
@@ -79,6 +105,16 @@ impl Notifier {
     /// Sends a notification and returns its assigned id.
     pub fn notify(&self, message: DisplayMessage) -> NotificationId {
         self.history.push(message)
+    }
+
+    /// See [`NotificationHistory::transition_inputs`].
+    pub fn transition_inputs(
+        &self,
+        through: NotificationId,
+        from: InputState,
+        to: InputState,
+    ) -> usize {
+        self.history.transition_inputs(through, from, to)
     }
 }
 
@@ -122,6 +158,31 @@ impl NotificationHistory {
         NotificationId(id)
     }
 
+    /// Moves every AI input with an id up to and including `through` that is in
+    /// state `from` to state `to`, and returns how many changed. Messages that
+    /// are not AI inputs (no input state) are left alone, as are inputs in
+    /// other states. Ids increase along the history, so the scan stops at the
+    /// watermark.
+    pub fn transition_inputs(
+        &self,
+        through: NotificationId,
+        from: InputState,
+        to: InputState,
+    ) -> usize {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut changed = 0;
+        for (id, message) in inner.entries.iter_mut() {
+            if *id > through.0 {
+                break;
+            }
+            if message.input_state == Some(from) {
+                message.input_state = Some(to);
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     /// The recorded messages with an id greater than `after` (all of them when
     /// `after` is `None`) and a receiver for every message after those. Ids
     /// increase with each message, so a reconnecting browser can resume where
@@ -154,5 +215,102 @@ impl NotificationHistory {
             })
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(history: &NotificationHistory, text: &str) -> NotificationId {
+        history.push(
+            DisplayMessage::new(DisplayMessageKind::User, text)
+                .with_input_state(InputState::Pending),
+        )
+    }
+
+    fn states(history: &NotificationHistory) -> Vec<Option<InputState>> {
+        history
+            .subscribe(None)
+            .0
+            .into_iter()
+            .map(|(_, message)| message.input_state)
+            .collect()
+    }
+
+    #[test]
+    fn only_inputs_have_a_state() {
+        let message = DisplayMessage::new(DisplayMessageKind::Status, "hi");
+        assert_eq!(message.input_state, None);
+        assert_eq!(
+            message.with_input_state(InputState::Pending).input_state,
+            Some(InputState::Pending)
+        );
+    }
+
+    #[test]
+    fn transition_moves_the_run_up_to_the_watermark_and_no_further() {
+        let history = NotificationHistory::new();
+        let a = input(&history, "a");
+        history.push(DisplayMessage::new(DisplayMessageKind::Status, "not an input"));
+        let b = input(&history, "b");
+        let _c = input(&history, "c");
+
+        let changed =
+            history.transition_inputs(b, InputState::Pending, InputState::Processing);
+
+        assert_eq!(changed, 2);
+        assert_eq!(a, NotificationId(1));
+        assert_eq!(
+            states(&history),
+            vec![
+                Some(InputState::Processing),
+                None,
+                Some(InputState::Processing),
+                Some(InputState::Pending),
+            ]
+        );
+    }
+
+    #[test]
+    fn transition_only_touches_inputs_in_the_expected_state() {
+        let history = NotificationHistory::new();
+        let a = input(&history, "a");
+        let b = input(&history, "b");
+        history.transition_inputs(a, InputState::Pending, InputState::Done);
+
+        // `a` is Done, so moving Pending inputs through `b` leaves it alone.
+        let changed =
+            history.transition_inputs(b, InputState::Pending, InputState::Processing);
+
+        assert_eq!(changed, 1);
+        assert_eq!(
+            states(&history),
+            vec![Some(InputState::Done), Some(InputState::Processing)]
+        );
+    }
+
+    #[test]
+    fn a_failed_turn_returns_its_run_to_pending() {
+        let history = NotificationHistory::new();
+        let _a = input(&history, "a");
+        let b = input(&history, "b");
+        history.transition_inputs(b, InputState::Pending, InputState::Processing);
+        history.transition_inputs(b, InputState::Processing, InputState::Pending);
+        assert_eq!(
+            states(&history),
+            vec![Some(InputState::Pending), Some(InputState::Pending)]
+        );
+    }
+
+    #[test]
+    fn transition_survives_history_trimming() {
+        let history = NotificationHistory::new();
+        for i in 0..NOTIFICATION_HISTORY_LIMIT + 5 {
+            input(&history, &i.to_string());
+        }
+        let last = NotificationId((NOTIFICATION_HISTORY_LIMIT + 5) as u64);
+        let changed = history.transition_inputs(last, InputState::Pending, InputState::Done);
+        assert_eq!(changed, NOTIFICATION_HISTORY_LIMIT);
     }
 }

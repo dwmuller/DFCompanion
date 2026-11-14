@@ -7,7 +7,9 @@ use verbose_macros::debug;
 use crate::ai::SendResult;
 use crate::events::{EventQueue, QueueItem};
 use crate::game_state::GameState;
-use crate::notifications::{DisplayMessage, DisplayMessageKind, NotificationHistory, Notifier};
+use crate::notifications::{
+    DisplayMessage, DisplayMessageKind, InputState, NotificationHistory, Notifier,
+};
 use crate::{ai, ai_config, ai_tools, chat_commands};
 
 const EVENT_QUEUE_CAPACITY: usize = 50;
@@ -238,19 +240,46 @@ impl CompanionApp {
     }
 
     /// Processes pending AI input until it is drained or an interaction fails.
+    ///
+    /// Each turn takes inputs from the head of the queue, so its inputs'
+    /// notifications change state as a run named by its last id: `Pending` to
+    /// `Processing` when the turn starts, then `Done` if it succeeds or back to
+    /// `Pending` if it fails.
     async fn flush_pending_interactions_loop(&self) {
         loop {
-            match self.ai.send_next_interaction().await {
-                SendResult::MorePending => {}
+            let mut turn_through = None;
+            let result = self
+                .ai
+                .send_next_interaction(|through| {
+                    turn_through = Some(through);
+                    self.notifier.transition_inputs(
+                        through,
+                        InputState::Pending,
+                        InputState::Processing,
+                    );
+                })
+                .await;
+            let finish_turn = |to: InputState| {
+                if let Some(through) = turn_through {
+                    self.notifier
+                        .transition_inputs(through, InputState::Processing, to);
+                }
+            };
+            match result {
+                SendResult::MorePending => {
+                    finish_turn(InputState::Done);
+                }
                 SendResult::NoActiveConfiguration => {
                     self.block_chat("No active AI configuration.").await;
                     break;
                 }
                 SendResult::Drained => {
+                    finish_turn(InputState::Done);
                     self.set_chat_state(ChatState::Idle);
                     break;
                 }
                 SendResult::Failed(error) => {
+                    finish_turn(InputState::Pending);
                     self.block_chat(&format!(
                         "AI request failed. Your chat and collected reports are retained; AI processing is paused until you send a message or retry. {error}"
                     ))
@@ -312,7 +341,9 @@ impl CompanionApp {
                     }
                     Wake::Item(QueueItem::Orient) => {
                         if self.has_active_configuration() {
-                            self.ai.push_user_message(ORIENT_MESSAGE).await;
+                            // The orientation prompt is not shown to the player,
+                            // so it has no notification.
+                            self.ai.push_user_message(ORIENT_MESSAGE, None).await;
                             self.flush_pending_interactions().await;
                             flush_at = None;
                             next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
@@ -325,21 +356,24 @@ impl CompanionApp {
                             run_chat_command(&self, command).await;
                             continue;
                         }
-                        self.notifier
-                            .notify(DisplayMessage::new(DisplayMessageKind::User, &text));
-                        self.ai.push_user_message(&text).await;
+                        let id = self.notifier.notify(
+                            DisplayMessage::new(DisplayMessageKind::User, &text)
+                                .with_input_state(InputState::Pending),
+                        );
+                        self.ai.push_user_message(&text, Some(id)).await;
                         self.flush_pending_interactions().await;
                         flush_at = None;
                         next_check = Instant::now() + PERIODIC_CHECK_INTERVAL;
                     }
                     Wake::Item(QueueItem::GameEvent(event)) => {
-                        {
-                            self.notifier.notify(DisplayMessage::new(
+                        let id = self.notifier.notify(
+                            DisplayMessage::new(
                                 DisplayMessageKind::GameEvent,
                                 format!("{} [{}] {}", event.date, event.category, event.text),
-                            ));
-                        };
-                        self.ai.push_report(event).await;
+                            )
+                            .with_input_state(InputState::Pending),
+                        );
+                        self.ai.push_report(event, Some(id)).await;
                         flush_at.get_or_insert_with(|| Instant::now() + EVENT_FLUSH_DELAY);
                     }
                     Wake::Flush => {
@@ -433,6 +467,7 @@ fn format_tool_result(result: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::events::{GameEvent, QueueItem};
+    use crate::notifications::NotificationId;
     use tokio::sync::broadcast;
 
     // Find next message of specific kind in the notifications stream.
@@ -667,6 +702,120 @@ mod tests {
             "{error:?}"
         );
         assert!(app.ai.pending_user_message_count().await == 0);
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn pending_ai_inputs_carry_the_ids_of_their_notifications() {
+        let (app, queue_rx) = CompanionApp::new();
+        let mut notifications = app.history.subscribe(None).1;
+        let queue_tx = app.queue_tx.clone();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        queue_tx
+            .try_send(QueueItem::GameEvent(GameEvent {
+                id: None,
+                date: "250-01-01:0".to_owned(),
+                report_type: None,
+                category: "test".to_owned(),
+                text: "A dwarf arrived.".to_owned(),
+            }))
+            .unwrap();
+        let (event_id, event) = notifications.recv().await.unwrap();
+        assert_eq!(event.kind, DisplayMessageKind::GameEvent);
+        queue_tx
+            .try_send(QueueItem::UserInput("hello".to_owned()))
+            .unwrap();
+        let (user_id, user) = notifications.recv().await.unwrap();
+        assert_eq!(user.kind, DisplayMessageKind::User);
+
+        // With no AI configuration the inputs stay pending, so they can be
+        // matched to the notifications that display them. The newest one is the
+        // watermark for everything pending.
+        let mut through = None;
+        for _ in 0..100 {
+            through = app.ai.pending_through().await;
+            if through == Some(NotificationId(user_id)) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(through, Some(NotificationId(user_id)));
+        assert!(event_id < user_id);
+        worker.abort();
+    }
+
+    /// The input state of each recorded notification that is an AI input.
+    fn input_states(app: &CompanionApp) -> Vec<(u64, InputState)> {
+        app.history
+            .subscribe(None)
+            .0
+            .into_iter()
+            .filter_map(|(id, message)| message.input_state.map(|state| (id, state)))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn inputs_are_pending_until_an_ai_turn_takes_them() {
+        let (app, queue_rx) = CompanionApp::new();
+        let mut notifications = app.history.subscribe(None).1;
+        let queue_tx = app.queue_tx.clone();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        queue_tx
+            .try_send(QueueItem::UserInput("hello".to_owned()))
+            .unwrap();
+        let (user_id, _) = notifications.recv().await.unwrap();
+
+        // No configuration: the turn never starts, so nothing leaves Pending.
+        let mut chat_state = app.subscribe_chat_state();
+        chat_state
+            .wait_for(|state| *state == ChatState::Blocked)
+            .await
+            .unwrap();
+        assert_eq!(input_states(&app), vec![(user_id, InputState::Pending)]);
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failed_turn_returns_its_inputs_to_pending() {
+        use genai::adapter::AdapterKind;
+
+        let (app, queue_rx) = CompanionApp::new();
+        // No API key is saved for this configuration, so the turn starts and
+        // then fails without any network traffic.
+        let configuration = app
+            .ai
+            .configurations
+            .create(
+                "Failing",
+                AdapterKind::Anthropic,
+                "model",
+                "https://api.anthropic.com/",
+                "text",
+            )
+            .unwrap();
+        app.ai
+            .configurations
+            .set_active(Some(&configuration.id))
+            .unwrap();
+        let queue_tx = app.queue_tx.clone();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        let mut chat_state = app.subscribe_chat_state();
+        queue_tx
+            .try_send(QueueItem::UserInput("hello".to_owned()))
+            .unwrap();
+
+        chat_state
+            .wait_for(|state| *state == ChatState::Blocked)
+            .await
+            .unwrap();
+
+        let states = input_states(&app);
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].1, InputState::Pending);
+        assert_eq!(
+            app.ai.pending_through().await,
+            Some(NotificationId(states[0].0))
+        );
         worker.abort();
     }
 
