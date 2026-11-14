@@ -16,11 +16,10 @@ prepare underlying infrastructure.
   notification ID in corresponding Conversation queue items. This allows
   correlation of AI processing state with outputs (notifications), for enhanced
   UI behavior.
-    - Maybe move queue out of Conversation and into CompanionApp for much easier
-      control of the AI input queue when we add the "Recall" feature. (See UI
-      to-do list below.) The app would let the AiRuntime pull what it wants from
-      the queue one interaction at a time, and keeps track of what inputs are
-      being processed.
+    - Move the queue and conversation history out of AiRuntime into a
+      worker-owned, sans-IO `Session` that drives AI turns through events and
+      effects, with a stateless AI engine taking and returning an opaque
+      `History`. Needed for Rollback. See "Rollback design.md".
 - Common ids for the output and conversation queues should allow elimination of
   the second output queue driven by NotificationHistory.
 - Rename the queues and their items to reflect their input/output roles. Instead
@@ -79,23 +78,19 @@ Items that are primarily about the mechanics of AI interactions.
     - Timed check-ins are not currently displayed in the conversation (I think),
       but maybe they should be shown in some fashion and be included in these
       behaviors. I have not really been testing this feature.
-- Replace retry button with a "Recall" button that pulls pending user requests
-  out the Conversation queue and marks their corresponding notifications in
-  NotificationHistory as Revoked (a new state), and places them back in the chat
-  editor. This is independent of chat state.
-  - ? The new state allows the now-obsolete notifications to remain in
-    NotificationHistory, so it doesn't break assumptions about contiguous ids.
+- Replace retry button with a "Rollback" button on every user input that is
+  still within the last 50 turns (including Done inputs). It cancels any
+  in-flight AI request, restores the AI history to just before the turn
+  containing that input, drops all AI inputs from there on (reports included,
+  pending or processed), truncates the notification log at that point, and puts
+  the dropped user requests in the chat editor ahead of existing text, separated
+  by two empty lines. Requires a confirmation explaining that this is
+  destructive and the game is not rolled back. The AI is told on its next turn
+  that game time has advanced. Full design in "Rollback design.md".
   - Provide hover text that explains the button's purpose succinctly but
     clearly.
-  - These pending messages should be hidden or omitted from the Conversation
-    control.
-  - If the user currently has unsubmitted text in editor, the recalled messages
-    precede it.
-  - Each individual request (and previously unsubmitted text) is separated by
-    two empty lines.
-  - This has no other effect on pending AI input like game reports. If the text
-    is edited and eventually resubmitted, it goes to the back of the queue as
-    usual.
+  - Notification ids are never reused and may be non-contiguous. Truncation
+    bumps an epoch, and the browser reloads the whole Conversation control.
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
 - Do some styling to get away from the drear black and white.
