@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "agent-lsp": {
+      "type": "stdio",
+      "command": "agent-lsp",
+      "args": [
+        "javascript:typescript-language-server.cmd,--stdio",
+        "json:vscode-json-language-server.cmd,--stdio",
+        "rust:rust-analyzer.exe",
+        "typescript:typescript-language-server.cmd,--stdio"
+      ]
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "runtime.version": "Lua 5.3",
+  "runtime.path": [
+    "?.lua",
+    "?/init.lua",
+    "lua/?.lua",
+    "lua/?/init.lua"
+  ],
+  "workspace.ignoreDir": [
+    "build",
+    "build-plugin",
+    "target",
+    "node_modules",
+    ".git"
+  ],
+  "workspace.library": [
+    "@DFHACK_INSTALL_DIR@/hack/lua",
+    "@DFHACK_INSTALL_DIR@/hack/scripts"
+  ],
+  "workspace.checkThirdParty": false,
+  "diagnostics.disable": [
+    "lowercase-global"
+  ],
+  "diagnostics.globals": [
+    "dfhack",
+    "df",
+    "mkmodule",
+    "qerror",
+    "printall",
+    "printall_recurse",
+    "reqscript",
+    "dfhack_flags",
+    "copyall",
+    "safecall",
+    "curry",
+    "COLOR_RESET",
+    "COLOR_BLACK",
+    "COLOR_BLUE",
+    "COLOR_GREEN",
+    "COLOR_CYAN",
+    "COLOR_RED",
+    "COLOR_MAGENTA",
+    "COLOR_BROWN",
+    "COLOR_GREY",
+    "COLOR_GRAY",
+    "COLOR_DARKGREY",
+    "COLOR_DARKGRAY",
+    "COLOR_LIGHTBLUE",
+    "COLOR_LIGHTGREEN",
+    "COLOR_LIGHTCYAN",
+    "COLOR_LIGHTRED",
+    "COLOR_LIGHTMAGENTA",
+    "COLOR_YELLOW",
+    "COLOR_WHITE",
+    "SC_CORE_INITIALIZED",
+    "SC_WORLD_LOADED",
+    "SC_WORLD_UNLOADED",
+    "SC_MAP_LOADED",
+    "SC_MAP_UNLOADED",
+    "SC_VIEWSCREEN_CHANGED",
+    "SC_PAUSED",
+    "SC_UNPAUSED"
+  ]
+}

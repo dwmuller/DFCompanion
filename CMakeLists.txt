@@ -9,6 +9,22 @@ set(CARGO_TARGET_DIR "${CMAKE_BINARY_DIR}/cargo")
 set(CARGO_RELEASE_ARGUMENT "$<$<CONFIG:Release>:--release>")
 set(DFHACK_INSTALL_DIR "" CACHE PATH "DFHack installation directory")
 
+# Generate the Lua language server configuration, which needs to know where
+# DFHack's Lua libraries are. The generated file is machine-specific and is
+# ignored by git; edit .luarc.json.in instead.
+if(DFHACK_INSTALL_DIR)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/.luarc.json.in"
+        "${CMAKE_CURRENT_SOURCE_DIR}/.luarc.json"
+        @ONLY
+    )
+else()
+    message(WARNING
+        "DFHACK_INSTALL_DIR is not set, so .luarc.json was not generated. "
+        "Configure CMake with -DDFHACK_INSTALL_DIR=<DFHack installation directory>."
+    )
+endif()
+
 add_custom_target(dfcompanion ALL
     COMMAND
         "${CARGO_EXECUTABLE}" build
