@@ -701,6 +701,7 @@ dependencies = [
  "tokenx-rs",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-build",
  "tower 0.5.3",

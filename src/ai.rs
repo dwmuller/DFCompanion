@@ -4,8 +4,10 @@ use genai::{
     Client, ModelIden, ServiceTarget,
 };
 use itertools::Itertools;
+use std::sync::Arc;
 use tokenx_rs::estimate_token_count;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     ai_config::{AiConfiguration, ConfigurationRepository},
@@ -50,9 +52,70 @@ enum ChatRole {
     Assistant,
 }
 
-pub struct AiTurnResult {
+/// The conversation history that is sent to the AI ahead of each prompt.
+///
+/// This is an opaque value. Only the engine looks inside it or decides how a
+/// turn changes it; everyone else just stores what a turn returns and passes it
+/// back in later. Cloning is cheap, so a caller can keep a snapshot of the
+/// history as it was before a turn.
+#[derive(Clone, Debug, Default)]
+pub struct History(Arc<Vec<ChatMessage>>);
+
+impl History {
+    fn messages(&self) -> &[ChatMessage] {
+        &self.0
+    }
+
+    /// The history after a turn in which the AI was sent `content` and
+    /// answered with `answer`. Old messages are trimmed from the front.
+    fn with_turn(&self, content: String, answer: String) -> History {
+        let mut messages = self.0.as_ref().clone();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content,
+        });
+        messages.push(ChatMessage {
+            role: ChatRole::Assistant,
+            content: answer,
+        });
+        if messages.len() > MAX_HISTORY_MESSAGES {
+            let excess = messages.len() - MAX_HISTORY_MESSAGES;
+            messages.drain(0..excess);
+        }
+        History(Arc::new(messages))
+    }
+}
+
+/// What a completed turn produces.
+pub struct TurnOutput {
+    /// The history to use for the next turn. It is the unchanged input history
+    /// if the turn is not to be remembered.
+    pub history: History,
     pub answer: String,
     pub usage: Vec<AiTurnUsage>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TurnError {
+    /// The turn was cancelled through its token. Nothing was changed.
+    Cancelled,
+    Failed(String),
+}
+
+impl From<String> for TurnError {
+    fn from(message: String) -> Self {
+        TurnError::Failed(message)
+    }
+}
+
+/// Decides how a turn that got `answer` for `prompt` changes `history`.
+fn history_after_turn(history: &History, prompt: &Prompt, answer: &str) -> History {
+    // This logic may change, thus it's a separate function.
+    if prompt.kind.is_user_interaction() || !is_no_comment(answer) {
+        history.with_turn(prompt.content.clone(), answer.to_owned())
+    } else {
+        history.clone()
+    }
 }
 
 /// An item waiting to be sent to the AI. `id` is the id of the notification
@@ -79,7 +142,7 @@ impl AiInput {
 
 #[derive(Default)]
 struct Conversation {
-    history: Vec<ChatMessage>,
+    history: History,
     pending_input: Vec<AiInput>,
 }
 
@@ -109,7 +172,6 @@ impl PromptKind {
 #[derive(Clone, Debug)]
 struct Prompt {
     kind: PromptKind,
-    history: Vec<ChatMessage>,
     content: String,
     included_inputs: usize,
     /// The id of the last included input that has a notification. Inputs are
@@ -158,6 +220,7 @@ impl Conversation {
         let tools_tokens = tools_tokens_estimate();
         let history_tokens = self
             .history
+            .messages()
             .iter()
             .map(|m| estimate_token_count(&m.content))
             .sum::<usize>();
@@ -238,7 +301,6 @@ impl Conversation {
         };
         return Some(Prompt {
             kind,
-            history: self.history.clone(),
             content,
             included_inputs,
             through,
@@ -246,31 +308,12 @@ impl Conversation {
         });
     }
 
-    /// Completes a prompt by adding the user's input and the AI's answer to the conversation history.
+    /// Completes a prompt: consumes the inputs it included and adopts the
+    /// history that the turn produced.
     /// Note that this *must* be the prompt most recently returned by `build_prompt`.
-    fn complete(&mut self, prompt: Prompt, answer: String, add_to_history: bool) {
-        let Prompt {
-            history,
-            content: current_user_content,
-            included_inputs,
-            ..
-        } = prompt;
-        self.pending_input.drain(..included_inputs);
-        if add_to_history {
-            self.history = history;
-            self.history.push(ChatMessage {
-                role: ChatRole::User,
-                content: current_user_content,
-            });
-            self.history.push(ChatMessage {
-                role: ChatRole::Assistant,
-                content: answer,
-            });
-            if self.history.len() > MAX_HISTORY_MESSAGES {
-                let excess = self.history.len() - MAX_HISTORY_MESSAGES;
-                self.history.drain(0..excess);
-            }
-        }
+    fn complete(&mut self, prompt: Prompt, history: History) {
+        self.pending_input.drain(..prompt.included_inputs);
+        self.history = history;
     }
 }
 
@@ -346,21 +389,33 @@ impl AiRuntime {
         self.conversation.lock().await.pending_report_count()
     }
 
-    async fn complete(
+    /// Runs one turn: sends `prompt` after `history` to the AI, runs the tools
+    /// it asks for, and returns its answer along with the history to use next.
+    ///
+    /// This changes no state of the runtime, so a turn that fails or is
+    /// cancelled leaves nothing behind. `cancel` is honored while waiting for
+    /// the provider and between tool rounds; a tool call that has begun is
+    /// allowed to finish.
+    async fn run_turn(
         &self,
         configuration: &AiConfiguration,
+        history: &History,
         prompt: &Prompt,
-    ) -> Result<AiTurnResult, String> {
+        cancel: &CancellationToken,
+    ) -> Result<TurnOutput, TurnError> {
         let key = self.configurations.get_api_key(&configuration.id)?;
-        self.complete_with_key(configuration, prompt, &key).await
+        self.run_turn_with_key(configuration, &key, history, prompt, cancel)
+            .await
     }
 
-    async fn complete_with_key(
+    async fn run_turn_with_key(
         &self,
         configuration: &AiConfiguration,
-        prompt: &Prompt,
         key: &str,
-    ) -> Result<AiTurnResult, String> {
+        history: &History,
+        prompt: &Prompt,
+        cancel: &CancellationToken,
+    ) -> Result<TurnOutput, TurnError> {
         let adapter_kind = configuration.interaction_method;
         let endpoint = Endpoint::from_owned(configuration.url.clone());
         let auth = AuthData::from_single(key.to_owned());
@@ -377,8 +432,8 @@ impl AiRuntime {
             .with_service_target_resolver(resolver)
             .build()
             .map_err(|error| format!("Could not initialize the AI client: {error}"))?;
-        let mut messages = prompt
-            .history
+        let mut messages = history
+            .messages()
             .iter()
             .map(|message| match message.role {
                 ChatRole::User => GenaiMessage::user(message.content.clone()),
@@ -396,11 +451,17 @@ impl AiRuntime {
         let mut usage: Vec<AiTurnUsage> = Vec::new();
         let mut purpose = "initial request".to_owned();
         loop {
-            let response = tokio::time::timeout(
-                std::time::Duration::from_secs(60),
-                client.exec_chat(&configuration.model_id, request.clone(), Some(&options)),
-            )
-            .await
+            if cancel.is_cancelled() {
+                return Err(TurnError::Cancelled);
+            }
+            let response = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(TurnError::Cancelled),
+                response = tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    client.exec_chat(&configuration.model_id, request.clone(), Some(&options)),
+                ) => response,
+            }
             .map_err(|_| "AI request timed out after 60 seconds.".to_owned())?
             .map_err(|error| {
                 format!(
@@ -440,9 +501,10 @@ impl AiRuntime {
                     };
                     answer.push_str(&dump_msg);
                 }
-                return Ok(AiTurnResult {
-                    answer: answer,
-                    usage: usage,
+                return Ok(TurnOutput {
+                    history: history_after_turn(history, prompt, &answer),
+                    answer,
+                    usage,
                 });
             }
 
@@ -472,22 +534,20 @@ impl AiRuntime {
         }
     }
 
-    async fn start_interaction(&self, system_text: &str) -> Option<Prompt> {
+    /// Builds the next prompt, and returns it with the history it follows.
+    async fn start_interaction(&self, system_text: &str) -> Option<(Prompt, History)> {
         let conversation = self.conversation.lock().await;
-        conversation.build_prompt(system_text)
+        conversation
+            .build_prompt(system_text)
+            .map(|prompt| (prompt, conversation.history.clone()))
     }
 
     /// Updates conversation to reflect successful completion of a previously
     /// prepared prompt. Return true if there are more messages waiting to be
     /// sent in the conversation.
-    async fn commit_interaction(
-        &self,
-        prompt: Prompt,
-        answer: String,
-        add_to_history: bool,
-    ) -> bool {
+    async fn commit_interaction(&self, prompt: Prompt, history: History) -> bool {
         let mut conversation = self.conversation.lock().await;
-        conversation.complete(prompt, answer, add_to_history);
+        conversation.complete(prompt, history);
         conversation.pending_input.len() > 0
     }
 
@@ -501,10 +561,7 @@ impl AiRuntime {
     /// has no input with a notification. If the result is `MorePending` or
     /// `Drained` after `on_start` was called, the batch was consumed; if it is
     /// `Failed`, the batch remains pending.
-    pub async fn send_next_interaction(
-        &self,
-        on_start: impl FnOnce(NotificationId),
-    ) -> SendResult {
+    pub async fn send_next_interaction(&self, on_start: impl FnOnce(NotificationId)) -> SendResult {
         // Only one caller allowed at a time. This will block the queue
         // processing loop that calls us, but its inputs come from async queues
         // that should be able to cope with arriving requests.
@@ -519,7 +576,7 @@ impl AiRuntime {
                 return SendResult::Failed(error);
             }
         };
-        if let Some(prompt) = self.start_interaction(&configuration.system_text).await {
+        if let Some((prompt, history)) = self.start_interaction(&configuration.system_text).await {
             if let Some(through) = prompt.through {
                 on_start(through);
             }
@@ -530,15 +587,16 @@ impl AiRuntime {
                 ));
             };
             let is_user_interaction = prompt.kind.is_user_interaction();
-            match self.complete(&configuration, &prompt).await {
+            // Nothing cancels turns yet; the worker will own the token in a later stage.
+            let cancel = CancellationToken::new();
+            match self
+                .run_turn(&configuration, &history, &prompt, &cancel)
+                .await
+            {
                 Ok(result) => {
                     let notify_user = is_user_interaction || !is_no_comment(&result.answer);
-                    // This logic may change, thus it's a separate boolean.
-                    let add_to_history = is_user_interaction || !is_no_comment(&result.answer);
                     // Consume prompt and update the conversation.
-                    let more_pending = self
-                        .commit_interaction(prompt, result.answer.clone(), add_to_history)
-                        .await;
+                    let more_pending = self.commit_interaction(prompt, result.history).await;
                     if notify_user {
                         self.notifier.notify(
                             DisplayMessage::new(DisplayMessageKind::Companion, result.answer)
@@ -555,7 +613,10 @@ impl AiRuntime {
                         SendResult::Drained
                     }
                 }
-                Err(error) => SendResult::Failed(error),
+                Err(TurnError::Failed(error)) => SendResult::Failed(error),
+                Err(TurnError::Cancelled) => {
+                    SendResult::Failed("The AI request was cancelled.".to_owned())
+                }
             }
         } else {
             SendResult::Drained
@@ -653,6 +714,12 @@ mod tests {
         }
     }
 
+    /// Completes `prompt` the way a successful turn that answered `answer` does.
+    fn finish_turn(conversation: &mut Conversation, prompt: Prompt, answer: &str) {
+        let history = history_after_turn(&conversation.history, &prompt, answer);
+        conversation.complete(prompt, history);
+    }
+
     #[test]
     fn successful_chat_completion_clears_pending_inputs_of_same_type() {
         let mut conversation = Conversation::default();
@@ -660,10 +727,10 @@ mod tests {
         conversation.push_user_message("question", None);
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
 
-        conversation.complete(prompt, "answer".to_owned(), true);
+        finish_turn(&mut conversation, prompt, "answer");
 
         assert_eq!(conversation.pending_input.len(), 1);
-        assert_eq!(conversation.history.len(), 2);
+        assert_eq!(conversation.history.messages().len(), 2);
     }
 
     #[test]
@@ -686,8 +753,8 @@ mod tests {
 
         conversation.push_report(build_game_event(1, "a report"), None);
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
-        conversation.complete(prompt, NO_COMMENT.to_owned(), false);
-        assert_eq!(conversation.history.len(), 0);
+        finish_turn(&mut conversation, prompt, NO_COMMENT);
+        assert_eq!(conversation.history.messages().len(), 0);
         assert!(conversation.pending_input.is_empty());
     }
 
@@ -708,13 +775,13 @@ mod tests {
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
         assert_eq!(prompt.kind, PromptKind::Automated);
         assert_eq!(prompt.through, Some(NotificationId(1)));
-        conversation.complete(prompt, NO_COMMENT.to_owned(), false);
+        finish_turn(&mut conversation, prompt, NO_COMMENT);
 
         let prompt = conversation.build_prompt(DEFAULT_SYSTEM_TEXT).unwrap();
         assert_eq!(prompt.kind, PromptKind::UserRequest);
         assert_eq!(prompt.included_inputs, 3);
         assert_eq!(prompt.through, Some(NotificationId(4)));
-        conversation.complete(prompt, "answer".to_owned(), true);
+        finish_turn(&mut conversation, prompt, "answer");
         assert_eq!(conversation.pending_through(), None);
     }
 
@@ -747,6 +814,152 @@ mod tests {
         assert!(!is_no_comment("The drink is low."));
     }
 
+    fn test_prompt(kind: PromptKind, content: &str) -> Prompt {
+        Prompt {
+            kind,
+            content: content.to_owned(),
+            included_inputs: 1,
+            through: None,
+            token_estimates: AiPromptTokenEstimates::default(),
+        }
+    }
+
+    #[test]
+    fn a_turn_returns_a_new_history_and_leaves_the_snapshot_untouched() {
+        let before = History::default();
+        let prompt = test_prompt(PromptKind::UserRequest, "question");
+        let after = history_after_turn(&before, &prompt, "answer");
+        assert_eq!(before.messages().len(), 0);
+        assert_eq!(after.messages().len(), 2);
+        assert_eq!(after.messages()[0].content, "question");
+        assert_eq!(after.messages()[1].content, "answer");
+    }
+
+    #[test]
+    fn history_is_trimmed_from_the_front() {
+        let mut history = History::default();
+        let prompt = test_prompt(PromptKind::UserRequest, "q");
+        for i in 0..MAX_HISTORY_MESSAGES {
+            history = history_after_turn(&history, &prompt, &format!("a{i}"));
+        }
+        assert_eq!(history.messages().len(), MAX_HISTORY_MESSAGES);
+        let last = history.messages().last().unwrap();
+        assert_eq!(last.content, format!("a{}", MAX_HISTORY_MESSAGES - 1));
+        assert_eq!(history.messages()[0].role, ChatRole::User);
+    }
+
+    #[test]
+    fn automated_no_comment_turns_leave_history_unchanged() {
+        let before = history_after_turn(
+            &History::default(),
+            &test_prompt(PromptKind::UserRequest, "q"),
+            "a",
+        );
+        let prompt = test_prompt(PromptKind::Automated, "periodic");
+        let after = history_after_turn(&before, &prompt, NO_COMMENT);
+        assert_eq!(after.messages().len(), 2);
+        let after = history_after_turn(&before, &prompt, "Something happened.");
+        assert_eq!(after.messages().len(), 4);
+        // A user turn is remembered even when the answer is NO_COMMENT.
+        let prompt = test_prompt(PromptKind::UserRequest, "q2");
+        let after = history_after_turn(&before, &prompt, NO_COMMENT);
+        assert_eq!(after.messages().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_turn_sends_nothing_and_reports_cancellation() {
+        use genai::adapter::AdapterKind;
+
+        let runtime = make_test_runtime();
+        let (url, mut requests, server) = start_mock_provider(vec![json!({
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "test-model",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "pong"},
+                "finish_reason": "stop"
+            }]
+        })])
+        .await;
+        let configuration = AiConfiguration {
+            id: "test-config".to_owned(),
+            name: "Test".to_owned(),
+            interaction_method: AdapterKind::OpenAI,
+            model_id: "test-model".to_owned(),
+            url,
+            system_text: "Custom system instructions.".to_owned(),
+        };
+        let prompt = test_prompt(PromptKind::UserRequest, "Hello.");
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let result = runtime
+            .run_turn_with_key(
+                &configuration,
+                "test-secret",
+                &History::default(),
+                &prompt,
+                &cancel,
+            )
+            .await;
+        let request_sent = requests.try_recv().is_ok();
+        server.abort();
+
+        assert!(matches!(result, Err(TurnError::Cancelled)));
+        assert!(!request_sent);
+    }
+
+    #[tokio::test]
+    async fn cancelling_while_waiting_for_the_provider_ends_the_turn() {
+        use genai::adapter::AdapterKind;
+
+        let runtime = make_test_runtime();
+        // A server that accepts the connection and never answers.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                if let Ok((socket, _)) = listener.accept().await {
+                    held.push(socket);
+                }
+            }
+        });
+        let configuration = AiConfiguration {
+            id: "test-config".to_owned(),
+            name: "Test".to_owned(),
+            interaction_method: AdapterKind::OpenAI,
+            model_id: "test-model".to_owned(),
+            url,
+            system_text: "Custom system instructions.".to_owned(),
+        };
+        let prompt = test_prompt(PromptKind::UserRequest, "Hello.");
+        let cancel = CancellationToken::new();
+        let canceller = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            canceller.cancel();
+        });
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            runtime.run_turn_with_key(
+                &configuration,
+                "test-secret",
+                &History::default(),
+                &prompt,
+                &cancel,
+            ),
+        )
+        .await
+        .expect("cancellation should end the turn well before the provider timeout");
+        server.abort();
+
+        assert!(matches!(result, Err(TurnError::Cancelled)));
+    }
+
     fn make_test_runtime() -> AiRuntime {
         use crate::ai_config::ConfigurationRepository;
         let history = NotificationHistory::new();
@@ -762,7 +975,6 @@ mod tests {
         let runtime = make_test_runtime();
         let prompt = Prompt {
             kind: PromptKind::UserRequest,
-            history: Vec::new(),
             content: "Hello.".to_owned(),
             included_inputs: 1,
             through: None,
@@ -833,7 +1045,13 @@ mod tests {
                 system_text: "Custom system instructions.".to_owned(),
             };
             let result = runtime
-                .complete_with_key(&configuration, &prompt, "test-secret")
+                .run_turn_with_key(
+                    &configuration,
+                    "test-secret",
+                    &History::default(),
+                    &prompt,
+                    &CancellationToken::new(),
+                )
                 .await
                 .unwrap();
             let (path, auth_header, authorization, request_body) = requests.recv().await.unwrap();
@@ -892,7 +1110,6 @@ mod tests {
         };
         let prompt = Prompt {
             kind: PromptKind::Automated,
-            history: Vec::new(),
             content: "Use tools.".to_owned(),
             included_inputs: 1,
             through: None,
@@ -900,7 +1117,13 @@ mod tests {
         };
 
         let result = runtime
-            .complete_with_key(&configuration, &prompt, "test-secret")
+            .run_turn_with_key(
+                &configuration,
+                "test-secret",
+                &History::default(),
+                &prompt,
+                &CancellationToken::new(),
+            )
             .await
             .unwrap();
         let _ = requests.recv().await.unwrap();
@@ -970,7 +1193,6 @@ mod tests {
         };
         let prompt = Prompt {
             kind: PromptKind::UserRequest,
-            history: Vec::new(),
             content: "Use a tool.".to_owned(),
             included_inputs: 1,
             through: None,
@@ -978,7 +1200,13 @@ mod tests {
         };
 
         let result = runtime
-            .complete_with_key(&configuration, &prompt, "test-secret")
+            .run_turn_with_key(
+                &configuration,
+                "test-secret",
+                &History::default(),
+                &prompt,
+                &CancellationToken::new(),
+            )
             .await
             .unwrap();
         let _ = requests.recv().await.unwrap();
