@@ -9,6 +9,10 @@ approaches it as a cherished hobby.
 
 ## Commercial API access
 
+The market is burgeoning and complex. All I can touch on here is what I've
+learned through AI-assisted Web searches and personal experience. Details are
+changing constantly, so don't expect many here.
+
 There are many providers with a variety of models available. Access to
 proprietary models are, of course, available only through the model owners, and
 the frontier models are not cheap to use. Pricing strategies vary, but most
@@ -20,7 +24,7 @@ Hugging Face stands out a bit in my experience so far (2026-11-13), because they
 charge for uptime of a dedicated VM instead. That's kind of a difficult pricing
 model for hobby usage.
 
-## Multi-provider routers
+## Multi-provider gateway
 
 Just found out about these today (2026-11-13), in connection with the VSCode
 Cline extension. Examples are Cline and OpenRouter. Basically, you choose the
@@ -32,11 +36,24 @@ OpenRouter charges a 5.5% fee. Presumably CLine works similarly in this mode.
 Since I had three accounts with token balances by the time I noticed these
 services, this seems attractive.
 
+Other services of this sort worthy of note, from a query:
+
+- Hosted, one key, many models.
+    - Requesty
+    - NanoGPT
+    - Together AI
+    - AI/ML API
+- Self-hosted (you run the gateway).
+    - LiteLLM
+    - Bitfrost
+    - Portkey
+
 ### Cline
 
 Offers ClinePass, a subscription-based service that sounds affordable for medium
 to heavy hobby users. In usage-billing mode, you pay through Cline, and
-presumably they take a small cut.
+presumably they take a small cut. This uses a small number of actual compute
+providers that are opaque to you.
 
 ### OpenRouter
 
@@ -50,6 +67,16 @@ balance -- a feature you can supposedly turn off per-key.
 
 
 ## Tools for working with AI
+
+### Web-based options
+
+I discovered that I could ask Windows Copilot questions about my project and
+because it could read the pushed files from GitHub. (More on this below.) Later
+I discovered that Claude could do this too -- it even pulls a working copy of
+the project to examine. And *then* I discovered that [Cline can even make
+changes and submit them as a branch or a pull request](https://cline.bot/cloud).
+So you can actually get started at AI-assisted development without dealing with
+IDE integration at all!
 
 ### VSCode built-in Copilot Harness
 
@@ -79,8 +106,7 @@ nice features that are missing from the extension. In particular, if you're
 bringing your own provider key to the extension, you can only use one provider
 at a time and have to switch when changing models. This is what led to me
 discovery of AI routers. OpenRouter provides a workaround for this limitation,
-if you're not ready to use a ClinePass (subscription) or Cline usage-billing --
-e.g. if you have several provider keys with associated token balances already.
+if you're not ready to use a ClinePass (subscription) or Cline usage-billing.
 
 
 ### VSCode Continue extension
@@ -88,3 +114,7 @@ e.g. if you have several provider keys with associated token balances already.
 Tried this out and was not thrilled with the UI. Had several hours into it
 before I ran across the fact that it's no longer actively updated. (2026-11-12)
 
+## What I'm doing right now
+
+After dissatisfying attempts to use the Continue extension, I'm trying the Cline
+extension with OpenRouter.
