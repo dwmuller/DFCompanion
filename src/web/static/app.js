@@ -29,6 +29,13 @@ for (const id of ["show-game-events", "show-ai-usage"]) {
 // The server sends a "beep" event only for live (not replayed) companion comments.
 document.addEventListener("beep", beep);
 
+// The server sends a "reset" event when the notification log was truncated
+// (for example by a rollback) and the browser's remembered ids no longer
+// mean anything. The replay that follows rebuilds the log from scratch.
+document.addEventListener("reset", () => {
+  notifications.replaceChildren();
+});
+
 function beep() {
   try {
     const context = new AudioContext();

@@ -33,6 +33,7 @@ pub struct CompanionApp {
     pub periodic_turns: std::sync::atomic::AtomicBool,
     game_state: GameState,
     chat_state: watch::Sender<ChatState>,
+    rollback_floor: watch::Sender<Option<NotificationId>>,
 }
 
 impl CompanionApp {
@@ -77,6 +78,7 @@ impl CompanionApp {
                 periodic_turns: Default::default(),
                 game_state,
                 chat_state: watch::channel(ChatState::Idle).0,
+                rollback_floor: watch::channel(None).0,
             }),
             queue_rx,
         )
@@ -96,6 +98,16 @@ impl CompanionApp {
 
     pub fn subscribe_chat_state(&self) -> watch::Receiver<ChatState> {
         self.chat_state.subscribe()
+    }
+
+    /// The id of the oldest notification currently eligible for a rollback,
+    /// if any. See [`session::Session::rollback_floor`].
+    pub fn rollback_floor(&self) -> Option<NotificationId> {
+        *self.rollback_floor.borrow()
+    }
+
+    pub fn subscribe_rollback_floor(&self) -> watch::Receiver<Option<NotificationId>> {
+        self.rollback_floor.subscribe()
     }
 
     /// What the session needs to know about the world to handle an event.
@@ -144,6 +156,9 @@ impl CompanionApp {
             Effect::PublishChatState(state) => {
                 let previous = self.chat_state.send_replace(state);
                 debug!("chat state: {:?} -> {:?}", previous, state);
+            }
+            Effect::PublishRollbackFloor(floor) => {
+                self.rollback_floor.send_replace(floor);
             }
             Effect::StartTurn {
                 turn_id,

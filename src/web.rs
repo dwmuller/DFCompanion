@@ -26,7 +26,7 @@ use crate::{
     ai_providers::built_in_providers,
     app::CompanionApp,
     events::{GameEvent, QueueItem},
-    notifications::{DisplayMessage, DisplayMessageKind},
+    notifications::{DisplayMessage, DisplayMessageKind, HistoryEvent, InputState},
     web::templates::{render_configuration_form_error, ConfigurationListItem, RenderError},
 };
 
@@ -800,9 +800,11 @@ async fn stylesheet() -> impl IntoResponse {
 }
 
 /// Turns a recorded notification into the HTML list item the page appends.
-/// `live` is false while replaying history, so replays never beep.
-fn notification_events(id: u64, message: &DisplayMessage, live: bool) -> Vec<Event> {
-    let html = match templates::render_notification(message) {
+/// `live` is false while replaying history, so replays never beep. The SSE
+/// event id is `epoch:id`, so a reconnecting browser's `Last-Event-ID` always
+/// names both the entry and the log generation it came from.
+fn notification_events(epoch: u64, id: u64, message: &DisplayMessage, live: bool) -> Vec<Event> {
+    let html = match templates::render_notification(id, message) {
         Ok(html) => html,
         Err(error) => {
             eprintln!("Could not render notification: {error}");
@@ -810,11 +812,29 @@ fn notification_events(id: u64, message: &DisplayMessage, live: bool) -> Vec<Eve
         }
     };
     // Unnamed events are swapped into the page; named ones become DOM events.
-    let mut events = vec![Event::default().id(id.to_string()).data(html)];
+    let mut events = vec![Event::default().id(format!("{epoch}:{id}")).data(html)];
     if message.beep && live {
         events.push(Event::default().event("beep").data(""));
     }
     events
+}
+
+/// The out-of-band swap that updates an already-rendered notification's
+/// state badge in place.
+fn state_change_events(id: u64, state: InputState) -> Vec<Event> {
+    match templates::render_notification_state(id, state) {
+        Ok(html) => vec![Event::default().data(html)],
+        Err(error) => {
+            eprintln!("Could not render notification state: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// Parses a `Last-Event-ID` header value of the form `epoch:id`.
+fn parse_cursor(value: &str) -> Option<(u64, u64)> {
+    let (epoch, id) = value.split_once(':')?;
+    Some((epoch.parse().ok()?, id.parse().ok()?))
 }
 
 /// Checkboxes are only submitted when checked, so presence means enabled.
@@ -849,30 +869,54 @@ async fn events(
     State(app): State<Arc<CompanionApp>>,
     headers: HeaderMap,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    // A reconnecting browser says where it left off, so it isn't sent
-    // messages it already has.
-    let last_event_id = headers
+    // A reconnecting browser says where it left off, as `epoch:id`, so it
+    // isn't sent messages it already has.
+    let cursor = headers
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
-    let (backlog, live) = app.history.subscribe(last_event_id);
-    let backlog = tokio_stream::iter(backlog.into_iter().flat_map(|(id, message)| {
-        notification_events(id, &message, false)
+        .and_then(parse_cursor);
+    let subscription = app.history.subscribe_from(cursor);
+    let epoch = subscription.epoch;
+
+    let mut backlog_events: Vec<Result<Event, Infallible>> = Vec::new();
+    if subscription.reset {
+        // The browser's remembered ids no longer exist: tell it to drop
+        // everything before replaying the current, complete backlog.
+        backlog_events.push(Ok(Event::default().event("reset").data("")));
+    }
+    backlog_events.extend(
+        subscription
+            .backlog
             .into_iter()
-            .map(Ok)
-            .collect::<Vec<_>>()
-    }));
-    let live = BroadcastStream::new(live).flat_map(|notification| {
+            .flat_map(|(id, message)| notification_events(epoch, id, &message, false))
+            .map(Ok),
+    );
+    let backlog = tokio_stream::iter(backlog_events);
+
+    // Tracks the epoch across the live stream, since a `Reset` partway
+    // through changes which epoch subsequent `Added` ids belong to.
+    let epoch_cell = std::cell::Cell::new(epoch);
+    let live = BroadcastStream::new(subscription.receiver).flat_map(move |notification| {
         let events = match notification {
-            Ok((id, message)) => notification_events(id, &message, true),
+            Ok(HistoryEvent::Added(id, message)) => {
+                notification_events(epoch_cell.get(), id, &message, true)
+            }
+            Ok(HistoryEvent::StateChanged(id, state)) => state_change_events(id, state),
+            Ok(HistoryEvent::Reset(new_epoch)) => {
+                epoch_cell.set(new_epoch);
+                vec![Event::default().event("reset").data("")]
+            }
             Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(count)) => {
                 vec![Event::default().data(
-                    templates::render_notification(&DisplayMessage::new(
-                        DisplayMessageKind::Warning,
-                        format!(
-                            "{count} UI notifications were missed while the browser was disconnected."
+                    templates::render_notification(
+                        0,
+                        &DisplayMessage::new(
+                            DisplayMessageKind::Warning,
+                            format!(
+                                "{count} UI notifications were missed while the browser was disconnected."
+                            ),
                         ),
-                    ))
+                    )
                     .unwrap_or_default(),
                 )]
             }
@@ -1212,11 +1256,165 @@ mod test {
     fn replay_and_live_messages_render_identically_and_only_live_beeps() {
         let message =
             DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**").with_beep(true);
-        let replay = notification_events(7, &message, false);
-        let live = notification_events(7, &message, true);
+        let replay = notification_events(0, 7, &message, false);
+        let live = notification_events(0, 7, &message, true);
 
         assert_eq!(replay.len(), 1);
         assert_eq!(live.len(), 2);
         assert_eq!(format!("{:?}", replay[0]), format!("{:?}", live[0]));
+    }
+
+    async fn get_events_body(app: &Arc<CompanionApp>, last_event_id: Option<&str>) -> String {
+        let mut request = Request::builder()
+            .uri("/events")
+            .header(header::HOST, HTTP_HOST);
+        if let Some(last_event_id) = last_event_id {
+            request = request.header("last-event-id", last_event_id);
+        }
+        let response = router(app.clone())
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.into_body().into_data_stream();
+        let mut body = String::new();
+        // Collect whatever has arrived so far; the stream never ends on its
+        // own, so a short timeout stands in for "nothing more is coming".
+        while let Ok(Some(Ok(chunk))) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), stream.next()).await
+        {
+            body.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        body
+    }
+
+    #[tokio::test]
+    async fn a_fresh_connection_gets_the_full_backlog_with_epoch_qualified_ids() {
+        let (app, _queue_rx) = CompanionApp::new();
+        app.notifier()
+            .notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
+        for _ in 0..50 {
+            if app.history.subscribe(None).0.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let body = get_events_body(&app, None).await;
+
+        assert!(body.contains("id: 0:1"));
+        assert!(body.contains("notif-1"));
+        assert!(!body.contains("event: reset"));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_within_the_same_epoch_resumes_after_the_given_id() {
+        let (app, _queue_rx) = CompanionApp::new();
+        app.notifier()
+            .notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
+        app.notifier()
+            .notify(DisplayMessage::new(DisplayMessageKind::Status, "second"));
+        for _ in 0..50 {
+            if app.history.subscribe(None).0.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let body = get_events_body(&app, Some("0:1")).await;
+
+        assert!(!body.contains("event: reset"));
+        assert!(!body.contains("notif-1\""));
+        assert!(body.contains("id: 0:2"));
+        assert!(body.contains("notif-2"));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_with_a_stale_epoch_gets_a_reset_then_the_full_backlog() {
+        let (app, _queue_rx) = CompanionApp::new();
+        let id = app
+            .notifier()
+            .notify(DisplayMessage::new(DisplayMessageKind::Status, "first"));
+        for _ in 0..50 {
+            if app.history.subscribe(None).0.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        app.history.truncate_from(id);
+        app.notifier().notify(DisplayMessage::new(
+            DisplayMessageKind::Status,
+            "after truncation",
+        ));
+        for _ in 0..50 {
+            if app.history.subscribe(None).0.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // This client remembers epoch 0's last id, which no longer exists.
+        let body = get_events_body(&app, Some("0:1")).await;
+
+        let reset_at = body
+            .find("event: reset")
+            .expect("a reset event should be sent");
+        let backlog_at = body
+            .find("after truncation")
+            .expect("the full backlog should replay after the reset");
+        assert!(reset_at < backlog_at);
+        assert!(body.contains("id: 1:"));
+    }
+
+    #[tokio::test]
+    async fn a_live_input_state_change_is_sent_as_an_out_of_band_swap() {
+        let (app, queue_rx) = CompanionApp::new();
+        // An active (if unreachable) configuration, so the turn actually
+        // starts and transitions the input to Processing instead of the
+        // session blocking for lack of one.
+        let config = app
+            .ai
+            .configurations
+            .create(
+                "test config",
+                genai::adapter::AdapterKind::OpenAI,
+                "test-model",
+                "https://api.openai.com/v1/",
+                crate::ai::DEFAULT_SYSTEM_TEXT,
+            )
+            .unwrap();
+        app.ai.configurations.set_active(Some(&config.id)).unwrap();
+        let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+        let request = Request::builder()
+            .uri("/events")
+            .header(header::HOST, HTTP_HOST)
+            .body(Body::empty())
+            .unwrap();
+        let response = router(app.clone()).oneshot(request).await.unwrap();
+        let mut stream = response.into_body().into_data_stream();
+
+        app.event_queue()
+            .try_send(QueueItem::UserInput("hello".to_owned()))
+            .unwrap();
+
+        let mut body = String::new();
+        let found_state_change = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let chunk = stream.next().await.unwrap().unwrap();
+                body.push_str(&String::from_utf8_lossy(&chunk));
+                if body.contains("hx-swap-oob") {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        assert!(
+            found_state_change.is_ok(),
+            "expected an input-state swap; got: {body}"
+        );
+        assert!(body.contains("notif-state-1"));
+        assert!(body.contains("data-input-state=\"processing\""));
+        worker.abort();
     }
 }

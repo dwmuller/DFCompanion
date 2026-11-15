@@ -1,16 +1,28 @@
 use super::*;
 use crate::events::{GameEvent, QueueItem};
-use crate::notifications::NotificationId;
+use crate::notifications::{HistoryEvent, NotificationId};
 use crate::session::{EVENT_FLUSH_DELAY, PERIODIC_CHECK_INTERVAL};
 use tokio::sync::broadcast;
 
-// Find next message of specific kind in the notifications stream.
+/// Waits for the next new message (skipping state-change and reset events)
+/// and returns its id and contents.
+async fn recv_added(
+    notifications: &mut broadcast::Receiver<HistoryEvent>,
+) -> (u64, DisplayMessage) {
+    loop {
+        if let HistoryEvent::Added(id, message) = notifications.recv().await.unwrap() {
+            return (id, message);
+        }
+    }
+}
+
+// Find next new message of a specific kind in the notifications stream.
 async fn recv_kind(
-    notifications: &mut broadcast::Receiver<(u64, DisplayMessage)>,
+    notifications: &mut broadcast::Receiver<HistoryEvent>,
     kind: DisplayMessageKind,
 ) -> DisplayMessage {
     loop {
-        let message = notifications.recv().await.unwrap().1;
+        let (_, message) = recv_added(notifications).await;
         if message.kind == kind {
             return message;
         }
@@ -60,7 +72,7 @@ async fn notification_history_replays_then_streams_live() {
     notifier.notify(DisplayMessage::new(DisplayMessageKind::Warning, "third"));
     assert_eq!(
         live.recv().await.unwrap(),
-        (5, DisplayMessage::new(DisplayMessageKind::Warning, "third"))
+        HistoryEvent::Added(5, DisplayMessage::new(DisplayMessageKind::Warning, "third"))
     );
 
     let (resumed, _) = app.history.subscribe(Some(4));
@@ -166,10 +178,8 @@ async fn full_event_queue_responds_with_pause_request_and_notifies_ui() {
         EventSubmissionStatus::PauseRequestedQueueFull
     );
     assert!(response.message.contains("asked to pause"));
-    assert!(notifications_rx
-        .recv()
+    assert!(recv_added(&mut notifications_rx)
         .await
-        .unwrap()
         .1
         .text
         .contains("queue is full"));
@@ -217,19 +227,19 @@ async fn worker_runs_chat_commands_without_involving_the_ai() {
             .unwrap();
     }
 
-    let call = notifier.recv().await.unwrap().1;
+    let call = recv_added(&mut notifier).await.1;
     assert_eq!(call.kind, DisplayMessageKind::Diagnostic);
     assert!(call.text.contains("/call no_such_tool"), "{call:?}");
-    let error = notifier.recv().await.unwrap().1;
+    let error = recv_added(&mut notifier).await.1;
     assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
     assert!(
         error.text.contains("Unknown tool: no_such_tool"),
         "{error:?}"
     );
-    let call = notifier.recv().await.unwrap().1;
+    let call = recv_added(&mut notifier).await.1;
     assert_eq!(call.kind, DisplayMessageKind::Diagnostic);
     assert!(call.text.contains("/bogus"), "{call:?}");
-    let error = notifier.recv().await.unwrap().1;
+    let error = recv_added(&mut notifier).await.1;
     assert_eq!(error.kind, DisplayMessageKind::Diagnostic);
     assert!(
         error.text.contains("Unknown chat command: /bogus"),
@@ -254,12 +264,12 @@ async fn pending_ai_inputs_carry_the_ids_of_their_notifications() {
             text: "A dwarf arrived.".to_owned(),
         }))
         .unwrap();
-    let (event_id, event) = notifications.recv().await.unwrap();
+    let (event_id, event) = recv_added(&mut notifications).await;
     assert_eq!(event.kind, DisplayMessageKind::GameEvent);
     queue_tx
         .try_send(QueueItem::UserInput("hello".to_owned()))
         .unwrap();
-    let (user_id, user) = notifications.recv().await.unwrap();
+    let (user_id, user) = recv_added(&mut notifications).await;
     assert_eq!(user.kind, DisplayMessageKind::User);
 
     // With no AI configuration the inputs stay pending, so they can be
@@ -297,7 +307,7 @@ async fn inputs_are_pending_until_an_ai_turn_takes_them() {
     queue_tx
         .try_send(QueueItem::UserInput("hello".to_owned()))
         .unwrap();
-    let (user_id, _) = notifications.recv().await.unwrap();
+    let (user_id, _) = recv_added(&mut notifications).await;
 
     // No configuration: the turn never starts, so nothing leaves Pending.
     let mut chat_state = app.subscribe_chat_state();
@@ -551,7 +561,7 @@ async fn chat_without_api_key_retains_context_for_retry() {
         .unwrap();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
 
-    assert!(notifications_rx.recv().await.unwrap().1.kind == DisplayMessageKind::GameEvent);
+    assert!(recv_added(&mut notifications_rx).await.1.kind == DisplayMessageKind::GameEvent);
     let failure = recv_kind(&mut notifications_rx, DisplayMessageKind::Warning).await;
     if !failure.text.contains("AI request failed") {
         println!("Expected AI request failure, got: {:?}", failure);
@@ -598,7 +608,7 @@ async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_tu
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     app.queue_tx.try_send(sample_event()).unwrap();
 
-    assert!(notifications.recv().await.unwrap().1.kind == DisplayMessageKind::GameEvent);
+    assert!(recv_added(&mut notifications).await.1.kind == DisplayMessageKind::GameEvent);
     let started = Instant::now();
     let failure = recv_kind(&mut notifications, DisplayMessageKind::Warning).await;
     assert!(failure.text.contains("AI request failed"), "{failure:?}");
@@ -627,7 +637,7 @@ async fn automatic_turns_are_off_by_default() {
     let mut notifications = app.history.subscribe(None).1;
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     app.queue_tx.try_send(sample_event()).unwrap();
-    assert!(notifications.recv().await.unwrap().1.kind == DisplayMessageKind::GameEvent);
+    assert!(recv_added(&mut notifications).await.1.kind == DisplayMessageKind::GameEvent);
     let quiet = tokio::time::timeout(PERIODIC_CHECK_INTERVAL * 3, notifications.recv()).await;
     assert!(quiet.is_err(), "unexpected notification: {quiet:?}");
     worker.abort();

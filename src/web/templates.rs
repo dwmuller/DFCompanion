@@ -9,7 +9,7 @@ use crate::{
     ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
     app::ChatState,
-    notifications::DisplayMessage,
+    notifications::{DisplayMessage, InputState},
 };
 
 #[derive(Debug)]
@@ -107,10 +107,22 @@ impl FormFieldValues {
 #[derive(Template)]
 #[template(path = "notification.html")]
 struct NotificationTemplate<'a> {
+    id: u64,
     kind: &'a str,
     label: &'a str,
     body: &'a str,
     markdown: bool,
+    input_state: Option<&'a str>,
+}
+
+/// An out-of-band replacement for the state badge of an already-rendered
+/// notification, used to broadcast a Pending/Processing/Done change without
+/// resending the whole message.
+#[derive(Template)]
+#[template(path = "notification-state.html")]
+struct NotificationStateTemplate<'a> {
+    id: u64,
+    input_state: &'a str,
 }
 
 #[derive(Template)]
@@ -206,7 +218,7 @@ struct ConfigurationFormErrorTemplate {
     error_message: String,
 }
 
-pub fn render_notification(message: &DisplayMessage) -> Result<String, RenderError> {
+pub fn render_notification(id: u64, message: &DisplayMessage) -> Result<String, RenderError> {
     let is_markdown = message.kind.is_markdown();
     let body = if is_markdown {
         markdown_to_safe_html(&message.text)
@@ -214,10 +226,23 @@ pub fn render_notification(message: &DisplayMessage) -> Result<String, RenderErr
         message.text.clone()
     };
     Ok(NotificationTemplate {
+        id,
         kind: message.kind.key(),
         label: message.kind.label(),
         body: &body,
         markdown: is_markdown,
+        input_state: message.input_state.map(|state| state.key()),
+    }
+    .render()?
+    .trim()
+    .to_owned())
+}
+
+/// Renders the out-of-band state-badge swap for an input-state change.
+pub fn render_notification_state(id: u64, state: InputState) -> Result<String, RenderError> {
+    Ok(NotificationStateTemplate {
+        id,
+        input_state: state.key(),
     }
     .render()?
     .trim()
@@ -427,14 +452,14 @@ mod test {
 
     #[test]
     fn speech_is_rendered_as_markdown_with_a_label() {
-        let rendered = render_notification(&DisplayMessage::new(
-            DisplayMessageKind::Companion,
-            "**Hello**\nthere",
-        ))
+        let rendered = render_notification(
+            1,
+            &DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**\nthere"),
+        )
         .expect("notification should render");
 
         assert!(rendered.starts_with(
-            "<div class=\"notification\" data-kind=\"companion\"><strong class=\"notification-header\">Companion:</strong><div class=\"notification-body\"><div class=\"markdown-body\">"
+            "<div id=\"notif-1\" class=\"notification\" data-kind=\"companion\"><strong class=\"notification-header\">Companion:</strong><div class=\"notification-body\"><div class=\"markdown-body\">"
         ));
         assert!(rendered.contains("<strong>Hello</strong><br>"));
         assert!(rendered.ends_with("</div></div></div>"));
@@ -442,10 +467,10 @@ mod test {
 
     #[test]
     fn speech_categories_render_markdown_and_have_stable_kinds() {
-        let rendered = render_notification(&DisplayMessage::new(
-            DisplayMessageKind::User,
-            "**Hello** & `code`\n- first",
-        ))
+        let rendered = render_notification(
+            2,
+            &DisplayMessage::new(DisplayMessageKind::User, "**Hello** & `code`\n- first"),
+        )
         .expect("notification should render");
 
         assert!(rendered.contains("data-kind=\"user\""));
@@ -458,10 +483,13 @@ mod test {
 
     #[test]
     fn speech_markdown_is_sanitized() {
-        let rendered = render_notification(&DisplayMessage::new(
-            DisplayMessageKind::Companion,
-            "<script>alert(1)</script>\n\n![x](http://e/x.png) [a](https://example.com) <img src=x onerror=alert(1)>[b](javascript:alert(1))",
-        ))
+        let rendered = render_notification(
+            3,
+            &DisplayMessage::new(
+                DisplayMessageKind::Companion,
+                "<script>alert(1)</script>\n\n![x](http://e/x.png) [a](https://example.com) <img src=x onerror=alert(1)>[b](javascript:alert(1))",
+            ),
+        )
         .expect("notification should render");
 
         assert!(!rendered.contains("<script"));
@@ -546,7 +574,7 @@ mod test {
             (DisplayMessageKind::Diagnostic, "Diagnostic", "diagnostic"),
         ];
         for (kind, label, key) in cases {
-            let rendered = render_notification(&DisplayMessage::new(kind, "a < b"))
+            let rendered = render_notification(4, &DisplayMessage::new(kind, "a < b"))
                 .expect("notification should render");
             assert!(
                 rendered.contains(&format!("data-kind=\"{key}\"")),

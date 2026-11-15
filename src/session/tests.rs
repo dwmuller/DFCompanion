@@ -321,7 +321,8 @@ fn reports_wait_for_the_flush_timer_and_are_sent_together() {
     assert_eq!(session.flush_deadline(), None);
 
     let effects = session.handle(&context(now), game_report("one", 1));
-    assert!(effects.is_empty());
+    // The first queued input moves the rollback floor from none to itself.
+    assert_eq!(published_floors(&effects), vec![Some(NotificationId(1))]);
     assert_eq!(session.flush_deadline(), Some(now + EVENT_FLUSH_DELAY));
     // The deadline belongs to the first report; later ones do not postpone it.
     let later = now + Duration::from_secs(2);
@@ -489,4 +490,86 @@ fn only_changes_of_chat_state_are_published() {
     // Still idle: nothing to publish.
     assert!(published(&session.handle(&context(now), game_report("one", 1))).is_empty());
     assert!(published(&session.handle(&context(now), Event::Resume)).is_empty());
+}
+
+fn published_floors(effects: &[Effect]) -> Vec<Option<NotificationId>> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::PublishRollbackFloor(floor) => Some(*floor),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_rollback_floor_is_none_until_something_is_queued() {
+    let now = Instant::now();
+    let session = Session::new(now);
+    assert_eq!(session.rollback_floor(), None);
+}
+
+#[test]
+fn the_rollback_floor_is_the_oldest_queued_input() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let mut context = context(now);
+    // No configuration, so inputs stay queued instead of starting a turn.
+    context.configuration = Ok(None);
+
+    let effects = session.handle(&context, user("first", 1));
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+    assert_eq!(published_floors(&effects), vec![Some(NotificationId(1))]);
+
+    // A second, newer input does not move the floor.
+    let effects = session.handle(&context, user("second", 2));
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+    assert!(published_floors(&effects).is_empty());
+}
+
+#[test]
+fn the_rollback_floor_moves_to_processing_inputs_while_a_turn_is_in_flight() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    // The input is now Processing, not Pending, but it is still queued and
+    // still the floor: it has not been committed to history yet. It was
+    // already published as the floor the moment it was queued, in this same
+    // step, so starting the turn does not publish it again.
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+    assert_eq!(published_floors(&effects), vec![Some(NotificationId(1))]);
+}
+
+#[test]
+fn the_rollback_floor_advances_past_inputs_a_turn_commits() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+
+    let effects = session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "hi")),
+    );
+
+    assert_eq!(session.rollback_floor(), None);
+    assert_eq!(published_floors(&effects), vec![None]);
+}
+
+#[test]
+fn the_rollback_floor_returns_to_a_failed_turns_inputs() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    let (turn_id, ..) = started_turn(&effects).unwrap();
+    // Already the floor while in flight: failure does not move it.
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+
+    let effects = session.handle(
+        &context(now),
+        finished(turn_id, Err(TurnError::Failed("boom".to_owned()))),
+    );
+
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+    assert!(published_floors(&effects).is_empty());
 }

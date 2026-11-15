@@ -9,12 +9,6 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Broadcast AI input state changes (Pending/Processing/Done) to the browser
-  and render them in the Conversation control. The underlying tracking is in
-  place: pending inputs carry an optional notification ID, each turn names the
-  last one it includes as a watermark, and `DisplayMessage::input_state` holds
-  the Pending/Processing/Done state. This is Rollback design stage 3 — see
-  "Rollback design.md".
 - Rename the queues and their items to reflect their input/output roles. Instead
   "notifications" and "queue items", they're really "outputs" and "inputs" of
   the companion.
@@ -50,12 +44,11 @@ Items that are primarily about the mechanics of AI interactions.
 ## Main page UI improvements
 
 - Replace retry button with a "Rollback" button on every user input that is
-  still within the last 50 turns (including Done inputs). Stages 1 and 2 of
-  the underlying work (`Session`, stateless AI engine) are done; stages 3
-  (notification log epochs/truncation, input-state broadcast, rollback
-  floor) and 4 (checkpoints, the `Rollback` event/route, the button and its
-  confirmation) remain. Full design and current status in
-  "Rollback design.md".
+  still within the last 50 turns (including Done inputs). Stages 1-3 of the
+  underlying work (`Session`, stateless AI engine; notification log
+  epochs/truncation, input-state broadcast, rollback floor) are done; stage 4
+  (checkpoints, the `Rollback` event/route, the button and its confirmation)
+  remains. Full design and current status in "Rollback design.md".
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
 - Do some styling to get away from the drear black and white.

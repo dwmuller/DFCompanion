@@ -1230,6 +1230,16 @@ mod tests {
             .contains("could not be verified"));
     }
 
+    /// Unwraps the next broadcast event, expecting it to be a new message.
+    fn try_recv_added(
+        receiver: &mut tokio::sync::broadcast::Receiver<crate::notifications::HistoryEvent>,
+    ) -> DisplayMessage {
+        match receiver.try_recv().unwrap() {
+            crate::notifications::HistoryEvent::Added(_, message) => message,
+            other => panic!("expected Added, got {other:?}"),
+        }
+    }
+
     #[test]
     fn version_warning_is_notified_only_when_it_changes() {
         let history = NotificationHistory::new();
@@ -1240,7 +1250,7 @@ mod tests {
 
         notify_version_warning(first_warning.clone(), &mut previous_warning, &notifier);
         assert_eq!(
-            notifications_rx.try_recv().unwrap().1,
+            try_recv_added(&mut notifications_rx),
             DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
 
@@ -1250,14 +1260,14 @@ mod tests {
         let changed_warning = Some("changed warning".to_owned());
         notify_version_warning(changed_warning, &mut previous_warning, &notifier);
         assert_eq!(
-            notifications_rx.try_recv().unwrap().1,
+            try_recv_added(&mut notifications_rx),
             DisplayMessage::new(DisplayMessageKind::Warning, "changed warning")
         );
 
         notify_version_warning(None, &mut previous_warning, &notifier);
         notify_version_warning(first_warning, &mut previous_warning, &notifier);
         assert_eq!(
-            notifications_rx.try_recv().unwrap().1,
+            try_recv_added(&mut notifications_rx),
             DisplayMessage::new(DisplayMessageKind::Warning, "first warning")
         );
     }

@@ -1,8 +1,9 @@
 # Rollback design
 
-Status: design agreed. Staging step 1 (`History` newtype, functional `run_turn`)
-and step 2 (`Session` and the effect interpreter) are implemented; steps 3 and 4
-are not started. Replaces the old "Recall" items in TODO.md.
+Status: design agreed. Staging steps 1 (`History` newtype, functional
+`run_turn`), 2 (`Session` and the effect interpreter) and 3 (log epochs,
+`truncate_from`, state-change broadcast, `rollback_floor`) are implemented;
+step 4 is not started. Replaces the old "Recall" items in TODO.md.
 
 ## Goal
 
@@ -137,21 +138,28 @@ Rules:
 
 ### Notification log
 
-- `NotificationHistory::truncate_from(id)` removes every entry at or after the
-  cut, AI-related or not. Ids are never reused and nothing may assume
-  contiguity (the 500-entry trim already breaks it).
-- An `epoch` counter increments on each truncation. SSE event ids become
+- DONE. `NotificationHistory::truncate_from(id)` removes every entry at or
+  after the cut, AI-related or not, and returns how many. Ids are never reused
+  and nothing may assume contiguity (the 500-entry trim already breaks it). No
+  caller yet: `Rollback` handling in step 4 is the first one.
+- DONE. An `epoch` counter increments on each truncation. SSE event ids become
   `epoch:id`. A reconnecting client with a stale epoch gets a `reset`, and live
   clients receive the same `reset`, which makes the page reload the whole
-  Conversation control. No consumer handles partial revocation.
-- State changes of existing messages (Pending, Processing, Done) still need a
-  broadcast; this is the pending "broadcast state changes" item. Updates should
-  be idempotent, keyed by a stable DOM id.
-- Eligibility is one watermark, `rollback_floor`: the first notification id
-  covered by a retained checkpoint (or still pending). The worker publishes it
-  and the UI shows the button on user inputs with id >= floor. When a
-  checkpoint is evicted the floor moves, which is another broadcast. This
-  avoids a per-message state. Revisit if the UI needs to render "too old to roll
+  Conversation control (`NotificationHistory::subscribe_from`, the `/events`
+  handler, and the `reset` listener in `app.js`). No consumer handles partial
+  revocation.
+- DONE. State changes of existing messages (Pending, Processing, Done) are
+  broadcast as `HistoryEvent::StateChanged` and rendered as an out-of-band swap
+  of a state badge keyed by a stable DOM id (`notif-state-{id}`), closing the
+  "broadcast state changes" TODO item.
+- DONE, pending step 4's checkpoints. Eligibility is one watermark,
+  `Session::rollback_floor`: currently the first notification id still queued
+  (Pending or Processing), since without checkpoints nothing earlier is
+  retained. Once step 4 adds checkpoints, the floor should move earlier to the
+  first one covered by a retained checkpoint. The worker publishes it
+  (`CompanionApp::subscribe_rollback_floor`); no UI reads it yet. When a
+  checkpoint is evicted the floor moves, which is another publish. This avoids
+  a per-message state. Revisit if the UI needs to render "too old to roll
   back" differently from "never had a button".
 
 ### Web layer
@@ -172,12 +180,13 @@ Rules:
 2. DONE. `Session` and the effect interpreter in the worker, replacing
    `flush_pending_interactions_loop`. Derived chat state. Covers the queue-move
    and shared-ids TODO items.
-3. Log epochs, `truncate_from`, state-change broadcast, `rollback_floor`.
+3. DONE. Log epochs, `truncate_from`, state-change broadcast, `rollback_floor`.
+   `NotificationHistory::truncate_from` and `Session::rollback_floor` have no
+   caller yet; both are built and tested as infrastructure for step 4.
 4. Checkpoints, `Rollback` event, route, button, editor prefill, confirmation.
 
-Steps 1-3 are worthwhile even without step 4. Steps 1 and 2 are implemented but
-not yet committed; `Session` already handles `CancelTurn` and `Resume`, which
-step 4 builds on.
+Steps 1-3 are worthwhile even without step 4. `Session` already handles
+`CancelTurn` and `Resume`, which step 4 builds on.
 
 ## Open points
 

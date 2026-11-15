@@ -114,6 +114,9 @@ pub enum Effect {
     },
     /// Show the chat state to the player.
     PublishChatState(ChatState),
+    /// Show the rollback floor to the player: the id of the oldest
+    /// notification still eligible for a rollback, if any.
+    PublishRollbackFloor(Option<NotificationId>),
 }
 
 struct InFlight {
@@ -135,6 +138,9 @@ pub struct Session {
     next_check: Instant,
     /// The last chat state sent out in an [`Effect::PublishChatState`].
     published: ChatState,
+    /// The last rollback floor sent out in an
+    /// [`Effect::PublishRollbackFloor`].
+    published_floor: Option<NotificationId>,
 }
 
 fn failure_message(error: &str) -> String {
@@ -154,6 +160,7 @@ impl Session {
             flush_at: None,
             next_check: now + PERIODIC_CHECK_INTERVAL,
             published: ChatState::Idle,
+            published_floor: None,
         }
     }
 
@@ -201,6 +208,16 @@ impl Session {
         self.queue.iter().rev().find_map(AiInput::notification_id)
     }
 
+    /// The id of the oldest notification still eligible for a rollback:
+    /// everything from here on is still queued (Pending or, if in flight,
+    /// Processing), so no history has been committed past it and no turn has
+    /// completed. `None` once nothing is queued, since without checkpoints
+    /// (added in a later stage) there is nothing earlier left to roll back
+    /// to.
+    pub fn rollback_floor(&self) -> Option<NotificationId> {
+        self.queue.iter().find_map(AiInput::notification_id)
+    }
+
     /// Handles an event and returns what the caller has to do about it, in order.
     pub fn handle(&mut self, context: &Context, event: Event) -> Vec<Effect> {
         let mut effects = Vec::new();
@@ -209,6 +226,11 @@ impl Session {
         if state != self.published {
             self.published = state;
             effects.push(Effect::PublishChatState(state));
+        }
+        let floor = self.rollback_floor();
+        if floor != self.published_floor {
+            self.published_floor = floor;
+            effects.push(Effect::PublishRollbackFloor(floor));
         }
         effects
     }

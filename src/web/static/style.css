@@ -37,6 +37,41 @@ body {
   white-space: normal;
 }
 
+/* A small badge showing where an AI input stands in the queue. Empty spans
+   with no `data-input-state` (not an AI input) render nothing. */
+.input-state {
+  border-radius: 0.75rem;
+  float: right;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.05rem 0.5rem;
+  text-transform: uppercase;
+}
+
+.input-state[data-input-state="pending"] {
+  background: #555;
+  color: #fff;
+}
+.input-state[data-input-state="pending"]::after {
+  content: "Pending";
+}
+
+.input-state[data-input-state="processing"] {
+  background: #2f6fed;
+  color: #fff;
+}
+.input-state[data-input-state="processing"]::after {
+  content: "Processing";
+}
+
+.input-state[data-input-state="done"] {
+  background: #2f8f4e;
+  color: #fff;
+}
+.input-state[data-input-state="done"]::after {
+  content: "Done";
+}
+
 /* Compact Markdown: tight margins within each conversation entry. */
 .markdown-body {
   max-width: 100%;
