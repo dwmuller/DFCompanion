@@ -80,8 +80,8 @@ async fn notification_history_replays_then_streams_live() {
     assert_eq!(resumed[0].1.kind, DisplayMessageKind::Warning);
 }
 use crate::api::{
-    companion_client::CompanionClient, companion_server::CompanionServer,
-    EventSubmissionStatus, SimulationEvent, SimulationTimestamp,
+    companion_client::CompanionClient, companion_server::CompanionServer, EventSubmissionStatus,
+    SimulationEvent, SimulationTimestamp,
 };
 use axum::{
     body::Body,
@@ -420,6 +420,50 @@ async fn configuration_and_retry_routes_reject_cross_origin_requests() {
 }
 
 #[tokio::test]
+async fn rollback_route_rejects_cross_origin_requests() {
+    let (app, _queue_rx) = CompanionApp::new();
+    let router = crate::web::router(app);
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/rollback/1")
+                .header(header::HOST, "127.0.0.1:3000")
+                .header(header::ORIGIN, "https://attacker.example")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("message=hi"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn rollback_recovers_a_queued_request_then_rejects_the_same_target() {
+    let (app, queue_rx) = CompanionApp::new();
+    // No active configuration, so the request stays queued instead of the AI
+    // being asked anything.
+    let mut notifications = app.history.subscribe(None).1;
+    let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+    app.queue_tx
+        .try_send(QueueItem::UserInput("hello".to_owned()))
+        .unwrap();
+
+    let (id, _) = recv_added(&mut notifications).await;
+    let editor = app
+        .rollback(NotificationId(id), "typed".to_owned())
+        .unwrap();
+    assert_eq!(editor, "hello\n\n\ntyped");
+
+    // The input is gone, so the same target is no longer eligible.
+    assert!(app
+        .rollback(NotificationId(id), "typed".to_owned())
+        .is_err());
+    worker.abort();
+}
+
+#[tokio::test]
 async fn configuration_api_supports_rename_and_delete() {
     let (app, _) = CompanionApp::new();
     let router = crate::web::router(app.clone());
@@ -587,8 +631,7 @@ fn sample_event() -> QueueItem {
 }
 
 #[tokio::test(start_paused = true)]
-async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure()
-{
+async fn events_trigger_an_ai_turn_after_the_flush_delay_then_pause_automatic_turns_on_failure() {
     let (app, queue_rx) = CompanionApp::new();
     let config = app
         .ai
@@ -653,10 +696,7 @@ async fn periodic_checks_stay_silent_without_an_ai_configuration() {
     worker.abort();
 }
 
-async fn post_plugin_event(
-    app: Arc<CompanionApp>,
-    body: &'static str,
-) -> axum::response::Response {
+async fn post_plugin_event(app: Arc<CompanionApp>, body: &'static str) -> axum::response::Response {
     crate::web::router(app)
         .oneshot(
             HttpRequest::builder()

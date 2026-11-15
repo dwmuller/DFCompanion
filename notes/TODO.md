@@ -44,11 +44,13 @@ Items that are primarily about the mechanics of AI interactions.
 ## Main page UI improvements
 
 - Replace retry button with a "Rollback" button on every user input that is
-  still within the last 50 turns (including Done inputs). Stages 1-3 of the
+  still within the last 50 turns (including Done inputs). Stages 1-4 of the
   underlying work (`Session`, stateless AI engine; notification log
-  epochs/truncation, input-state broadcast, rollback floor) are done; stage 4
-  (checkpoints, the `Rollback` event/route, the button and its confirmation)
-  remains. Full design and current status in "Rollback design.md".
+  epochs/truncation, input-state broadcast, rollback floor; and checkpoints,
+  the `Rollback` event/route, the button and its confirmation) are done. The
+  old retry control is still present and is removed once Rollback has been
+  exercised in practice. Full design and current status in
+  "Rollback design.md".
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
 - Do some styling to get away from the drear black and white.

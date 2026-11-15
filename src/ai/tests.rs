@@ -21,10 +21,7 @@ struct MockProviderState {
     requests: tokio::sync::mpsc::UnboundedSender<(String, String, String, Value)>,
 }
 
-async fn mock_provider(
-    State(state): State<MockProviderState>,
-    request: Request<Body>,
-) -> Response {
+async fn mock_provider(State(state): State<MockProviderState>, request: Request<Body>) -> Response {
     let path = request.uri().path().to_owned();
     let auth_header = if request.headers().contains_key("authorization") {
         "authorization"
@@ -117,7 +114,7 @@ impl Conversation {
     }
 
     fn build_prompt(&self, system_text: &str) -> Option<Prompt> {
-        build_prompt(&self.history, &self.pending_input, system_text)
+        build_prompt(&self.history, &self.pending_input, system_text, false)
     }
 }
 
@@ -214,6 +211,35 @@ fn ids_never_appear_in_the_prompt_text() {
 }
 
 #[test]
+fn a_rollback_note_is_prepended_and_counted() {
+    let mut conversation = Conversation::default();
+    conversation.push_user_message("question", Some(NotificationId(1)));
+    let without = build_prompt(
+        &conversation.history,
+        &conversation.pending_input,
+        DEFAULT_SYSTEM_TEXT,
+        false,
+    )
+    .unwrap();
+    let with = build_prompt(
+        &conversation.history,
+        &conversation.pending_input,
+        DEFAULT_SYSTEM_TEXT,
+        true,
+    )
+    .unwrap();
+
+    assert!(!without.included_rollback_note);
+    assert!(with.included_rollback_note);
+    assert!(with.content.contains("rolled back"));
+    assert_eq!(
+        with.content.len(),
+        without.content.len() + ROLLBACK_NOTE.len()
+    );
+    assert!(with.token_estimates.content_tokens > without.token_estimates.content_tokens);
+}
+
+#[test]
 fn no_comment_is_recognized_only_as_the_whole_answer() {
     assert!(is_no_comment("NO_COMMENT"));
     assert!(is_no_comment("  no_comment.\n"));
@@ -227,6 +253,7 @@ fn test_prompt(kind: PromptKind, content: &str) -> Prompt {
         content: content.to_owned(),
         included_inputs: 1,
         through: None,
+        included_rollback_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
     }
 }
@@ -385,6 +412,7 @@ async fn genai_dispatches_to_each_configured_protocol_and_url() {
         content: "Hello.".to_owned(),
         included_inputs: 1,
         through: None,
+        included_rollback_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
     };
     let responses = [
@@ -520,6 +548,7 @@ async fn anthropic_tool_results_share_one_message() {
         content: "Use tools.".to_owned(),
         included_inputs: 1,
         through: None,
+        included_rollback_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
     };
 
@@ -603,6 +632,7 @@ async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
         content: "Use a tool.".to_owned(),
         included_inputs: 1,
         through: None,
+        included_rollback_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
     };
 

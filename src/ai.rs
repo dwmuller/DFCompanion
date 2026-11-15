@@ -31,6 +31,7 @@ const REQUESTS_PREFIX: &str = "Player messages:\n";
 const PERIODIC_PROMPT: &str = "No player message. This is an automatic periodic check while the game runs. Use the read-only game-state tools if that helps you notice a problem or development the player should know about. Speak to the player only about something important and new; otherwise reply with exactly NO_COMMENT and nothing else.";
 const REPORT_PENDING_MSG: &str =
     "There are also one or more messages from the player queued which will be sent shortly.\n";
+const ROLLBACK_NOTE: &str = "Note: the conversation was just rolled back, and game time has advanced since the messages above. Some reports may have been missed; call get_recent_reports if you need to catch up.\n";
 
 pub fn is_no_comment(answer: &str) -> bool {
     answer
@@ -167,6 +168,10 @@ pub struct Prompt {
     /// always taken from the head of the queue, so this one id stands for every
     /// included input with a notification.
     pub through: Option<NotificationId>,
+    /// Whether this prompt carries the note that the conversation was rolled
+    /// back. The session clears its "note due" flag only when a turn that
+    /// included the note succeeds, so it is sent exactly once.
+    pub included_rollback_note: bool,
     token_estimates: AiPromptTokenEstimates,
 }
 
@@ -178,9 +183,13 @@ pub fn build_prompt(
     history: &History,
     pending_input: &VecDeque<AiInput>,
     system_text: &str,
+    rollback_note_due: bool,
 ) -> Option<Prompt> {
     let mut kind = PromptKind::UserRequest;
     let mut content = REQUESTS_PREFIX.to_string();
+    if rollback_note_due {
+        content.insert_str(0, ROLLBACK_NOTE);
+    }
     let system_text_tokens = estimate_token_count(system_text);
     let tools_tokens = tools_tokens_estimate();
     let history_tokens = history
@@ -190,7 +199,7 @@ pub fn build_prompt(
         .sum::<usize>();
     let content_tokens_limit =
         MAX_INPUT_TOKENS - system_text_tokens - history_tokens - tools_tokens;
-    let mut content_tokens: usize = estimate_token_count(REQUESTS_PREFIX);
+    let mut content_tokens: usize = estimate_token_count(&content);
 
     let requests = pending_input
         .iter()
@@ -218,6 +227,10 @@ pub fn build_prompt(
     if included_inputs == 0 {
         kind = PromptKind::Automated;
         content = PERIODIC_PROMPT.to_string();
+        if rollback_note_due {
+            content.insert_str(0, ROLLBACK_NOTE);
+        }
+        content_tokens = estimate_token_count(&content);
         if pending_input
             .iter()
             .any(|i| matches!(i, AiInput::UserRequest { .. }))
@@ -263,6 +276,7 @@ pub fn build_prompt(
         content,
         included_inputs,
         through,
+        included_rollback_note: rollback_note_due,
         token_estimates,
     });
 }

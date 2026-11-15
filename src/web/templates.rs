@@ -113,6 +113,7 @@ struct NotificationTemplate<'a> {
     body: &'a str,
     markdown: bool,
     input_state: Option<&'a str>,
+    rollback_eligible: bool,
 }
 
 /// An out-of-band replacement for the state badge of an already-rendered
@@ -127,8 +128,16 @@ struct NotificationStateTemplate<'a> {
 
 #[derive(Template)]
 #[template(path = "chat-sent.html")]
-struct ChatSentTemplate {
+struct ChatSentTemplate<'a> {
     oob: bool,
+    value: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "rollback-reply.html")]
+struct RollbackReplyTemplate<'a> {
+    oob: bool,
+    value: &'a str,
 }
 
 #[derive(Template)]
@@ -139,6 +148,7 @@ struct IndexTemplate<'a> {
     chat_state_message: &'static str,
     chat_state_blocked: bool,
     oob: bool,
+    value: &'a str,
     error: &'a str,
 }
 
@@ -218,7 +228,11 @@ struct ConfigurationFormErrorTemplate {
     error_message: String,
 }
 
-pub fn render_notification(id: u64, message: &DisplayMessage) -> Result<String, RenderError> {
+pub fn render_notification(
+    id: u64,
+    message: &DisplayMessage,
+    rollback_eligible: bool,
+) -> Result<String, RenderError> {
     let is_markdown = message.kind.is_markdown();
     let body = if is_markdown {
         markdown_to_safe_html(&message.text)
@@ -232,6 +246,7 @@ pub fn render_notification(id: u64, message: &DisplayMessage) -> Result<String, 
         body: &body,
         markdown: is_markdown,
         input_state: message.input_state.map(|state| state.key()),
+        rollback_eligible,
     }
     .render()?
     .trim()
@@ -275,7 +290,17 @@ fn markdown_to_safe_html(markdown: &str) -> String {
 /// The chat status line, plus an out-of-band replacement that empties the
 /// message box (setting `value` is the only way to clear what was typed).
 pub fn render_chat_sent() -> Result<String, RenderError> {
-    Ok(ChatSentTemplate { oob: true }.render()?)
+    Ok(ChatSentTemplate {
+        oob: true,
+        value: "",
+    }
+    .render()?)
+}
+
+/// The status line for a rollback, plus an out-of-band replacement of the
+/// message box with the combined dropped text and whatever was already typed.
+pub fn render_rollback_reply(value: &str) -> Result<String, RenderError> {
+    Ok(RollbackReplyTemplate { oob: true, value }.render()?)
 }
 
 /// Renders the main page with the configuration selector already in place.
@@ -291,6 +316,7 @@ pub fn render_index(
         chat_state_message,
         chat_state_blocked,
         oob: false,
+        value: "",
         error: "",
     }
     .render()?)
@@ -455,6 +481,7 @@ mod test {
         let rendered = render_notification(
             1,
             &DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**\nthere"),
+            false,
         )
         .expect("notification should render");
 
@@ -470,6 +497,7 @@ mod test {
         let rendered = render_notification(
             2,
             &DisplayMessage::new(DisplayMessageKind::User, "**Hello** & `code`\n- first"),
+            false,
         )
         .expect("notification should render");
 
@@ -489,6 +517,7 @@ mod test {
                 DisplayMessageKind::Companion,
                 "<script>alert(1)</script>\n\n![x](http://e/x.png) [a](https://example.com) <img src=x onerror=alert(1)>[b](javascript:alert(1))",
             ),
+            false,
         )
         .expect("notification should render");
 
@@ -574,7 +603,7 @@ mod test {
             (DisplayMessageKind::Diagnostic, "Diagnostic", "diagnostic"),
         ];
         for (kind, label, key) in cases {
-            let rendered = render_notification(4, &DisplayMessage::new(kind, "a < b"))
+            let rendered = render_notification(4, &DisplayMessage::new(kind, "a < b"), false)
                 .expect("notification should render");
             assert!(
                 rendered.contains(&format!("data-kind=\"{key}\"")),

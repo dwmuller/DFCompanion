@@ -26,7 +26,7 @@ use crate::{
     ai_providers::built_in_providers,
     app::CompanionApp,
     events::{GameEvent, QueueItem},
-    notifications::{DisplayMessage, DisplayMessageKind, HistoryEvent, InputState},
+    notifications::{DisplayMessage, DisplayMessageKind, HistoryEvent, InputState, NotificationId},
     web::templates::{render_configuration_form_error, ConfigurationListItem, RenderError},
 };
 
@@ -35,6 +35,12 @@ const HTTP_HOST: &str = "127.0.0.1:3000";
 
 #[derive(Deserialize)]
 struct ChatForm {
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct RollbackForm {
+    /// The current contents of the chat editor, from `hx-include`.
     message: String,
 }
 
@@ -102,6 +108,8 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
         .route("/chat-state", get(chat_state_events))
         .route("/conversation.md", get(copy_conversation))
         .route("/retry", post(retry))
+        .route("/rollback/:id", post(rollback))
+        .route("/rollback-floor-events", get(rollback_floor_events))
         .route(
             "/fragments/ai-configurations",
             get(configuration_list_fragment),
@@ -803,8 +811,22 @@ async fn stylesheet() -> impl IntoResponse {
 /// `live` is false while replaying history, so replays never beep. The SSE
 /// event id is `epoch:id`, so a reconnecting browser's `Last-Event-ID` always
 /// names both the entry and the log generation it came from.
-fn notification_events(epoch: u64, id: u64, message: &DisplayMessage, live: bool) -> Vec<Event> {
-    let html = match templates::render_notification(id, message) {
+/// Whether a notification should offer a rollback button: only user inputs at
+/// or after the rollback floor are still eligible.
+fn rollback_eligible(message: &DisplayMessage, id: u64, floor: Option<NotificationId>) -> bool {
+    message.kind == DisplayMessageKind::User
+        && message.input_state.is_some()
+        && floor.is_some_and(|floor| id >= floor.0)
+}
+
+fn notification_events(
+    epoch: u64,
+    id: u64,
+    message: &DisplayMessage,
+    live: bool,
+    rollback_eligible: bool,
+) -> Vec<Event> {
+    let html = match templates::render_notification(id, message, rollback_eligible) {
         Ok(html) => html,
         Err(error) => {
             eprintln!("Could not render notification: {error}");
@@ -878,6 +900,7 @@ async fn events(
     let subscription = app.history.subscribe_from(cursor);
     let epoch = subscription.epoch;
 
+    let floor = app.rollback_floor();
     let mut backlog_events: Vec<Result<Event, Infallible>> = Vec::new();
     if subscription.reset {
         // The browser's remembered ids no longer exist: tell it to drop
@@ -888,7 +911,10 @@ async fn events(
         subscription
             .backlog
             .into_iter()
-            .flat_map(|(id, message)| notification_events(epoch, id, &message, false))
+            .flat_map(|(id, message)| {
+                let eligible = rollback_eligible(&message, id, floor);
+                notification_events(epoch, id, &message, false, eligible)
+            })
             .map(Ok),
     );
     let backlog = tokio_stream::iter(backlog_events);
@@ -896,15 +922,27 @@ async fn events(
     // Tracks the epoch across the live stream, since a `Reset` partway
     // through changes which epoch subsequent `Added` ids belong to.
     let epoch_cell = std::cell::Cell::new(epoch);
+    let live_app = app.clone();
     let live = BroadcastStream::new(subscription.receiver).flat_map(move |notification| {
         let events = match notification {
             Ok(HistoryEvent::Added(id, message)) => {
-                notification_events(epoch_cell.get(), id, &message, true)
+                let eligible = rollback_eligible(&message, id, live_app.rollback_floor());
+                notification_events(epoch_cell.get(), id, &message, true, eligible)
             }
             Ok(HistoryEvent::StateChanged(id, state)) => state_change_events(id, state),
             Ok(HistoryEvent::Reset(new_epoch)) => {
                 epoch_cell.set(new_epoch);
-                vec![Event::default().event("reset").data("")]
+                // A truncation removed the tail of the log, not all of it. Tell
+                // the browser to drop what it has, then resend the surviving
+                // backlog so it can rebuild.
+                let floor = live_app.rollback_floor();
+                let mut events = vec![Event::default().event("reset").data("")];
+                let (backlog, _) = live_app.history.subscribe(None);
+                events.extend(backlog.into_iter().flat_map(|(id, message)| {
+                    let eligible = rollback_eligible(&message, id, floor);
+                    notification_events(new_epoch, id, &message, false, eligible)
+                }));
+                events
             }
             Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(count)) => {
                 vec![Event::default().data(
@@ -916,6 +954,7 @@ async fn events(
                                 "{count} UI notifications were missed while the browser was disconnected."
                             ),
                         ),
+                        false,
                     )
                     .unwrap_or_default(),
                 )]
@@ -1026,6 +1065,51 @@ async fn retry(State(app): State<Arc<CompanionApp>>, headers: HeaderMap) -> Resp
         Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
         Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
     }
+}
+
+/// Handles POST requests to roll the conversation back to before one input.
+/// The current editor text is included so dropped user requests can be put
+/// ahead of it.
+async fn rollback(
+    State(app): State<Arc<CompanionApp>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+    Form(form): Form<RollbackForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    match app.rollback(NotificationId(id), form.message) {
+        Ok(combined) => fragment_response(
+            StatusCode::OK,
+            templates::render_rollback_reply(&combined),
+            "rollback reply",
+        ),
+        Err(error) => (StatusCode::CONFLICT, error).into_response(),
+    }
+}
+
+/// Streams the rollback floor as it changes, so the page can drop Rollback
+/// buttons that are no longer eligible. Named `rollback-floor` events carry
+/// the floor's id, or nothing when there is no floor.
+async fn rollback_floor_events(
+    State(app): State<Arc<CompanionApp>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream = futures_util::stream::unfold(
+        (app.subscribe_rollback_floor(), true),
+        |(mut receiver, initial)| async move {
+            if !initial && receiver.changed().await.is_err() {
+                return None;
+            }
+            let floor = *receiver.borrow_and_update();
+            let data = floor.map(|id| id.0.to_string()).unwrap_or_default();
+            Some((
+                Ok(Event::default().event("rollback-floor").data(data)),
+                (receiver, false),
+            ))
+        },
+    );
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn validate_local_request(request: Request<Body>, next: Next) -> Response {
@@ -1256,12 +1340,61 @@ mod test {
     fn replay_and_live_messages_render_identically_and_only_live_beeps() {
         let message =
             DisplayMessage::new(DisplayMessageKind::Companion, "**Hello**").with_beep(true);
-        let replay = notification_events(0, 7, &message, false);
-        let live = notification_events(0, 7, &message, true);
+        let replay = notification_events(0, 7, &message, false, false);
+        let live = notification_events(0, 7, &message, true, false);
 
         assert_eq!(replay.len(), 1);
         assert_eq!(live.len(), 2);
         assert_eq!(format!("{:?}", replay[0]), format!("{:?}", live[0]));
+    }
+
+    #[test]
+    fn only_eligible_user_inputs_offer_a_rollback_button() {
+        let input = DisplayMessage::new(DisplayMessageKind::User, "hello")
+            .with_input_state(InputState::Pending);
+        assert!(rollback_eligible(&input, 5, Some(NotificationId(5))));
+        assert!(rollback_eligible(&input, 6, Some(NotificationId(5))));
+        assert!(!rollback_eligible(&input, 4, Some(NotificationId(5))));
+        assert!(!rollback_eligible(&input, 5, None));
+        let companion = DisplayMessage::new(DisplayMessageKind::Companion, "hi");
+        assert!(!rollback_eligible(&companion, 5, Some(NotificationId(5))));
+    }
+
+    #[test]
+    fn an_eligible_notification_renders_a_rollback_button_and_an_ineligible_one_does_not() {
+        let message = DisplayMessage::new(DisplayMessageKind::User, "hello")
+            .with_input_state(InputState::Done);
+        let eligible = templates::render_notification(1, &message, true).unwrap();
+        assert!(eligible.contains("rollback-form"));
+        assert!(eligible.contains("/rollback/1"));
+        // `novalidate` stops htmx from validating the (possibly empty) required
+        // editor it includes, which would abort the request.
+        assert!(eligible.contains("novalidate"));
+        let ineligible = templates::render_notification(1, &message, false).unwrap();
+        assert!(!ineligible.contains("rollback-form"));
+    }
+
+    #[tokio::test]
+    async fn rollback_floor_events_streams_the_floor_as_a_named_event() {
+        let (app, _queue_rx) = CompanionApp::new();
+        let response = router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/rollback-floor-events")
+                    .header(header::HOST, HTTP_HOST)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.into_body().into_data_stream();
+        let chunk = tokio::time::timeout(std::time::Duration::from_millis(500), stream.next())
+            .await
+            .expect("the initial floor should be sent")
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&chunk).contains("event: rollback-floor"));
     }
 
     async fn get_events_body(app: &Arc<CompanionApp>, last_event_id: Option<&str>) -> String {

@@ -36,6 +36,18 @@ document.addEventListener("reset", () => {
   notifications.replaceChildren();
 });
 
+// The server pushes the rollback floor whenever it changes. Any Rollback
+// button for a message that has fallen below it is no longer eligible and is
+// removed outright; an empty payload means nothing is eligible at all.
+document.addEventListener("rollback-floor", (event) => {
+  const floor = event.detail.data === "" ? null : Number(event.detail.data);
+  for (const form of notifications.querySelectorAll(".rollback-form")) {
+    if (floor === null || Number(form.dataset.id) < floor) {
+      form.remove();
+    }
+  }
+});
+
 function beep() {
   try {
     const context = new AudioContext();

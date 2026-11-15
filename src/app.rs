@@ -160,6 +160,13 @@ impl CompanionApp {
             Effect::PublishRollbackFloor(floor) => {
                 self.rollback_floor.send_replace(floor);
             }
+            Effect::TruncateLog(from) => {
+                self.history.truncate_from(from);
+            }
+            // Rollback reads this out of the effect list itself, in
+            // [`Self::rollback`], before the rest reach here. This arm keeps
+            // the match exhaustive.
+            Effect::ReplyEditorText(_) => {}
             Effect::StartTurn {
                 turn_id,
                 configuration,
@@ -355,6 +362,33 @@ impl CompanionApp {
         self.dispatch_with(session::Event::Resume, |session| {
             session.chat_state() == ChatState::Blocked
         })
+    }
+
+    /// Rolls the AI conversation back to just before the turn containing
+    /// `target`, truncating the notification log at the same point. Returns the
+    /// combined editor text (dropped user requests ahead of `editor_text`), or
+    /// an error if `target` is no longer eligible. See [`session::Event::Rollback`].
+    pub fn rollback(
+        self: &Arc<Self>,
+        target: NotificationId,
+        editor_text: String,
+    ) -> Result<String, String> {
+        let mut reply = None;
+        let mut session = self.session.lock().unwrap();
+        let effects = session.handle(
+            &self.session_context(),
+            session::Event::Rollback {
+                target,
+                editor_text,
+            },
+        );
+        for effect in effects {
+            match effect {
+                Effect::ReplyEditorText(result) => reply = Some(result),
+                other => self.perform(other),
+            }
+        }
+        reply.unwrap_or_else(|| Err("Rollback failed.".to_owned()))
     }
 
     /// Classifies a chat message as an ordinary user message or a slash

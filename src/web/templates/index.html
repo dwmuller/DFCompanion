@@ -81,6 +81,7 @@
       <div id="chat-state" role="status" aria-live="polite" hx-sse:connect="/chat-state" hx-swap="innerHTML">
         {% include "chat-state-content.html" %}
       </div>
+      <div id="rollback-floor" hidden hx-sse:connect="/rollback-floor-events" hx-swap="none"></div>
     </div>
     <form id="chat-form"
         hx-post="/chat"
@@ -98,5 +99,6 @@
       <button id="retry-button" type="submit">Retry failed AI request</button>
       <span id="retry-status" role="status"></span>
     </form>
+    <span id="rollback-status" role="status" aria-live="polite"></span>
   </body>
 </html>

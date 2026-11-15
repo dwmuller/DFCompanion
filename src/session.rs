@@ -26,6 +26,8 @@ use crate::{
 pub const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 /// How long a game event may wait before the AI gets a turn that includes it.
 pub const EVENT_FLUSH_DELAY: Duration = Duration::from_secs(5);
+/// How many completed turns are kept as rollback checkpoints.
+const MAX_TURN_RECORDS: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChatState {
@@ -85,6 +87,17 @@ pub enum Event {
     CancelTurn,
     /// The player asked to resume after processing was blocked.
     Resume,
+    /// Roll the conversation back to just before the turn containing `target`.
+    /// The AI's history is restored to what it was before that turn, every
+    /// input from that turn onward (user requests and game reports, processed or
+    /// still queued) is dropped, and the log is truncated at the turn's first
+    /// notification. The text of the dropped user requests is prepended to
+    /// `editor_text` in the reply. `target` is the notification id of a user
+    /// input; if it is no longer eligible, the reply is an error.
+    Rollback {
+        target: NotificationId,
+        editor_text: String,
+    },
 }
 
 #[derive(Debug)]
@@ -117,6 +130,11 @@ pub enum Effect {
     /// Show the rollback floor to the player: the id of the oldest
     /// notification still eligible for a rollback, if any.
     PublishRollbackFloor(Option<NotificationId>),
+    /// Remove every log entry at or after this id. Irrecoverable.
+    TruncateLog(NotificationId),
+    /// Show the combined editor text in the reply to a rollback, or an error
+    /// if the rollback could not be performed (for example, a stale target).
+    ReplyEditorText(Result<String, String>),
 }
 
 struct InFlight {
@@ -127,12 +145,39 @@ struct InFlight {
     cancel: CancellationToken,
 }
 
+/// A completed turn, retained so its inputs' user text can be recovered if the
+/// conversation is rolled back to before it.
+struct TurnRecord {
+    inputs: Vec<AiInput>,
+    history_before: History,
+}
+
+impl TurnRecord {
+    /// Whether this turn included the input with notification id `id`.
+    fn contains(&self, id: NotificationId) -> bool {
+        self.inputs
+            .iter()
+            .any(|input| input.notification_id() == Some(id))
+    }
+
+    /// The first notification id among this turn's inputs, if any.
+    fn first_notification(&self) -> Option<NotificationId> {
+        self.inputs.iter().find_map(AiInput::notification_id)
+    }
+}
+
 pub struct Session {
     /// Inputs for the AI, oldest first.
     queue: VecDeque<AiInput>,
     history: History,
+    /// Completed turns, oldest first, for rollback. At most
+    /// [`MAX_TURN_RECORDS`].
+    records: VecDeque<TurnRecord>,
     in_flight: Option<InFlight>,
     blocked: bool,
+    /// Whether the next turn should carry the "the conversation was rolled
+    /// back" note. Cleared once a turn that included it succeeds.
+    rolled_back_note_due: bool,
     next_turn_id: u64,
     flush_at: Option<Instant>,
     next_check: Instant,
@@ -154,8 +199,10 @@ impl Session {
         Self {
             queue: VecDeque::new(),
             history: History::default(),
+            records: VecDeque::new(),
             in_flight: None,
             blocked: false,
+            rolled_back_note_due: false,
             next_turn_id: 0,
             flush_at: None,
             next_check: now + PERIODIC_CHECK_INTERVAL,
@@ -208,14 +255,15 @@ impl Session {
         self.queue.iter().rev().find_map(AiInput::notification_id)
     }
 
-    /// The id of the oldest notification still eligible for a rollback:
-    /// everything from here on is still queued (Pending or, if in flight,
-    /// Processing), so no history has been committed past it and no turn has
-    /// completed. `None` once nothing is queued, since without checkpoints
-    /// (added in a later stage) there is nothing earlier left to roll back
-    /// to.
+    /// The id of the oldest notification still eligible for a rollback: the
+    /// first notification covered by a retained checkpoint, or, if no
+    /// completed turn has a notification yet, the first still-queued input.
+    /// `None` when there is nothing eligible to roll back to.
     pub fn rollback_floor(&self) -> Option<NotificationId> {
-        self.queue.iter().find_map(AiInput::notification_id)
+        self.records
+            .iter()
+            .find_map(TurnRecord::first_notification)
+            .or_else(|| self.queue.iter().find_map(AiInput::notification_id))
     }
 
     /// Handles an event and returns what the caller has to do about it, in order.
@@ -293,6 +341,12 @@ impl Session {
             Event::Resume => {
                 self.blocked = false;
             }
+            Event::Rollback {
+                target,
+                editor_text,
+            } => {
+                self.rollback(context, target, editor_text, effects);
+            }
         }
     }
 }
@@ -323,8 +377,12 @@ impl Session {
                 return;
             }
         };
-        let Some(prompt) = build_prompt(&self.history, &self.queue, &configuration.system_text)
-        else {
+        let Some(prompt) = build_prompt(
+            &self.history,
+            &self.queue,
+            &configuration.system_text,
+            self.rolled_back_note_due,
+        ) else {
             return;
         };
         let turn_id = self.next_turn_id;
@@ -379,8 +437,18 @@ impl Session {
                 usage,
             }) => {
                 let is_user_interaction = prompt.kind.is_user_interaction();
-                self.queue.drain(..prompt.included_inputs);
-                self.history = history;
+                let inputs = self.queue.drain(..prompt.included_inputs).collect();
+                let history_before = std::mem::replace(&mut self.history, history);
+                self.records.push_back(TurnRecord {
+                    inputs,
+                    history_before,
+                });
+                while self.records.len() > MAX_TURN_RECORDS {
+                    self.records.pop_front();
+                }
+                if prompt.included_rollback_note {
+                    self.rolled_back_note_due = false;
+                }
                 if is_user_interaction || !is_no_comment(&answer) {
                     effects.push(Effect::Notify(
                         DisplayMessage::new(DisplayMessageKind::Companion, answer)
@@ -404,6 +472,114 @@ impl Session {
                 effects.extend(finish_inputs(InputState::Pending));
             }
         }
+    }
+
+    /// Rolls the conversation back to just before the turn containing
+    /// `target`. See [`Event::Rollback`].
+    fn rollback(
+        &mut self,
+        context: &Context,
+        target: NotificationId,
+        editor_text: String,
+        effects: &mut Vec<Effect>,
+    ) {
+        // The inputs to drop, and the id to truncate the log from. `None` when
+        // the target is not eligible.
+        let dropped: Option<(Option<NotificationId>, Vec<AiInput>)> = if let Some(index) = self
+            .records
+            .iter()
+            .position(|record| record.contains(target))
+        {
+            // The target is in a completed turn: restore history to before it
+            // and drop it and everything newer, committing nothing new. Any
+            // turn in flight postdates it and is cancelled.
+            if let Some(in_flight) = self.in_flight.take() {
+                in_flight.cancel.cancel();
+            }
+            let dropped_records = self.records.split_off(index);
+            self.history = dropped_records[0].history_before.clone();
+            let mut inputs: Vec<AiInput> = dropped_records
+                .iter()
+                .flat_map(|record| record.inputs.iter().cloned())
+                .collect();
+            inputs.extend(self.queue.drain(..));
+            Some((dropped_records[0].first_notification(), inputs))
+        } else if let Some(position) = self
+            .queue
+            .iter()
+            .position(|input| input.notification_id() == Some(target))
+        {
+            // The target is still queued. History is untouched. If it is part
+            // of the batch in flight, that turn is cancelled and the whole
+            // queue goes; otherwise the turn in flight is left alone.
+            let in_flight_batch = self
+                .in_flight
+                .as_ref()
+                .is_some_and(|f| position < f.prompt.included_inputs);
+            let cut = if in_flight_batch {
+                if let Some(in_flight) = self.in_flight.take() {
+                    in_flight.cancel.cancel();
+                }
+                0
+            } else {
+                position
+            };
+            let inputs: Vec<AiInput> = self.queue.split_off(cut).into_iter().collect();
+            let first_notification = inputs.iter().find_map(AiInput::notification_id);
+            Some((first_notification, inputs))
+        } else {
+            None
+        };
+
+        let Some((first_notification, inputs)) = dropped else {
+            effects.push(Effect::ReplyEditorText(Err(
+                "This message is too old to roll back, or has already been rolled back.".to_owned(),
+            )));
+            return;
+        };
+
+        if let Some(from) = first_notification {
+            effects.push(Effect::TruncateLog(from));
+        }
+        effects.push(Effect::ReplyEditorText(Ok(combine_editor_text(
+            &inputs,
+            &editor_text,
+        ))));
+        effects.push(Effect::Notify(DisplayMessage::new(
+            DisplayMessageKind::Status,
+            "Conversation rolled back. This cannot be undone.",
+        )));
+        self.rolled_back_note_due = true;
+        self.blocked = false;
+        if !self
+            .queue
+            .iter()
+            .any(|input| matches!(input, AiInput::GameReport { .. }))
+        {
+            self.flush_at = None;
+        }
+        if !self.queue.is_empty() {
+            self.try_start_turn(context, effects);
+        }
+    }
+}
+
+/// The text of the dropped user requests, in order, ahead of `editor_text`,
+/// separated by two blank lines. Hidden inputs (those with no notification) are
+/// not recovered.
+fn combine_editor_text(inputs: &[AiInput], editor_text: &str) -> String {
+    let dropped = inputs
+        .iter()
+        .filter_map(|input| match input {
+            AiInput::UserRequest { text, id: Some(_) } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n\n");
+    match (dropped.is_empty(), editor_text.is_empty()) {
+        (true, _) => editor_text.to_owned(),
+        (false, true) => dropped,
+        (false, false) => format!("{dropped}\n\n\n{editor_text}"),
     }
 }
 

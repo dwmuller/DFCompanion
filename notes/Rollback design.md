@@ -1,9 +1,12 @@
 # Rollback design
 
-Status: design agreed. Staging steps 1 (`History` newtype, functional
-`run_turn`), 2 (`Session` and the effect interpreter) and 3 (log epochs,
-`truncate_from`, state-change broadcast, `rollback_floor`) are implemented;
-step 4 is not started. Replaces the old "Recall" items in TODO.md.
+Status: design agreed and implemented. All four staging steps are done: 1
+(`History` newtype, functional `run_turn`), 2 (`Session` and the effect
+interpreter), 3 (log epochs, `truncate_from`, state-change broadcast,
+`rollback_floor`), and 4 (checkpoints, the `Rollback` event and route, the
+button, editor prefill and confirmation). The old retry control is still
+present; removing it is a follow-up. Replaces the old "Recall" items in
+TODO.md.
 
 ## Goal
 
@@ -143,35 +146,37 @@ Rules:
   and nothing may assume contiguity (the 500-entry trim already breaks it). No
   caller yet: `Rollback` handling in step 4 is the first one.
 - DONE. An `epoch` counter increments on each truncation. SSE event ids become
-  `epoch:id`. A reconnecting client with a stale epoch gets a `reset`, and live
-  clients receive the same `reset`, which makes the page reload the whole
-  Conversation control (`NotificationHistory::subscribe_from`, the `/events`
-  handler, and the `reset` listener in `app.js`). No consumer handles partial
+  `epoch:id`. A reconnecting client with a stale epoch gets a `reset`; a
+  connected client gets the same `reset` when a truncation happens live. The
+  `reset` listener in `app.js` clears the Conversation control, and the
+  `/events` handler then replays the surviving backlog, so the page rebuilds
+  from the server rather than guessing what was revoked
+  (`NotificationHistory::subscribe_from`). No consumer handles partial
   revocation.
 - DONE. State changes of existing messages (Pending, Processing, Done) are
   broadcast as `HistoryEvent::StateChanged` and rendered as an out-of-band swap
   of a state badge keyed by a stable DOM id (`notif-state-{id}`), closing the
   "broadcast state changes" TODO item.
-- DONE, pending step 4's checkpoints. Eligibility is one watermark,
-  `Session::rollback_floor`: currently the first notification id still queued
-  (Pending or Processing), since without checkpoints nothing earlier is
-  retained. Once step 4 adds checkpoints, the floor should move earlier to the
-  first one covered by a retained checkpoint. The worker publishes it
-  (`CompanionApp::subscribe_rollback_floor`); no UI reads it yet. When a
-  checkpoint is evicted the floor moves, which is another publish. This avoids
-  a per-message state. Revisit if the UI needs to render "too old to roll
-  back" differently from "never had a button".
+- DONE. Eligibility is one watermark, `Session::rollback_floor`: the first
+  notification covered by a retained checkpoint, or, before any turn has
+  completed, the first still-queued input. When a checkpoint is evicted the
+  floor moves, which is another publish. The worker publishes it
+  (`CompanionApp::subscribe_rollback_floor`) and the page reads it over SSE
+  (`/rollback-floor-events`), removing the Rollback button of any message that
+  falls below it. This avoids a per-message state.
 
 ### Web layer
 
-- `POST /rollback/{id}` with `hx-include` of the editor. The reply is the
-  textarea for an `outerHTML` swap; the log reset arrives via SSE. Same
-  cross-origin check as `/retry`.
-- The confirmation says what is lost: N messages, M game reports, the AI's
-  replies, and that the game is not rolled back. A plain `hx-confirm` is enough
-  to start; a server-rendered `<dialog>` can show counts later.
-- Hover text on the button explains it in one sentence.
-- `/retry` and `QueueItem::AiRetry` are removed when this lands.
+- DONE. `POST /rollback/{id}` takes the editor text with `hx-include` and uses
+  the same cross-origin check as `/retry`. On success the reply is the textarea
+  swapped out of band with the combined text; on a stale target it is plain
+  text. Eligible inputs render a Rollback button with a one-sentence hover
+  title and an `hx-confirm`; the confirmation says the replies and reports
+  after the point are lost and cannot be recovered, and that the game is not
+  rolled back. It deliberately does not show counts; a server-rendered
+  `<dialog>` can add them later.
+- The old `/retry` control and `QueueItem::AiRetry` are deliberately left in
+  place; removing them is a follow-up once Rollback has been used.
 
 ## Staging
 
@@ -183,7 +188,13 @@ Rules:
 3. DONE. Log epochs, `truncate_from`, state-change broadcast, `rollback_floor`.
    `NotificationHistory::truncate_from` and `Session::rollback_floor` have no
    caller yet; both are built and tested as infrastructure for step 4.
-4. Checkpoints, `Rollback` event, route, button, editor prefill, confirmation.
+4. DONE. Checkpoints (`TurnRecord`s, 50 retained, `rolled_back_note_due`),
+   the `Rollback` event and its `TruncateLog`/`ReplyEditorText` effects, the
+   `POST /rollback/{id}` route, the button and its confirmation, the editor
+   prefill, and the rollback-floor SSE stream that removes stale buttons. The
+   removed-turn text is recovered into the editor in order, ahead of whatever
+   was already there. `/retry` and `QueueItem::AiRetry` were deliberately left
+   in place and are removed in a follow-up.
 
 Steps 1-3 are worthwhile even without step 4. `Session` already handles
 `CancelTurn` and `Resume`, which step 4 builds on.

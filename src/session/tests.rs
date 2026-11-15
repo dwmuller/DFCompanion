@@ -541,7 +541,7 @@ fn the_rollback_floor_moves_to_processing_inputs_while_a_turn_is_in_flight() {
 }
 
 #[test]
-fn the_rollback_floor_advances_past_inputs_a_turn_commits() {
+fn the_rollback_floor_stays_on_a_committed_turns_inputs() {
     let now = Instant::now();
     let mut session = Session::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
@@ -552,8 +552,10 @@ fn the_rollback_floor_advances_past_inputs_a_turn_commits() {
         finished(turn_id, answer(&history, &prompt, "hi")),
     );
 
-    assert_eq!(session.rollback_floor(), None);
-    assert_eq!(published_floors(&effects), vec![None]);
+    // The turn is now a checkpoint, so its input is still eligible.
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+    // The floor did not change, so it is not published again.
+    assert!(published_floors(&effects).is_empty());
 }
 
 #[test]
@@ -572,4 +574,185 @@ fn the_rollback_floor_returns_to_a_failed_turns_inputs() {
 
     assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
     assert!(published_floors(&effects).is_empty());
+}
+
+fn editor_reply(effects: &[Effect]) -> Option<Result<String, String>> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::ReplyEditorText(result) => Some(result.clone()),
+        _ => None,
+    })
+}
+
+fn truncated_from(effects: &[Effect]) -> Option<NotificationId> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::TruncateLog(id) => Some(*id),
+        _ => None,
+    })
+}
+
+fn rollback(target: u64, editor_text: &str) -> Event {
+    Event::Rollback {
+        target: NotificationId(target),
+        editor_text: editor_text.to_owned(),
+    }
+}
+
+#[test]
+fn rolling_back_to_a_committed_turn_restores_its_history_and_drops_later_work() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("one", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "a")),
+    );
+
+    let effects = session.handle(&context(now), user("two", 2));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "b")),
+    );
+    assert_eq!(session.history().len(), 4);
+
+    let effects = session.handle(&context(now), rollback(1, "typed"));
+
+    // History is back to before the first turn; both dropped requests are
+    // recovered in order, ahead of what was already typed.
+    assert_eq!(session.history().len(), 0);
+    assert_eq!(truncated_from(&effects), Some(NotificationId(1)));
+    assert_eq!(
+        editor_reply(&effects),
+        Some(Ok("one\n\n\ntwo\n\n\ntyped".to_owned()))
+    );
+    assert_eq!(notified(&effects, DisplayMessageKind::Status).len(), 1);
+    assert_eq!(session.rollback_floor(), None);
+}
+
+#[test]
+fn rolling_back_into_the_in_flight_batch_cancels_the_turn_and_drops_the_queue() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("one", 1));
+    let (_, _, _, cancel) = started_turn(&effects).unwrap();
+    session.handle(&context(now), game_report("report", 2));
+    session.handle(&context(now), user("three", 3));
+
+    let effects = session.handle(&context(now), rollback(1, ""));
+
+    assert!(cancel.is_cancelled());
+    assert_eq!(truncated_from(&effects), Some(NotificationId(1)));
+    // Reports are not recovered; only the dropped requests appear.
+    assert_eq!(
+        editor_reply(&effects),
+        Some(Ok("one\n\n\nthree".to_owned()))
+    );
+    assert_eq!(session.chat_state(), ChatState::Idle);
+    assert_eq!(session.pending_user_message_count(), 0);
+    assert_eq!(session.pending_report_count(), 0);
+}
+
+#[test]
+fn rolling_back_to_a_queued_input_leaves_the_in_flight_turn_alone() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("one", 1));
+    let (_, _, _, cancel) = started_turn(&effects).unwrap();
+    session.handle(&context(now), user("two", 2));
+
+    let effects = session.handle(&context(now), rollback(2, "typed"));
+
+    assert!(!cancel.is_cancelled());
+    assert_eq!(session.chat_state(), ChatState::Processing);
+    assert_eq!(truncated_from(&effects), Some(NotificationId(2)));
+    assert_eq!(
+        editor_reply(&effects),
+        Some(Ok("two\n\n\ntyped".to_owned()))
+    );
+    // The in-flight input is untouched and is still the floor.
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+    assert_eq!(session.pending_user_message_count(), 1);
+}
+
+#[test]
+fn rolling_back_to_an_ineligible_target_errors_without_changing_anything() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("one", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "a")),
+    );
+
+    let effects = session.handle(&context(now), rollback(999, "typed"));
+
+    assert!(matches!(editor_reply(&effects), Some(Err(_))));
+    assert!(truncated_from(&effects).is_none());
+    assert_eq!(session.history().len(), 2);
+    assert_eq!(session.rollback_floor(), Some(NotificationId(1)));
+}
+
+#[test]
+fn rolling_back_clears_a_block() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let mut context = context(now);
+    context.configuration = Ok(None);
+    session.handle(&context, user("one", 1));
+    assert_eq!(session.chat_state(), ChatState::Blocked);
+
+    let effects = session.handle(&context, rollback(1, ""));
+
+    assert_eq!(session.chat_state(), ChatState::Idle);
+    assert_eq!(truncated_from(&effects), Some(NotificationId(1)));
+    assert_eq!(editor_reply(&effects), Some(Ok("one".to_owned())));
+}
+
+#[test]
+fn a_rollback_note_is_sent_once_on_the_next_turn() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    let effects = session.handle(&context(now), user("one", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "a")),
+    );
+    session.handle(&context(now), rollback(1, ""));
+
+    // The first turn after the rollback carries the note.
+    let effects = session.handle(&context(now), user("two", 2));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    assert!(prompt.included_rollback_note);
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "b")),
+    );
+
+    // The next one does not.
+    let effects = session.handle(&context(now), user("three", 3));
+    let (_, prompt, _, _) = started_turn(&effects).unwrap();
+    assert!(!prompt.included_rollback_note);
+}
+
+#[test]
+fn only_the_newest_fifty_turns_can_be_rolled_back() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    for id in 1..=MAX_TURN_RECORDS as u64 + 1 {
+        let effects = session.handle(&context(now), user(&format!("m{id}"), id));
+        let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+        session.handle(
+            &context(now),
+            finished(turn_id, answer(&history, &prompt, "ok")),
+        );
+    }
+
+    // The oldest turn was evicted, so the floor moved to the second oldest and
+    // the first input is no longer eligible.
+    assert_eq!(session.rollback_floor(), Some(NotificationId(2)));
+    let effects = session.handle(&context(now), rollback(1, ""));
+    assert!(matches!(editor_reply(&effects), Some(Err(_))));
 }

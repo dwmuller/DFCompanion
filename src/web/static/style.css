@@ -72,6 +72,19 @@ body {
   content: "Done";
 }
 
+/* A small button on user inputs that rolls the conversation back to just
+   before them. Removed from the DOM by app.js once it is too old. */
+.rollback-form {
+  float: right;
+  margin: 0;
+}
+
+.rollback-form button {
+  font-size: 0.75rem;
+  margin: 0;
+  padding: 0.05rem 0.5rem;
+}
+
 /* Compact Markdown: tight margins within each conversation entry. */
 .markdown-body {
   max-width: 100%;
