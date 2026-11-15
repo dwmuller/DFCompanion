@@ -4,8 +4,8 @@ Status: design agreed and implemented. All four staging steps are done: 1
 (`History` newtype, functional `run_turn`), 2 (`Session` and the effect
 interpreter), 3 (log epochs, `truncate_from`, state-change broadcast,
 `rollback_floor`), and 4 (checkpoints, the `Rollback` event and route, the
-button, editor prefill and confirmation). The old retry control is still
-present; removing it is a follow-up. Replaces the old "Recall" items in
+button, editor prefill and confirmation). The old retry control and its
+supporting machinery have been removed. Replaces the old "Recall" items in
 TODO.md.
 
 ## Goal
@@ -168,15 +168,15 @@ Rules:
 ### Web layer
 
 - DONE. `POST /rollback/{id}` takes the editor text with `hx-include` and uses
-  the same cross-origin check as `/retry`. On success the reply is the textarea
+  the same cross-origin check as the other mutating routes. On success the reply is the textarea
   swapped out of band with the combined text; on a stale target it is plain
   text. Eligible inputs render a Rollback button with a one-sentence hover
   title and an `hx-confirm`; the confirmation says the replies and reports
   after the point are lost and cannot be recovered, and that the game is not
   rolled back. It deliberately does not show counts; a server-rendered
   `<dialog>` can add them later.
-- The old `/retry` control and `QueueItem::AiRetry` are deliberately left in
-  place; removing them is a follow-up once Rollback has been used.
+- The old `/retry` control, its route and `QueueItem::AiRetry` have been
+  removed; Rollback supersedes them.
 
 ## Staging
 
@@ -193,8 +193,7 @@ Rules:
    `POST /rollback/{id}` route, the button and its confirmation, the editor
    prefill, and the rollback-floor SSE stream that removes stale buttons. The
    removed-turn text is recovered into the editor in order, ahead of whatever
-   was already there. `/retry` and `QueueItem::AiRetry` were deliberately left
-   in place and are removed in a follow-up.
+      was already there. `/retry` and `QueueItem::AiRetry` were removed.
 
 Steps 1-3 are worthwhile even without step 4. `Session` already handles
 `CancelTurn` and `Resume`, which step 4 builds on.

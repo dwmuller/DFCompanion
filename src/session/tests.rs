@@ -221,12 +221,13 @@ fn nothing_starts_while_blocked_until_resumed() {
 
     let effects = session.handle(&context(now), Event::Resume);
     assert_eq!(published(&effects), vec![ChatState::Idle]);
-    // Resuming alone sends nothing; the next input or a retry does.
+    // Resuming alone sends nothing; the next input does, and it carries every
+    // request retained during the block.
     assert!(started_turn(&effects).is_none());
 
-    let effects = session.handle(&context(now), Event::Retry);
-    let (_, prompt, ..) = started_turn(&effects).expect("retry sends the queue");
-    assert_eq!(prompt.included_inputs, 2);
+    let effects = session.handle(&context(now), user("third", 3));
+    let (_, prompt, ..) = started_turn(&effects).expect("the next input sends the queue");
+    assert_eq!(prompt.included_inputs, 3);
 }
 
 #[test]
@@ -469,18 +470,6 @@ fn an_automatic_answer_is_shown_with_a_beep_and_remembered() {
         .collect();
     assert_eq!(beeps, vec![true]);
     assert_eq!(session.history().len(), 2);
-}
-
-#[test]
-fn retrying_with_no_failed_request_says_so() {
-    let now = Instant::now();
-    let mut session = Session::new(now);
-    let effects = session.handle(&context(now), Event::Retry);
-    assert_eq!(
-        notified(&effects, DisplayMessageKind::Status),
-        vec!["There is no failed AI request to retry."]
-    );
-    assert!(started_turn(&effects).is_none());
 }
 
 #[test]

@@ -69,8 +69,6 @@ pub enum Event {
         event: GameEvent,
         id: Option<NotificationId>,
     },
-    /// The player asked to try again.
-    Retry,
     /// The time to flush game reports arrived. See [`Session::flush_deadline`].
     FlushDue,
     /// The time for a periodic check arrived. See [`Session::check_deadline`].
@@ -190,7 +188,7 @@ pub struct Session {
 
 fn failure_message(error: &str) -> String {
     format!(
-        "AI request failed. Your chat and collected reports are retained; AI processing is paused until you send a message or retry. {error}"
+        "AI request failed. Your chat and collected reports are retained; AI processing is paused until you resume. {error}"
     )
 }
 
@@ -294,18 +292,6 @@ impl Session {
             Event::Report { event, id } => {
                 self.queue.push_back(AiInput::GameReport { event, id });
                 self.flush_at.get_or_insert(context.now + EVENT_FLUSH_DELAY);
-            }
-            Event::Retry => {
-                if self.pending_user_message_count() == 0 {
-                    effects.push(Effect::Notify(DisplayMessage::new(
-                        DisplayMessageKind::Status,
-                        "There is no failed AI request to retry.",
-                    )));
-                    return;
-                }
-                self.flush_at = None;
-                self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
-                self.try_start_turn(context, effects);
             }
             Event::FlushDue => {
                 self.flush_at = None;

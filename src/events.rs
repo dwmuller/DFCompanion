@@ -40,7 +40,6 @@ impl GameEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueItem {
     UserInput(String),
-    AiRetry,
     /// An AI configuration was just selected: give the AI a turn to look around.
     Orient,
     GameEvent(GameEvent),

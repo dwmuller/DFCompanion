@@ -107,7 +107,6 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
         .route("/chat/resume", post(resume_chat))
         .route("/chat-state", get(chat_state_events))
         .route("/conversation.md", get(copy_conversation))
-        .route("/retry", post(retry))
         .route("/rollback/:id", post(rollback))
         .route("/rollback-floor-events", get(rollback_floor_events))
         .route(
@@ -1054,17 +1053,6 @@ async fn chat_state_events(
         },
     );
     Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-/// Handles POST requests to retry the last AI action.
-async fn retry(State(app): State<Arc<CompanionApp>>, headers: HeaderMap) -> Response {
-    if let Err(status) = validate_local_origin(&headers) {
-        return (status, "Request origin not allowed.").into_response();
-    }
-    match app.event_queue().try_send(QueueItem::AiRetry) {
-        Ok(()) => (StatusCode::OK, "Retry queued.").into_response(),
-        Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
-    }
 }
 
 /// Handles POST requests to roll the conversation back to before one input.

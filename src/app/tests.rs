@@ -150,8 +150,10 @@ async fn mock_plugin_event_flows_through_grpc_into_companion_queue() {
 async fn full_event_queue_responds_with_pause_request_and_notifies_ui() {
     let (app, _queue_rx) = CompanionApp::new();
     let (_, mut notifications_rx) = app.history.subscribe(None);
-    for _ in 0..EVENT_QUEUE_CAPACITY {
-        app.queue_tx.try_send(QueueItem::AiRetry).unwrap();
+    for i in 0..EVENT_QUEUE_CAPACITY {
+        app.queue_tx
+            .try_send(QueueItem::UserInput(format!("filler {i}")))
+            .unwrap();
     }
     let (address, server_task) = start_test_grpc_server(app.clone()).await;
     let mut client = CompanionClient::connect(format!("http://{address}"))
@@ -382,11 +384,10 @@ async fn web_chat_rejects_cross_origin_request() {
 }
 
 #[tokio::test]
-async fn configuration_and_retry_routes_reject_cross_origin_requests() {
+async fn configuration_routes_reject_cross_origin_requests() {
     let (app, mut queue_rx) = CompanionApp::new();
     let router = crate::web::router(app);
     let settings_response = router
-        .clone()
         .oneshot(
             HttpRequest::builder()
                 .method("POST")
@@ -401,21 +402,8 @@ async fn configuration_and_retry_routes_reject_cross_origin_requests() {
         )
         .await
         .unwrap();
-    let retry_response = router
-        .oneshot(
-            HttpRequest::builder()
-                .method("POST")
-                .uri("/retry")
-                .header(header::HOST, "127.0.0.1:3000")
-                .header(header::ORIGIN, "https://attacker.example")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
 
     assert_eq!(settings_response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(retry_response.status(), StatusCode::FORBIDDEN);
     assert!(queue_rx.try_recv().is_err());
 }
 
@@ -576,7 +564,7 @@ async fn provider_catalog_route_returns_setup_presets_without_configuration_ids(
 }
 
 #[tokio::test]
-async fn chat_without_api_key_retains_context_for_retry() {
+async fn chat_without_api_key_retains_pending_context_after_failure() {
     let (app, queue_rx) = CompanionApp::new();
     let config = app
         .ai
@@ -853,8 +841,10 @@ async fn lua_http_event_rejects_invalid_events() {
 #[tokio::test]
 async fn lua_http_event_reports_full_queue_without_accepting_event() {
     let (app, queue_rx) = CompanionApp::new();
-    for _ in 0..EVENT_QUEUE_CAPACITY {
-        app.queue_tx.try_send(QueueItem::AiRetry).unwrap();
+    for i in 0..EVENT_QUEUE_CAPACITY {
+        app.queue_tx
+            .try_send(QueueItem::UserInput(format!("filler {i}")))
+            .unwrap();
     }
 
     let response = post_plugin_event(app, EVENT_BODY).await;

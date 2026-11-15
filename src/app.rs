@@ -271,8 +271,8 @@ impl CompanionApp {
     /// away for player input, at most `EVENT_FLUSH_DELAY` after a game event
     /// arrives (if event turns are on), and every `PERIODIC_CHECK_INTERVAL`
     /// while the game is running (if periodic turns are on). After an AI
-    /// failure, automatic turns stop until the player sends a message or
-    /// retries, so a broken configuration cannot flood the chat or burn
+    /// failure, automatic turns stop until the player resumes and sends a
+    /// message, so a broken configuration cannot flood the chat or burn
     /// requests.
     pub fn run_companion_worker(
         self: Arc<CompanionApp>,
@@ -302,8 +302,6 @@ impl CompanionApp {
 
     async fn handle_queue_item(self: &Arc<Self>, item: QueueItem) {
         match item {
-            // TODO: This should go away soon - retries will be handled by the UI.
-            QueueItem::AiRetry => self.dispatch(session::Event::Retry),
             QueueItem::Orient => {
                 if self.has_active_configuration() {
                     // The orientation prompt is not shown to the player, so it

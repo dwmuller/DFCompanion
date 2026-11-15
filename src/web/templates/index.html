@@ -92,13 +92,6 @@
       <button type="submit">Send</button>
     <span id="chat-status" role="status"></span>
     </form>
-    <form id="retry-form"
-        hx-post="/retry"
-        hx-target="#retry-status"
-        hx-disable="find button">
-      <button id="retry-button" type="submit">Retry failed AI request</button>
-      <span id="retry-status" role="status"></span>
-    </form>
     <span id="rollback-status" role="status" aria-live="polite"></span>
   </body>
 </html>
