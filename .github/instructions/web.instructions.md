@@ -1,7 +1,5 @@
 ---
-paths:
-    - "src/web.rs"
-    - "src/web/**"
+applyTo: "src/web.rs,src/web/**"
 ---
 
 # Presentation
@@ -13,5 +11,5 @@ paths:
 - Use idiomatic HTMX constructs.
 - Use custom javascript sparingly for behaviors that can't be implemented in a straightforward fashion with HTMX.
 - Keep complex logic that affects application behavior out of POST handlers.
-    - Exceptions are allowed for inputs that affect only presentation.
-    - Prefer sending an appropriate QueueItem type to the worker thread.
+  - Exceptions are allowed for inputs that affect only presentation.
+  - Prefer sending an appropriate QueueItem type to the worker thread.
