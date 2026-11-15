@@ -114,7 +114,28 @@ if you're not ready to use a ClinePass (subscription) or Cline usage-billing.
 Tried this out and was not thrilled with the UI. Had several hours into it
 before I ran across the fact that it's no longer actively updated. (2026-11-12)
 
-## What I'm doing right now
+## Things I tried that didn't work.
 
-After dissatisfying attempts to use the Continue extension, I'm trying the Cline
-extension with OpenRouter.
+Both the Continue and Cline extensions were disatisfying. Despite various
+attempts to improve their configuration, in these harnesses the AIs insisted on
+using command line tools to examine source files in various ways. Cline also
+seemed to have trouble managing and retrieving output from console sessions.
+Both seemed to get stuck in loops that consumed tokens at a frightening rate.
+
+Installing agent-lsp to get Cline to use MCP server tools that rely on language
+service providers instead of CLI searches had some salutory effect, but it
+wasn't enough to fix the problems.
+
+With Cline I got far enough along to try customizing its "rules". I later had an
+AI transform these to Github harness rules.
+
+## What I'm doing now
+
+I've returned to using the built-in Copilot agent harness, configured to use
+OpenRouter with help from Google's search AI, which generally gives better
+answers to technical question than the Brave search AI. (Brave is my default
+browser, and Brave search is its default search engine.)
+
+The built-in harness seems to work with the project files much, much more
+efficiently, using the same models I was using with Cline. (Claude Sonnet 5 for
+agentic actions. )
