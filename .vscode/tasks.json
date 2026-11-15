@@ -21,6 +21,23 @@
         "isDefault": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Run DFCompanion Server",
+      "type": "shell",
+      "command": "cargo run",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "rust",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Compiling|Running",
+          "endsPattern": "listening on http://127\\.0\\.0\\.1:3000"
+        }
+      }
     }
   ]
 }
