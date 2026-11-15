@@ -84,25 +84,16 @@ impl Session {
 }
 ```
 
-Events: `UserInput`, `GameEvent`, `Orient`, `Flush`, `Check`,
-`TurnFinished { turn_id, result }`, `Rollback { target, editor_text, reply }`,
-and the results of the spawned slow tasks below.
+Events: `UserRequest`, `Report`, `Orient` (submitted as a `UserRequest` with no
+id), `FlushDue`, `CheckDue`, `TurnFinished { turn_id, result }`,
+`Rollback { target, editor_text, reply }`, and the results of the spawned slow
+tasks below.
 
-Effects: `Notify(DisplayMessage)`, `TruncateLog(from)`, `SetInputStates`,
-`StartTurn { turn_id, history, prompt }`, `CancelTurn`, `ArmTimer`,
-`ReplyEditorText`, `PublishChatState`, `PauseGame`, `CheckGameRunning`.
-
-(The names in this section and the struct sketch above are illustrative. The
-implemented names in `src/session.rs` differ in places: `Event::UserInput` is
-`Event::UserRequest`, `Event::GameEvent` is `Event::Report`, `Event::Flush` is
-`Event::FlushDue`, `Event::Check` is `Event::CheckDue`, `Effect::SetInputStates`
-is `Effect::TransitionInputs`, and `Effect::PauseGame`/`CheckGameRunning` are
-`Effect::Block`/`Effect::QueryGameRunning`. Scheduling is pull-based: the worker
-reads `Session::flush_deadline`/`check_deadline`, so there is no `ArmTimer`
-effect, and `Event::Orient` is currently submitted as a `UserRequest` with no
-id. The fields below that belong to rollback itself — `records`,
-`rolled_back_note_due`, and the `TurnRecord`/`InFlight.inputs` bookkeeping — do
-not exist yet; they arrive with step 4.)
+Effects: `Notify(DisplayMessage)`, `TruncateLog(from)`, `TransitionInputs`,
+`StartTurn { turn_id, history, prompt }`, `CancelTurn`, `ReplyEditorText`,
+`PublishChatState`, `Block`, `QueryGameRunning`. Scheduling is pull-based: the
+worker reads `Session::flush_deadline`/`check_deadline`, so there is no timer
+effect.
 
 The worker loop interprets effects and performs the IO. Tests drive `handle()`
 directly: no tokio, timers or mock provider.
