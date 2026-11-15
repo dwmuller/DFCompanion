@@ -12,3 +12,5 @@ applyTo: "src/**/*.rs,src/*/tests.rs,tests/**"
   using `cargo test --test live_game_tests -- --ignored`.
   - When live testing is wanted, ask the user if the game is in the required
     state first.
+- If a Rust source file is becoming bloated with tests
+  consider moving them to a dedicated `tests/` module or file.
