@@ -1,15 +1,24 @@
-# Project architecture
+# Project description and structure
 
-This is an enhancement for users playing Dwarf Fortress with the DFHack mod
-framework. It provides an AI chat interface with a model that is given access to
-to the state of the running game. The DFCompanion process interacts with the
-user via an HTTP service, and with the game through Lua RPC and plugin scripts.
+The DFCompanion application acts as an AI companion for users playing Dwarf
+Fortress with the DFHack mod framework. It provides an AI chat interface with a
+model that is given access to the state of the running game. The DFCompanion
+process interacts with the user via an HTTP service, and with the game through
+Lua RPC and plugin scripts.
 
-- Rust code in src/ is the main application code. It is a single binary crate.
-- Lua code in lua/rpc and scripts. The Lua scripts run in an environment
-  provided by DFHack and have to be copied to a specific directory in the DFHack
-  installation for testing.
-- The Web UI uses HTMX.
+## Key files and directories
+
+- src/ contains the main application code, written in Rust. It is a single
+  binary crate.
+- Lua code runs in a context provided by DFHack.
+  - scripts/dfcompanion.lua is a DFHack plugin. Its main function is to notify
+    DFCompanion of game events.
+  - Scripts in lua/rpc/ provide other supporting functions.
+  - The Lua scripts have to be copied to a specific directory in the DFHack
+    installation for testing.
+- The web UI is implemented by src/web.rs and files src/web/ using HTMX and
+  askama templates.
+- Consult BUILDING.md for build and setup steps.
 
 ## Other resources
 
@@ -18,19 +27,6 @@ user via an HTTP service, and with the game through Lua RPC and plugin scripts.
   should not be considered authoritative.
 - Files in notes/ are more recent and more up to date. You'll find more
   architecture discussion there.
-- The project origin is a public Github project at https://github.com/dwmuller/dfcompanion.
-- [Dwarf Fortress game details](https://dwarffortresswiki.org/)
-- [DFHack usage and basic development information](  https://docs.dfhack.org/en/stable/)
-- [DFHack source code](https://github.com/DFHack/dfhack)
-    - A local workspace of a private fork can be found at ~/projects/dfhack.
+- The Git project's origin is a public Github project at
+  https://github.com/dwmuller/dfcompanion.
 
-## Coding standards
-
-- Write tests for all new features.
-    - Tests which require a running game are considered "live" tests and should not run by default.
-- Prefer idiomatic HTMX 4 solutions over custom javascript when working on the Web UI.
-- This is an unreleased application, which justifies a lack of branch
-  management. All work proceeds in main unless it's unusually speculative.
-- Always prefer asking for direction before making large architectural changes.
-- When testing, you can request that a Dwarf Fortress game be started for you.
-  You can check yourself to see if one is already running.
