@@ -1,7 +1,8 @@
 # Rollback design
 
-Status: design agreed, nothing implemented. Replaces the old "Recall" items in
-TODO.md.
+Status: design agreed. Staging step 1 (`History` newtype, functional `run_turn`)
+and step 2 (`Session` and the effect interpreter) are implemented; steps 3 and 4
+are not started. Replaces the old "Recall" items in TODO.md.
 
 ## Goal
 
@@ -91,6 +92,18 @@ Effects: `Notify(DisplayMessage)`, `TruncateLog(from)`, `SetInputStates`,
 `StartTurn { turn_id, history, prompt }`, `CancelTurn`, `ArmTimer`,
 `ReplyEditorText`, `PublishChatState`, `PauseGame`, `CheckGameRunning`.
 
+(The names in this section and the struct sketch above are illustrative. The
+implemented names in `src/session.rs` differ in places: `Event::UserInput` is
+`Event::UserRequest`, `Event::GameEvent` is `Event::Report`, `Event::Flush` is
+`Event::FlushDue`, `Event::Check` is `Event::CheckDue`, `Effect::SetInputStates`
+is `Effect::TransitionInputs`, and `Effect::PauseGame`/`CheckGameRunning` are
+`Effect::Block`/`Effect::QueryGameRunning`. Scheduling is pull-based: the worker
+reads `Session::flush_deadline`/`check_deadline`, so there is no `ArmTimer`
+effect, and `Event::Orient` is currently submitted as a `UserRequest` with no
+id. The fields below that belong to rollback itself — `records`,
+`rolled_back_note_due`, and the `TurnRecord`/`InFlight.inputs` bookkeeping — do
+not exist yet; they arrive with step 4.)
+
 The worker loop interprets effects and performs the IO. Tests drive `handle()`
 directly: no tokio, timers or mock provider.
 
@@ -163,15 +176,17 @@ Rules:
 
 ## Staging
 
-1. `History` newtype; functional `run_turn` with cancel token; engine no longer
-   owns the conversation or notifier. Behaviour-neutral.
-2. `Session` and the effect interpreter in the worker, replacing
+1. DONE. `History` newtype; functional `run_turn` with cancel token; engine no
+   longer owns the conversation or notifier. Behaviour-neutral.
+2. DONE. `Session` and the effect interpreter in the worker, replacing
    `flush_pending_interactions_loop`. Derived chat state. Covers the queue-move
    and shared-ids TODO items.
 3. Log epochs, `truncate_from`, state-change broadcast, `rollback_floor`.
 4. Checkpoints, `Rollback` event, route, button, editor prefill, confirmation.
 
-Steps 1-3 are worthwhile even without step 4.
+Steps 1-3 are worthwhile even without step 4. Steps 1 and 2 are implemented but
+not yet committed; `Session` already handles `CancelTurn` and `Resume`, which
+step 4 builds on.
 
 ## Open points
 
