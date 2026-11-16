@@ -18,8 +18,6 @@ Optional: [pnpm](https://pnpm.io/) (for example `winget install pnpm.pnpm`), onl
 
 Run commands from a Visual Studio Developer PowerShell or another shell where the MSVC build tools are available.
 
-Cargo provisions a host `protoc` through the `protoc-bin-vendored` build dependency; no global protobuf compiler installation is needed for the Rust build.
-
 ## Configure and build
 
 Configure CMake with the path to the DFHack installation root—the directory containing `hack\scripts`:
@@ -102,7 +100,7 @@ After a Debug build:
 .\build\cargo\debug\dfcompanion.exe
 ```
 
-The HTTP UI and Lua event endpoint listen on `127.0.0.1:3000`; gRPC listens on `127.0.0.1:50051`.
+The HTTP UI and Lua event endpoint listen on `127.0.0.1:3000`.
 
 ## VS Code
 

@@ -115,115 +115,12 @@ async fn notification_history_replays_then_streams_live() {
     assert_eq!(resumed.len(), 1);
     assert_eq!(resumed[0].1.kind, DisplayMessageKind::Warning);
 }
-use crate::api::{
-    companion_client::CompanionClient, companion_server::CompanionServer, EventSubmissionStatus,
-    SimulationEvent, SimulationTimestamp,
-};
+
 use axum::{
     body::Body,
     http::{header, Request as HttpRequest, StatusCode},
 };
-use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::Server;
 use tower::ServiceExt;
-
-#[tokio::test]
-async fn mock_plugin_event_flows_through_grpc_into_companion_queue() {
-    let (app, mut queue_rx) = CompanionApp::new();
-    let (address, server_task) = start_test_grpc_server(app.clone()).await;
-
-    let mut client = CompanionClient::connect(format!("http://{address}"))
-        .await
-        .unwrap();
-    let response = client
-        .submit_simulation_event(SimulationEvent {
-            category: "unit_death".to_owned(),
-            game_world_time: Some(SimulationTimestamp {
-                year: 252,
-                month: 4,
-                day: 7,
-                tick: 1_134,
-            }),
-            description: "A dwarf was found dead.".to_owned(),
-        })
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert_eq!(
-        EventSubmissionStatus::try_from(response.status).unwrap(),
-        EventSubmissionStatus::Accepted
-    );
-
-    let QueueItem::GameEvent(queued) = queue_rx.recv().await.unwrap() else {
-        panic!("expected a game event");
-    };
-    assert_eq!(queued.category, "unit_death");
-    assert_eq!(queued.text, "A dwarf was found dead.");
-    assert_eq!(queued.date, "252-04-07:1134");
-
-    let invalid_error = client
-        .submit_simulation_event(SimulationEvent {
-            category: "unit_death".to_owned(),
-            game_world_time: Some(SimulationTimestamp {
-                year: 252,
-                month: 13,
-                day: 7,
-                tick: 1_135,
-            }),
-            description: "invalid month".to_owned(),
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(invalid_error.code(), tonic::Code::InvalidArgument);
-    assert!(queue_rx.try_recv().is_err());
-
-    server_task.abort();
-}
-
-#[tokio::test]
-async fn full_event_queue_responds_with_pause_request_and_notifies_ui() {
-    let (app, _queue_rx) = CompanionApp::new();
-    let (_, mut notifications_rx) = app.history.subscribe(None);
-    for i in 0..EVENT_QUEUE_CAPACITY {
-        app.queue_tx
-            .try_send(QueueItem::UserInput(format!("filler {i}")))
-            .unwrap();
-    }
-    let (address, server_task) = start_test_grpc_server(app.clone()).await;
-    let mut client = CompanionClient::connect(format!("http://{address}"))
-        .await
-        .unwrap();
-
-    let response = client
-        .submit_simulation_event(SimulationEvent {
-            category: "unit_death".to_owned(),
-            game_world_time: Some(SimulationTimestamp {
-                year: 252,
-                month: 4,
-                day: 7,
-                tick: 1_134,
-            }),
-            description: "queue overflow test".to_owned(),
-        })
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert_eq!(
-        EventSubmissionStatus::try_from(response.status).unwrap(),
-        EventSubmissionStatus::PauseRequestedQueueFull
-    );
-    assert!(response.message.contains("asked to pause"));
-    assert!(recv_added(&mut notifications_rx)
-        .await
-        .1
-        .text
-        .contains("queue is full"));
-
-    server_task.abort();
-}
 
 #[tokio::test]
 async fn web_chat_input_is_enqueued_as_user_input() {
@@ -887,19 +784,4 @@ async fn lua_http_event_reports_full_queue_without_accepting_event() {
 
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(queue_rx.len(), EVENT_QUEUE_CAPACITY);
-}
-
-async fn start_test_grpc_server(
-    app: Arc<CompanionApp>,
-) -> (
-    std::net::SocketAddr,
-    tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
-) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = Server::builder()
-        .add_service(CompanionServer::new(crate::rpc::service(app)))
-        .serve_with_incoming(TcpListenerStream::new(listener));
-
-    (address, tokio::spawn(server))
 }

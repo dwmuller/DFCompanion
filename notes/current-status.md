@@ -16,7 +16,14 @@ What feature or bug we're actively working on.
   read at any screen, so the poller carries no such risk.
 - Implemented across `src/game_state.rs`, `src/app.rs`, `src/ai_tools.rs`,
   `src/web.rs`, `src/main.rs`, `scripts/dfcompanion.lua`, and
-  `lua/rpc/dfcompanion.lua`; 165 unit tests pass and clippy is clean.
+  `lua/rpc/dfcompanion.lua`; the unit suite passes and clippy is clean.
+- Removed the unused gRPC server and its build support. The `Companion`
+  service in `proto/companion.proto` was never called by any client (the Lua
+  script submits events over HTTP to `127.0.0.1:3000`), so the proto file,
+  `src/rpc.rs`, `build.rs`, and the `tonic`/`prost`/`tonic-build`/
+  `protoc-bin-vendored` dependencies are gone. The service now runs HTTP only.
+  (The `prost_014` dev-dependency stays: the ignored live-game tests use it to
+  walk protobuf replies by hand.)
 
 ## Next Steps
 

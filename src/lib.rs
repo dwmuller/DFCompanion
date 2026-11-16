@@ -10,10 +10,4 @@ pub mod events;
 pub mod game_state;
 pub mod notifications;
 pub mod session;
-
-#[allow(clippy::result_large_err)]
-pub mod api {
-    tonic::include_proto!("dfcompanion.v1");
-}
-pub mod rpc;
 pub mod web;

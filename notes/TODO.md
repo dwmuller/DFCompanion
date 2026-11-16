@@ -19,10 +19,11 @@ prepare underlying infrastructure.
 - ? Refactor AI tools as an MCP service.
 - ? Reconsider thread architecture.
   - We've eliminated the "recorder" thread associated with the
-    NotificationHistory, so now we have the RPC listener, HTTP listener, and the
-    app worker which mainly coordinates turning inputs into display items and
-    queueing things to the AI. But in fact the AI interactions are one of the
-    slowest operations in the program and might warrant a dedicated thread.
+    NotificationHistory and the unused gRPC server, so now we have the HTTP
+    listener and the app worker which mainly coordinates turning inputs into
+    display items and queueing things to the AI. But in fact the AI interactions
+    are one of the slowest operations in the program and might warrant a
+    dedicated thread.
 
 ## AI interaction
 
