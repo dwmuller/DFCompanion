@@ -2,27 +2,28 @@
 
 What feature or bug we're actively working on.
 
-- History compaction: replace the silent 20-message truncation with an
-  AI-generated rolling summary plus recent turns, so long-running strategy and
-  player corrections survive instead of being dropped.
-- Goal is a session that stays strategically consistent in play; saving the
-  summary with the game save is deliberately a separate later task.
+- History compaction: an AI-generated rolling summary plus recent turns,
+  replacing the silent 20-message truncation so long-running strategy and
+  player corrections survive. Implemented across `src/ai.rs`, `src/session.rs`,
+  and `src/app.rs`; 161 unit tests pass, and interactive testing past the
+  compaction threshold confirms the distinction survives in play.
+- A playtest caught a real bug along the way: the summary was counted in the
+  token budget but never actually sent to the model, so compacted facts (e.g.
+  the Therapy Squad rule) were lost. Fixed: `run_turn_with_key` now prepends
+  `History::summary()` to each request as an explicit data-not-instructions
+  message, covered by the `a_turns_request_includes_the_history_summary`
+  regression test.
+- Saving the summary with the game save remains a deliberately separate later
+  task.
 
 ## Next Steps
 
 Immediate next 1 to 3 tasks to work on.
 
-- Reshape `History` in `src/ai.rs` to hold a rolling summary plus recent
-  messages, and stop trimming in `with_turn`.
-- Add `AiRuntime::compact_history` with a dedicated summarization system prompt
-  (no tools, not the configured system text), size validation, and cancellation.
-- Add compaction to the `Session` state machine as a cancellable job: trigger it
-  before a turn when history is large, block turns while it runs, ignore stale
-  results, and cancel it on rollback; wire it through `CompanionApp::perform`.
-- Reuse `History` budget accounting in `build_prompt` so the summary counts
-  against `MAX_INPUT_TOKENS`, and add focused tests plus a Therapy Squad
-  playtest past the old history limit.
+- Address the `cargo clippy` items below and adopt clippy in the standing
+  checks.
 
-## Known Issuess / Blockers
+## Known Issues / Blockers
 
-- TBD
+- `cargo clippy` finds numerous minor issues that should be addressed. Add this
+  check to standing rules.

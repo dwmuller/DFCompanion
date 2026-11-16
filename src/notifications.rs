@@ -349,12 +349,14 @@ mod tests {
     fn transition_moves_the_run_up_to_the_watermark_and_no_further() {
         let history = NotificationHistory::new();
         let a = input(&history, "a");
-        history.push(DisplayMessage::new(DisplayMessageKind::Status, "not an input"));
+        history.push(DisplayMessage::new(
+            DisplayMessageKind::Status,
+            "not an input",
+        ));
         let b = input(&history, "b");
         let _c = input(&history, "c");
 
-        let changed =
-            history.transition_inputs(b, InputState::Pending, InputState::Processing);
+        let changed = history.transition_inputs(b, InputState::Pending, InputState::Processing);
 
         assert_eq!(changed, 2);
         assert_eq!(a, NotificationId(1));
@@ -377,8 +379,7 @@ mod tests {
         history.transition_inputs(a, InputState::Pending, InputState::Done);
 
         // `a` is Done, so moving Pending inputs through `b` leaves it alone.
-        let changed =
-            history.transition_inputs(b, InputState::Pending, InputState::Processing);
+        let changed = history.transition_inputs(b, InputState::Pending, InputState::Processing);
 
         assert_eq!(changed, 1);
         assert_eq!(

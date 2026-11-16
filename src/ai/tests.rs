@@ -270,16 +270,89 @@ fn a_turn_returns_a_new_history_and_leaves_the_snapshot_untouched() {
 }
 
 #[test]
-fn history_is_trimmed_from_the_front() {
+fn history_grows_without_trimming_until_compacted() {
     let mut history = History::default();
     let prompt = test_prompt(PromptKind::UserRequest, "q");
-    for i in 0..MAX_HISTORY_MESSAGES {
+    let turns = MAX_HISTORY_MESSAGES + 4;
+    for i in 0..turns {
         history = history_after_turn(&history, &prompt, &format!("a{i}"));
     }
-    assert_eq!(history.messages().len(), MAX_HISTORY_MESSAGES);
+    // Trimming older turns is compaction's job now, so every turn is kept.
+    assert_eq!(history.messages().len(), 2 * turns);
     let last = history.messages().last().unwrap();
-    assert_eq!(last.content, format!("a{}", MAX_HISTORY_MESSAGES - 1));
+    assert_eq!(last.content, format!("a{}", turns - 1));
     assert_eq!(history.messages()[0].role, ChatRole::User);
+}
+
+#[test]
+fn compaction_request_text_includes_prior_summary_and_older_messages() {
+    let older = vec![
+        ChatMessage {
+            role: ChatRole::User,
+            content: "we are building a wall".to_owned(),
+        },
+        ChatMessage {
+            role: ChatRole::Assistant,
+            content: "noted".to_owned(),
+        },
+    ];
+
+    let with_previous = compaction_request_text("earlier summary text", &older);
+    assert!(with_previous.contains("Previous summary:"));
+    assert!(with_previous.contains("earlier summary text"));
+    assert!(with_previous.contains("we are building a wall"));
+    assert!(with_previous.contains("noted"));
+
+    let without_previous = compaction_request_text("", &older);
+    assert!(!without_previous.contains("Previous summary:"));
+    assert!(without_previous.contains("we are building a wall"));
+}
+
+#[test]
+fn split_for_compaction_keeps_the_recent_window() {
+    let prompt = test_prompt(PromptKind::UserRequest, "q");
+    let mut history = History::default();
+    for _ in 0..(COMPACTION_KEEP_RECENT_MESSAGES / 2) {
+        history = history_after_turn(&history, &prompt, "a");
+    }
+    // At the verbatim window there is nothing to compact.
+    assert!(split_for_compaction(&history).is_none());
+
+    history = history_after_turn(&history, &prompt, "b");
+    let (older, recent) = split_for_compaction(&history).unwrap();
+    assert_eq!(recent.len(), COMPACTION_KEEP_RECENT_MESSAGES);
+    assert_eq!(
+        older.len(),
+        history.messages().len() - COMPACTION_KEEP_RECENT_MESSAGES
+    );
+}
+
+#[test]
+fn should_compact_triggers_on_message_count() {
+    let prompt = test_prompt(PromptKind::UserRequest, "q");
+    let mut history = History::default();
+    // Below the message limit: nothing to compact even though older turns
+    // already exceed the verbatim window.
+    for _ in 0..(MAX_HISTORY_MESSAGES / 2) {
+        history = history_after_turn(&history, &prompt, "a");
+    }
+    assert!(!should_compact(&history));
+
+    // Past the message limit: compact.
+    history = history_after_turn(&history, &prompt, "b");
+    assert!(should_compact(&history));
+}
+
+#[test]
+fn should_compact_triggers_on_token_estimate() {
+    let prompt = test_prompt(PromptKind::UserRequest, "q");
+    let mut history = History::default();
+    // Few messages, but each large enough to pass half the input budget.
+    let big = "word ".repeat(MAX_INPUT_TOKENS);
+    for _ in 0..(COMPACTION_KEEP_RECENT_MESSAGES / 2 + 1) {
+        history = history_after_turn(&history, &prompt, &big);
+    }
+    assert!(should_compact(&history));
 }
 
 #[test]
@@ -658,4 +731,194 @@ async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
     assert!(second_request
         .to_string()
         .contains("Unknown tool: unknown_test_tool"));
+}
+
+/// A history with more messages than the compaction threshold allows.
+fn long_history() -> History {
+    let prompt = test_prompt(PromptKind::UserRequest, "q");
+    let mut history = History::default();
+    for _ in 0..(MAX_HISTORY_MESSAGES / 2 + 2) {
+        history = history_after_turn(&history, &prompt, "a");
+    }
+    history
+}
+
+fn compaction_configuration(url: String) -> AiConfiguration {
+    use genai::adapter::AdapterKind;
+    AiConfiguration {
+        id: "test-config".to_owned(),
+        name: "Test".to_owned(),
+        interaction_method: AdapterKind::OpenAI,
+        model_id: "test-model".to_owned(),
+        url,
+        system_text: "Custom system instructions.".to_owned(),
+    }
+}
+
+fn summary_response(content: &str) -> serde_json::Value {
+    json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    })
+}
+
+#[tokio::test]
+async fn compaction_summarizes_older_messages_and_keeps_recent_ones() {
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) =
+        start_mock_provider(vec![summary_response("SUMMARY TEXT")]).await;
+    let configuration = compaction_configuration(url);
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let (_, _, _, request_body) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert_eq!(result.history.summary(), "SUMMARY TEXT");
+    assert_eq!(result.history.len(), COMPACTION_KEEP_RECENT_MESSAGES);
+    assert_eq!(result.usage.len(), 1);
+    assert_eq!(result.usage[0].prompt_tokens, Some(10));
+    // The compaction system text is used instead of the configured one, and
+    // the older messages are included in the request.
+    let body = request_body.to_string();
+    assert!(body.contains("handoff for a future continuation"));
+    assert!(!body.contains("Custom system instructions."));
+    assert!(body.contains("Player turn:"));
+}
+
+#[tokio::test]
+async fn a_compaction_with_no_summary_text_is_a_failure() {
+    let runtime = make_test_runtime();
+    let (url, _requests, server) = start_mock_provider(vec![summary_response("   ")]).await;
+    let configuration = compaction_configuration(url);
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await;
+    server.abort();
+
+    assert!(matches!(
+        result,
+        Err(TurnError::Failed(message)) if message.contains("no summary text")
+    ));
+}
+
+#[tokio::test]
+async fn an_oversized_summary_is_rejected() {
+    let runtime = make_test_runtime();
+    let huge = "word ".repeat(COMPACTION_SUMMARY_TOKEN_HARD_LIMIT * 4);
+    let (url, _requests, server) = start_mock_provider(vec![summary_response(&huge)]).await;
+    let configuration = compaction_configuration(url);
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await;
+    server.abort();
+
+    assert!(matches!(
+        result,
+        Err(TurnError::Failed(message)) if message.contains("size limit")
+    ));
+}
+
+#[tokio::test]
+async fn compaction_can_be_cancelled_before_it_sends() {
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![summary_response("SUMMARY")]).await;
+    let configuration = compaction_configuration(url);
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &cancel,
+        )
+        .await;
+    let request_sent = requests.try_recv().is_ok();
+    server.abort();
+
+    assert!(matches!(result, Err(TurnError::Cancelled)));
+    assert!(!request_sent);
+}
+
+#[tokio::test]
+async fn a_turns_request_includes_the_history_summary() {
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }]
+    })])
+    .await;
+    let configuration = compaction_configuration(url);
+    let history =
+        History::with_test_summary("Therapy Squad is not for combat.", &History::default());
+    let prompt = test_prompt(PromptKind::UserRequest, "Do you remember?");
+
+    let _ = runtime
+        .run_turn_with_key(
+            &configuration,
+            "test-secret",
+            &history,
+            &prompt,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let (_, _, _, request_body) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert!(request_body
+        .to_string()
+        .contains("Therapy Squad is not for combat."));
 }

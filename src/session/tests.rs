@@ -1,5 +1,5 @@
 use super::*;
-use crate::ai::DEFAULT_SYSTEM_TEXT;
+use crate::ai::{COMPACTION_KEEP_RECENT_MESSAGES, DEFAULT_SYSTEM_TEXT, MAX_HISTORY_MESSAGES};
 use genai::adapter::AdapterKind;
 
 fn configuration() -> AiConfiguration {
@@ -732,11 +732,7 @@ fn only_the_newest_fifty_turns_can_be_rolled_back() {
     let mut session = Session::new(now);
     for id in 1..=MAX_TURN_RECORDS as u64 + 1 {
         let effects = session.handle(&context(now), user(&format!("m{id}"), id));
-        let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
-        session.handle(
-            &context(now),
-            finished(turn_id, answer(&history, &prompt, "ok")),
-        );
+        complete_pending_work(&mut session, now, effects);
     }
 
     // The oldest turn was evicted, so the floor moved to the second oldest and
@@ -744,4 +740,217 @@ fn only_the_newest_fifty_turns_can_be_rolled_back() {
     assert_eq!(session.rollback_floor(), Some(NotificationId(2)));
     let effects = session.handle(&context(now), rollback(1, ""));
     assert!(matches!(editor_reply(&effects), Some(Err(_))));
+}
+
+/// The compaction an effect list starts, if it starts one.
+fn started_compaction(effects: &[Effect]) -> Option<(u64, History, CancellationToken)> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::StartCompaction {
+            compaction_id,
+            history,
+            cancel,
+            ..
+        } => Some((*compaction_id, history.clone(), cancel.clone())),
+        _ => None,
+    })
+}
+
+/// A compaction result that summarizes `recent` under `summary`.
+fn compacted(summary: &str, recent: &History) -> Result<CompactionOutput, TurnError> {
+    Ok(CompactionOutput {
+        history: History::with_test_summary(summary, recent),
+        usage: Vec::new(),
+    })
+}
+
+fn compaction_finished(compaction_id: u64, result: Result<CompactionOutput, TurnError>) -> Event {
+    Event::CompactionFinished {
+        compaction_id,
+        result,
+    }
+}
+
+/// Completes turns until `session` needs to compact before the next turn.
+fn drive_past_compaction_threshold(session: &mut Session, now: Instant) {
+    for id in 1..=((MAX_HISTORY_MESSAGES as u64 / 2) + 1) {
+        let effects = session.handle(&context(now), user(&format!("m{id}"), id));
+        let (turn_id, prompt, history, _) =
+            started_turn(&effects).expect("a turn starts before the threshold");
+        session.handle(
+            &context(now),
+            finished(turn_id, answer(&history, &prompt, "ok")),
+        );
+    }
+    assert!(should_compact(session.history()));
+}
+
+/// Completes whatever work the effects start — a turn or a compaction — until
+/// nothing more is pending, as the real worker would.
+fn complete_pending_work(session: &mut Session, now: Instant, mut effects: Vec<Effect>) {
+    loop {
+        if let Some((turn_id, prompt, history, _)) = started_turn(&effects) {
+            effects = session.handle(
+                &context(now),
+                finished(turn_id, answer(&history, &prompt, "ok")),
+            );
+            continue;
+        }
+        if let Some((compaction_id, history, _)) = started_compaction(&effects) {
+            effects = session.handle(
+                &context(now),
+                compaction_finished(compaction_id, compacted("running summary", &history)),
+            );
+            continue;
+        }
+        break;
+    }
+}
+
+#[test]
+fn a_large_history_triggers_compaction_before_the_next_turn() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    // Complete turns up to the message limit: exactly 20 messages, so no
+    // compaction is needed yet even though the verbatim window is smaller.
+    for id in 1..=(MAX_HISTORY_MESSAGES as u64 / 2) {
+        let effects = session.handle(&context(now), user(&format!("m{id}"), id));
+        let (turn_id, prompt, history, _) = started_turn(&effects).expect("a turn starts");
+        session.handle(
+            &context(now),
+            finished(turn_id, answer(&history, &prompt, "ok")),
+        );
+    }
+    assert_eq!(session.history().len(), MAX_HISTORY_MESSAGES);
+    assert!(!should_compact(session.history()));
+
+    // One more turn pushes the history past the limit.
+    let effects = session.handle(&context(now), user("extra", 900));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "ok")),
+    );
+    assert!(should_compact(session.history()));
+
+    // The next input compacts first; its turn waits for the result.
+    let effects = session.handle(&context(now), user("next", 901));
+    let (compaction_id, _, _) = started_compaction(&effects).expect("compaction starts");
+    assert!(started_turn(&effects).is_none());
+    assert_eq!(session.pending_user_message_count(), 1);
+
+    let current = session.history().clone();
+    let effects = session.handle(
+        &context(now),
+        compaction_finished(compaction_id, compacted("running summary", &current)),
+    );
+    assert!(started_turn(&effects).is_some());
+    assert_eq!(session.history().summary(), "running summary");
+    assert_eq!(session.history().len(), COMPACTION_KEEP_RECENT_MESSAGES);
+    assert_eq!(notified(&effects, DisplayMessageKind::Status).len(), 1);
+}
+
+#[test]
+fn a_successful_compaction_replaces_history_and_resumes_the_turn() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    drive_past_compaction_threshold(&mut session, now);
+    let before = session.history().clone();
+
+    let effects = session.handle(&context(now), user("next", 500));
+    let (compaction_id, _, _) = started_compaction(&effects).expect("compaction starts");
+
+    let effects = session.handle(
+        &context(now),
+        compaction_finished(compaction_id, compacted("SUMMARY", &before)),
+    );
+
+    assert_eq!(session.history().summary(), "SUMMARY");
+    assert_eq!(session.history().len(), COMPACTION_KEEP_RECENT_MESSAGES);
+    assert!(started_turn(&effects).is_some());
+    assert_eq!(notified(&effects, DisplayMessageKind::Status).len(), 1);
+}
+
+#[test]
+fn a_failed_compaction_blocks_without_changing_history() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    drive_past_compaction_threshold(&mut session, now);
+    let before = session.history().clone();
+
+    let effects = session.handle(&context(now), user("next", 500));
+    let (compaction_id, _, _) = started_compaction(&effects).unwrap();
+
+    let effects = session.handle(
+        &context(now),
+        compaction_finished(compaction_id, Err(TurnError::Failed("boom".to_owned()))),
+    );
+
+    assert_eq!(session.chat_state(), ChatState::Blocked);
+    assert_eq!(session.history().summary(), before.summary());
+    assert_eq!(session.history().len(), before.len());
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::Block { reason } if reason.contains("compaction failed") && reason.contains("boom")
+    )));
+}
+
+#[test]
+fn a_cancelled_compaction_does_not_block_or_change_history() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    drive_past_compaction_threshold(&mut session, now);
+    let before = session.history().clone();
+
+    let effects = session.handle(&context(now), user("next", 500));
+    let (compaction_id, _, _) = started_compaction(&effects).unwrap();
+
+    session.handle(
+        &context(now),
+        compaction_finished(compaction_id, Err(TurnError::Cancelled)),
+    );
+
+    assert_eq!(session.chat_state(), ChatState::Idle);
+    assert_eq!(session.history().summary(), before.summary());
+    assert_eq!(session.history().len(), before.len());
+}
+
+#[test]
+fn a_stale_compaction_result_is_ignored() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    drive_past_compaction_threshold(&mut session, now);
+    let before = session.history().clone();
+
+    let effects = session.handle(&context(now), user("next", 500));
+    let (compaction_id, _, _) = started_compaction(&effects).unwrap();
+
+    // A rollback cancels the compaction and restores older history.
+    session.handle(&context(now), rollback(1, ""));
+    let restored = session.history().clone();
+    assert_eq!(restored.len(), 0);
+
+    // The late result must not be applied.
+    session.handle(
+        &context(now),
+        compaction_finished(compaction_id, compacted("STALE", &before)),
+    );
+
+    assert_eq!(session.history().summary(), restored.summary());
+    assert_ne!(session.history().summary(), "STALE");
+    assert_eq!(session.history().len(), restored.len());
+}
+
+#[test]
+fn rollback_cancels_in_flight_compaction() {
+    let now = Instant::now();
+    let mut session = Session::new(now);
+    drive_past_compaction_threshold(&mut session, now);
+
+    let effects = session.handle(&context(now), user("next", 500));
+    let (_, _, cancel) = started_compaction(&effects).unwrap();
+    assert!(!cancel.is_cancelled());
+
+    session.handle(&context(now), rollback(1, ""));
+
+    assert!(cancel.is_cancelled());
 }

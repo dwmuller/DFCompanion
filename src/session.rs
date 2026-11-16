@@ -16,7 +16,10 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ai::{build_prompt, is_no_comment, AiInput, History, Prompt, TurnError, TurnOutput},
+    ai::{
+        build_prompt, is_no_comment, should_compact, AiInput, CompactionOutput, History, Prompt,
+        TurnError, TurnOutput,
+    },
     ai_config::AiConfiguration,
     events::GameEvent,
     notifications::{DisplayMessage, DisplayMessageKind, InputState, NotificationId},
@@ -81,6 +84,13 @@ pub enum Event {
         turn_id: u64,
         result: Result<TurnOutput, TurnError>,
     },
+    /// A compaction started by [`Effect::StartCompaction`] ended.
+    /// `compaction_id` must match the one the effect carried, or this is a
+    /// stale result and is ignored.
+    CompactionFinished {
+        compaction_id: u64,
+        result: Result<CompactionOutput, TurnError>,
+    },
     /// Cancel the turn in flight, if there is one. Its inputs go back to pending.
     CancelTurn,
     /// The player asked to resume after processing was blocked.
@@ -116,6 +126,15 @@ pub enum Effect {
         prompt: Prompt,
         cancel: CancellationToken,
     },
+    /// Replace older history with an AI-written summary. Report its end with
+    /// [`Event::CompactionFinished`] and the same `compaction_id`. Cancelled
+    /// through `cancel`.
+    StartCompaction {
+        compaction_id: u64,
+        configuration: AiConfiguration,
+        history: History,
+        cancel: CancellationToken,
+    },
     /// Find out whether the game is running and report it with
     /// [`Event::GameRunning`].
     QueryGameRunning,
@@ -140,6 +159,14 @@ struct InFlight {
     /// The inputs the turn consumes are the first `prompt.included_inputs` of
     /// the queue; they stay there until the turn succeeds.
     prompt: Prompt,
+    cancel: CancellationToken,
+}
+
+/// A history-compaction job in flight. At most one of this and [`InFlight`]
+/// exists at a time: compaction gates starting a turn, and a turn gates
+/// starting compaction.
+struct InFlightCompaction {
+    compaction_id: u64,
     cancel: CancellationToken,
 }
 
@@ -172,11 +199,14 @@ pub struct Session {
     /// [`MAX_TURN_RECORDS`].
     records: VecDeque<TurnRecord>,
     in_flight: Option<InFlight>,
+    /// A compaction job in flight, if any.
+    in_flight_compaction: Option<InFlightCompaction>,
     blocked: bool,
     /// Whether the next turn should carry the "the conversation was rolled
     /// back" note. Cleared once a turn that included it succeeds.
     rolled_back_note_due: bool,
     next_turn_id: u64,
+    next_compaction_id: u64,
     flush_at: Option<Instant>,
     next_check: Instant,
     /// The last chat state sent out in an [`Effect::PublishChatState`].
@@ -199,9 +229,11 @@ impl Session {
             history: History::default(),
             records: VecDeque::new(),
             in_flight: None,
+            in_flight_compaction: None,
             blocked: false,
             rolled_back_note_due: false,
             next_turn_id: 0,
+            next_compaction_id: 0,
             flush_at: None,
             next_check: now + PERIODIC_CHECK_INTERVAL,
             published: ChatState::Idle,
@@ -319,6 +351,10 @@ impl Session {
             Event::TurnFinished { turn_id, result } => {
                 self.finish_turn(context, turn_id, result, effects)
             }
+            Event::CompactionFinished {
+                compaction_id,
+                result,
+            } => self.finish_compaction(context, compaction_id, result, effects),
             Event::CancelTurn => {
                 if let Some(in_flight) = &self.in_flight {
                     in_flight.cancel.cancel();
@@ -349,7 +385,7 @@ impl Session {
     /// Starts a turn if nothing prevents it: processing is not blocked, no turn
     /// is in flight, and there is something to send.
     fn try_start_turn(&mut self, context: &Context, effects: &mut Vec<Effect>) {
-        if self.blocked || self.in_flight.is_some() {
+        if self.blocked || self.in_flight.is_some() || self.in_flight_compaction.is_some() {
             return;
         }
         let configuration = match &context.configuration {
@@ -363,6 +399,10 @@ impl Session {
                 return;
             }
         };
+        if should_compact(&self.history) {
+            self.start_compaction(configuration, effects);
+            return;
+        }
         let Some(prompt) = build_prompt(
             &self.history,
             &self.queue,
@@ -395,6 +435,24 @@ impl Session {
             configuration,
             history: self.history.clone(),
             prompt,
+            cancel,
+        });
+    }
+
+    /// Starts a compaction job that reports back with
+    /// [`Event::CompactionFinished`].
+    fn start_compaction(&mut self, configuration: AiConfiguration, effects: &mut Vec<Effect>) {
+        let compaction_id = self.next_compaction_id;
+        self.next_compaction_id += 1;
+        let cancel = CancellationToken::new();
+        self.in_flight_compaction = Some(InFlightCompaction {
+            compaction_id,
+            cancel: cancel.clone(),
+        });
+        effects.push(Effect::StartCompaction {
+            compaction_id,
+            configuration,
+            history: self.history.clone(),
             cancel,
         });
     }
@@ -460,6 +518,43 @@ impl Session {
         }
     }
 
+    /// Applies the result of a compaction. A stale result, whose id no longer
+    /// matches the job in flight (for example after a rollback), is ignored.
+    fn finish_compaction(
+        &mut self,
+        context: &Context,
+        compaction_id: u64,
+        result: Result<CompactionOutput, TurnError>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let Some(_) = self
+            .in_flight_compaction
+            .take_if(|c| c.compaction_id == compaction_id)
+        else {
+            return;
+        };
+        match result {
+            Ok(output) => {
+                self.history = output.history;
+                if !output.usage.is_empty() {
+                    effects.push(Effect::Notify(DisplayMessage::new(
+                        DisplayMessageKind::AiUsage,
+                        output.usage.iter().map(|u| u.summary()).join("\n"),
+                    )));
+                }
+                effects.push(Effect::Notify(DisplayMessage::new(
+                    DisplayMessageKind::Status,
+                    "Conversation history was compacted to stay within the AI context budget.",
+                )));
+                self.try_start_turn(context, effects);
+            }
+            Err(TurnError::Failed(error)) => {
+                self.block(format!("AI history compaction failed. {error}"), effects);
+            }
+            Err(TurnError::Cancelled) => {}
+        }
+    }
+
     /// Rolls the conversation back to just before the turn containing
     /// `target`. See [`Event::Rollback`].
     fn rollback(
@@ -469,6 +564,11 @@ impl Session {
         editor_text: String,
         effects: &mut Vec<Effect>,
     ) {
+        // A compaction in flight captured the pre-rollback history. Cancel it
+        // so a late result cannot overwrite the history being restored.
+        if let Some(compaction) = self.in_flight_compaction.take() {
+            compaction.cancel.cancel();
+        }
         // The inputs to drop, and the id to truncate the log from. `None` when
         // the target is not eligible.
         let dropped: Option<(Option<NotificationId>, Vec<AiInput>)> = if let Some(index) = self

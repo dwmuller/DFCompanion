@@ -183,6 +183,24 @@ impl CompanionApp {
                     this.dispatch(session::Event::TurnFinished { turn_id, result });
                 });
             }
+            Effect::StartCompaction {
+                compaction_id,
+                configuration,
+                history,
+                cancel,
+            } => {
+                let this = self.clone();
+                tokio::spawn(async move {
+                    let result = this
+                        .ai
+                        .compact_history(&configuration, &history, &cancel)
+                        .await;
+                    this.dispatch(session::Event::CompactionFinished {
+                        compaction_id,
+                        result,
+                    });
+                });
+            }
             Effect::QueryGameRunning => {
                 let this = self.clone();
                 tokio::spawn(async move {
