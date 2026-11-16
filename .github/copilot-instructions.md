@@ -55,6 +55,9 @@ external resources, these resources may be useful.
 - [DFHack usage and basic development information](https://docs.dfhack.org/en/stable/)
 - [DFHack source code](https://github.com/DFHack/dfhack)
   - A local workspace of a private fork can be found at `~/projects/dfhack`.
+- With a game running, you can use DFHack's dfhack-run CLI and Lua scripting
+  capabilities to explore the capabilities of DFHack to supplement ambiguous
+  documentation.
 
 ## Core Engineering & Privacy Rules
 - **Localhost & credential security:** Keep network bindings restricted to

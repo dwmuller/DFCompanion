@@ -41,6 +41,8 @@ Items that are primarily about the mechanics of AI interactions.
 - Optional ability to log entire chat.
 - Support for Ollama (local model execution)
 - Support for intermediate "reasoning" output.
+- Investigate the use of foreign Dwarf Fortress MCP services.
+  - See `notes/foreign_mcp_planning.md`
 
 ## Main page UI improvements
 
@@ -79,16 +81,14 @@ Items that are primarily about the mechanics of AI interactions.
 
 ## Deployment
 
+- Need a LICENSE file.
 - ? Automated builds on GitHub.
 - Build a method of release and distribution.
   - ? Via winget -- easy to explain, should work on all current Windows systems.
   - Figure out an affordable method of providing a trusted image/installation.
     - Look up discussion of this topic by Steve Gibson on Security Now!.
 
-## Development AI control & enablement
+## AI configuration for development tasks
 
-- Facilitate exploration of DFHack capabilities.
-  - An early AI session figured out how to "interactive" probe functionality in
-    the running game. It used this to investigate how to implement new AI tools.
 - ? Provide the official Git MCP server.
   - Might reduce the use of custom Git commands via shell.
