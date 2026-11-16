@@ -2,25 +2,26 @@
 
 What feature or bug we're actively working on.
 
-- History compaction: an AI-generated rolling summary plus recent turns,
-  replacing the silent 20-message truncation so long-running strategy and
-  player corrections survive. Implemented across `src/ai.rs`, `src/session.rs`,
-  and `src/app.rs`; 161 unit tests pass, and interactive testing past the
-  compaction threshold confirms the distinction survives in play.
-- A playtest caught a real bug along the way: the summary was counted in the
-  token budget but never actually sent to the model, so compacted facts (e.g.
-  the Therapy Squad rule) were lost. Fixed: `run_turn_with_key` now prepends
-  `History::summary()` to each request as an explicit data-not-instructions
-  message, covered by the `a_turns_request_includes_the_history_summary`
-  regression test.
-- Saving the summary with the game save remains a deliberately separate later
-  task.
+- TBD
 
 ## Next Steps
 
 Immediate next 1 to 3 tasks to work on.
 
-- TBD
+- Decide how Companion-owned chat history should travel with the game save:
+  follow the existing Lua + HTTP pattern used for game events (Companion
+  exposes a history-snapshot GET/POST endpoint; the Lua script polls it and
+  stores the result via `dfhack.persistent.saveSiteDataString`, restoring it
+  on load), or build the originally-sketched C++ DFHack plugin with gRPC
+  save/load callbacks. The current `df-ai-design-notes.md` and
+  `df-ai-project-requirements.md` describe the latter, but no C++ plugin
+  exists yet; only the Lua script and HTTP API do.
+- Once decided, implement history persistence: a serializable snapshot of
+  `History` (the rolling summary plus recent messages already produced by
+  compaction), new Companion endpoints or RPCs to fetch/restore it, and the
+  corresponding Lua-side read/write of DFHack's per-site persistent storage.
+- Update the design/requirements docs' persistence sections to match
+  whichever mechanism is implemented.
 
 ## Known Issues / Blockers
 
