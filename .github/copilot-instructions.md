@@ -27,9 +27,6 @@ Lua RPC and plugin scripts.
 
 ### Other resources
 
-- The `df-*.md` files in the project root were written by the AI that helped
-  initially set up the project. They have not been updated consistently and
-  should not be considered authoritative.
 - Files in `notes/` are more recent and more up to date. You'll find more
   architecture discussion there.
   - `notes/current-status.md` contains notes about immediately ongoing work.
