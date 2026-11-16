@@ -24,12 +24,9 @@ prepare underlying infrastructure.
 
 Items that are primarily about the mechanics of AI interactions.
 
-- Add diagnostic warning when estimated request tokens is getting large (50k to
-  100k range).
 - Provide a tool like "note_for_later" so that models can remember something
   about game reports even if it doesn't warrant the user's immediate attention
   ("no comment" replies).
-- Auto-compaction of context to limit growth.
 - Save chat state, embedded in a DF game save.
   - This is in effect a handoff to a future chat session.
   - Never treat this context as system text, as it may incorporate input from
@@ -53,7 +50,8 @@ Items that are primarily about the mechanics of AI interactions.
 - Show the current game state discreetly: DFHack reachable or not, whether a
   world and a fortress are loaded, and the fortress name (kept after unload).
   The companion already tracks this in a watch channel; it needs an SSE stream
-  (like `/chat-state`) and a small indicator.
+  (like `/chat-state`) and a small indicator.d
+  - Try right-justified beside the chat state indicator.
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
 - Do some styling to get away from the drear black and white.
