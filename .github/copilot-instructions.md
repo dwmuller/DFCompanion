@@ -29,6 +29,10 @@ Lua RPC and plugin scripts.
   should not be considered authoritative.
 - Files in `notes/` are more recent and more up to date. You'll find more
   architecture discussion there.
+  - `notes/current-status.md` contains notes about immediately ongoing work.
+    Keep this up to date with the latest developments.
+  - `notes/TODO.md` contains a list of tasks and planned improvements for the
+    project. Remove items from here when they've been completed.
 - The Git project's origin is a public GitHub project at
   `https://github.com/dwmuller/dfcompanion`.
 
@@ -65,4 +69,5 @@ external resources, these resources may be useful.
   user context.
 - **Rust verification:** After editing Rust files in `src/` or `tests/`, run
   `cargo fmt`, `cargo check`, and `cargo test` to verify changes.
+
 

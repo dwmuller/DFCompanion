@@ -30,11 +30,12 @@ Items that are primarily about the mechanics of AI interactions.
   about game reports even if it doesn't warrant the user's immediate attention
   ("no comment" replies).
 - Auto-compaction of context to limit growth.
-- ? Save a summarized chat history, embedded in a DF game save.
+- Save a summarized chat history, embedded in a DF game save.
   - This is in effect a handoff to a future chat session.
   - Never treat this context as system text, as it may incorporate input from
     game events and users, which is considered untrusted.
-  - Do the plugin mechanisms facilitate a wait for an AI reply?
+  - This will be triggered by the game being saved. Will the plugin tolerate a
+    possibly long wait for the AI to summarize its context?
 - Support for other media types in chat, both outgoing and incoming.
 - Optional ability of AI to maintain a fort history document.
 - Optional ability to log entire chat.
@@ -43,16 +44,11 @@ Items that are primarily about the mechanics of AI interactions.
 
 ## Main page UI improvements
 
-- Replace retry button with a "Rollback" button on every user input that is
-  still within the last 50 turns (including Done inputs). Stages 1-4 of the
-  underlying work (`Session`, stateless AI engine; notification log
-  epochs/truncation, input-state broadcast, rollback floor; and checkpoints,
-  the `Rollback` event/route, the button and its confirmation) are done, and
-  the old retry control has been removed. Full design and current status in
-  "Rollback design.md".
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
 - Do some styling to get away from the drear black and white.
+- Elide repetitive headers in Conversation transcript.
+  - Especially for game events, but possibly others as well.
 
 ## Usability improvements for AI config
 
@@ -79,4 +75,20 @@ Items that are primarily about the mechanics of AI interactions.
     stale and incorrect.
   - Description of output cap is stale and probably doesn't need to be here.
   - Discusses dropping of reports, which no longer happens.
-  
+- Get a start on user-oriented documentation.
+
+## Deployment
+
+- ? Automated builds on GitHub.
+- Build a method of release and distribution.
+  - ? Via winget -- easy to explain, should work on all current Windows systems.
+  - Figure out an affordable method of providing a trusted image/installation.
+    - Look up discussion of this topic by Steve Gibson on Security Now!.
+
+## Development AI control & enablement
+
+- Facilitate exploration of DFHack capabilities.
+  - An early AI session figured out how to "interactive" probe functionality in
+    the running game. It used this to investigate how to implement new AI tools.
+- ? Provide the official Git MCP server.
+  - Might reduce the use of custom Git commands via shell.
