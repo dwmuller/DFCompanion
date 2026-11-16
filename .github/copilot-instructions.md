@@ -68,6 +68,7 @@ external resources, these resources may be useful.
   queues and fail gracefully without hanging Dwarf Fortress or losing pending
   user context.
 - **Rust verification:** After editing Rust files in `src/` or `tests/`, run
-  `cargo fmt`, `cargo check`, and `cargo test` to verify changes.
+  `cargo fmt`, `cargo check`, `cargo clippy`, and `cargo test` to verify
+  changes.
 
 
