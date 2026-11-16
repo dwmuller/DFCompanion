@@ -19,6 +19,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+use tokio::sync::watch;
 
 use crate::notifications::{DisplayMessage, DisplayMessageKind, Notifier};
 
@@ -265,19 +266,81 @@ struct Connection {
     last_version_warning: Option<String>,
 }
 
+/// How far the game has progressed through loading, ordered from least to most
+/// usable. Tracking it lets tools that read fort data stay inert until a
+/// fortress is loaded, without pausing the conversation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LifecycleState {
+    /// DFHack could not be reached, so nothing is known. Also the initial
+    /// state before the first check.
+    #[default]
+    Unreachable,
+    /// DFHack is reachable but no world is loaded (for example, the title
+    /// screen or world generation).
+    Initialized,
+    /// A world is loaded but no map (for example, legends mode).
+    WorldLoaded,
+    /// A fortress map is loaded. The only state in which fort tools are safe.
+    MapLoaded,
+}
+
+/// The game's loading state plus the last fortress name seen.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LifecycleStatus {
+    pub state: LifecycleState,
+    /// The last non-empty fortress name observed, kept across an unload so the
+    /// UI can still name the fortress the player was in.
+    pub fortress_name: Option<String>,
+}
+
+/// A single reading of the game's loading state, as returned by the Lua module.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleSnapshot {
+    pub world_loaded: bool,
+    pub map_loaded: bool,
+    pub fortress_name: String,
+}
+
 /// Cheaply cloneable handle to the shared DFHack connection.
 #[derive(Clone)]
 pub struct GameState {
     connection: Arc<Mutex<Connection>>,
     notifier: Notifier,
+    lifecycle: watch::Receiver<LifecycleStatus>,
 }
 
 impl GameState {
-    pub fn new(notifier: Notifier) -> Self {
+    pub fn new(notifier: Notifier, lifecycle: watch::Receiver<LifecycleStatus>) -> Self {
         Self {
             connection: Arc::default(),
             notifier,
+            lifecycle,
         }
+    }
+
+    /// Whether a fortress map is loaded, so tools that read fort data are safe
+    /// to run. Reads a cached value; it makes no DFHack call of its own.
+    pub fn map_loaded(&self) -> bool {
+        self.lifecycle.borrow().state >= LifecycleState::MapLoaded
+    }
+
+    /// Asks DFHack how far it has loaded. Safe to call at any screen, including
+    /// before a world exists: it reads only the loaded/not-loaded flags and the
+    /// current site's name.
+    pub fn query_lifecycle(&self) -> Result<LifecycleSnapshot, String> {
+        let reply = self
+            .with_client("Could not query the game's loading state", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "lifecycle_state".to_owned(),
+                    arguments: Vec::new(),
+                })
+            })?
+            .reply
+            .value;
+        serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the game state reply: {error}"))
     }
 
     /// Runs a blocking query on the blocking thread pool.

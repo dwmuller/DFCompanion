@@ -52,6 +52,12 @@ cmake --build build --config Debug --target install-dfhack-script
 
 The install target builds DFCompanion and copies `scripts/*.lua` to `${DFHACK_INSTALL_DIR}/hack/scripts` and `lua/**/*.lua` to `${DFHACK_INSTALL_DIR}/hack/lua`, only when the contents differ. The latter holds `rpc.dfcompanion`, the module the service calls through DFHack's `RunLua` RPC (DFHack only permits modules named `rpc.*`). The target fails with a configuration hint if the setting is empty or the expected scripts directory does not exist. A running game caches modules it has already loaded, so after changing a `lua/` file, restart the game or run `lua package.loaded['rpc.dfcompanion']=nil` in the DFHack console.
 
+### Game-state reporting
+
+The service tracks how far the game has loaded—DFHack reachable, world loaded, fortress loaded, and the fortress name—so its AI game tools stay inert until a fortress is ready; this avoids querying fort data while a fortress is loading, which can crash the game. The state is kept current two ways. `scripts/dfcompanion.lua` pushes it to the service on DFHack's world/map load and unload events, and the service also polls DFHack for it (about every 20 seconds), so the state converges even if no push arrives, such as when the service starts while a fortress is already loaded.
+
+The push is registered when the script runs, independently of the `enable dfcompanion` event-forwarding toggle. Run `enable dfcompanion` to both forward events and report state; to report state without forwarding events, add `dfcompanion status` to a `dfhack-config/init/dfhack*.init` file (it works with no fortress loaded). If the script never runs, the service still learns the state from its own periodic check.
+
 For a release build:
 
 ```powershell

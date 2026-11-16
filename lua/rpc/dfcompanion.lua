@@ -714,6 +714,22 @@ function fortress_name()
     return native .. ', "' .. english .. '"'
 end
 
+-- How far the game has loaded, so the companion knows when fort queries are
+-- safe. Safe to call at any screen, including before a world exists: it reads
+-- only the loaded/not-loaded flags and, with a map loaded, the site name.
+function lifecycle_state()
+    local map_loaded = dfhack.isMapLoaded()
+    local name = ''
+    if map_loaded then
+        name = fortress_name()
+    end
+    return json.encode({
+        world_loaded = dfhack.isWorldLoaded(),
+        map_loaded = map_loaded,
+        fortress_name = name,
+    })
+end
+
 -- Parses "YYYY-MM-DD" or "YYYY-MM-DD:T" into a tick count since year 0.
 -- A date without ticks covers the whole day: it maps to the start of the day
 -- for a lower bound and to the end of the day for an upper bound.

@@ -82,6 +82,15 @@ struct PluginEventResult {
     message: String,
 }
 
+/// A game loading-state push from the DFHack plugin.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginLifecycle {
+    world_loaded: bool,
+    map_loaded: bool,
+    fortress_name: String,
+}
+
 /// Logs every HTTP request and response to stdout. Enabled by `--trace-http`.
 pub fn with_request_tracing(router: Router) -> Router {
     use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
@@ -149,6 +158,10 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
             "/api/plugin/events",
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
         )
+        .route(
+            "/api/plugin/lifecycle",
+            post(plugin_lifecycle).layer(DefaultBodyLimit::max(4_096)),
+        )
         .route("/events", get(events))
         .route("/api/automatic-turns", put(set_automatic_turns))
         .route("/assets/app.js", get(app_script))
@@ -211,6 +224,27 @@ fn plugin_event_response(status_code: StatusCode, status: &'static str, message:
         }),
     )
         .into_response()
+}
+
+/// Handles game loading-state pushes from the DFHack plugin.
+async fn plugin_lifecycle(
+    State(app): State<Arc<CompanionApp>>,
+    headers: HeaderMap,
+    axum::Json(payload): axum::Json<PluginLifecycle>,
+) -> impl IntoResponse {
+    if headers.contains_key(header::ORIGIN) {
+        return plugin_event_response(
+            StatusCode::FORBIDDEN,
+            "rejected",
+            "Browser-originated requests are not accepted.",
+        );
+    }
+    app.update_lifecycle(
+        payload.world_loaded,
+        payload.map_loaded,
+        Some(payload.fortress_name),
+    );
+    plugin_event_response(StatusCode::OK, "accepted", "Game state accepted.")
 }
 fn render_error_response(what: &str, error: RenderError) -> Response {
     eprintln!("Could not render {what}: {error}");
@@ -1142,6 +1176,7 @@ fn validate_local_origin(headers: &HeaderMap) -> Result<(), StatusCode> {
 mod test {
     use super::*;
     use crate::app::{ChatState, CompanionApp};
+    use crate::game_state::LifecycleState;
     use axum::body::to_bytes;
     use tower::ServiceExt;
 
@@ -1377,6 +1412,51 @@ mod test {
             .unwrap()
             .unwrap();
         assert!(String::from_utf8_lossy(&chunk).contains("event: rollback-floor"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
+        let (app, _) = CompanionApp::new();
+        assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
+
+        let accepted = router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/lifecycle")
+                    .header(header::HOST, HTTP_HOST)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
+        assert_eq!(
+            app.lifecycle().fortress_name.as_deref(),
+            Some("Bridgedmine")
+        );
+
+        let rejected = router(app.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/plugin/lifecycle")
+                    .header(header::HOST, HTTP_HOST)
+                    .header(header::ORIGIN, HTTP_ORIGIN)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"world_loaded":false,"map_loaded":false,"fortress_name":""}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
     }
 
     async fn get_events_body(app: &Arc<CompanionApp>, last_event_id: Option<&str>) -> String {

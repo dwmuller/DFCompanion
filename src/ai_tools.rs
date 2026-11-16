@@ -18,6 +18,11 @@ use crate::game_state::{
 
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 20;
 
+/// The result sent back to the model when a tool needs a loaded fortress but
+/// none is loaded. Gating here, rather than refusing the turn, means the
+/// conversation continues and the model can tell the player what is missing.
+pub const NO_FORTRESS_LOADED: &str = "No fortress is currently loaded.";
+
 const MAX_CREATURE_OFFSET: usize = 5_000;
 const MAX_WORK_ORDER_OFFSET: usize = 5_000;
 const DEFAULT_CREATURE_LIMIT: usize = 25;
@@ -49,7 +54,16 @@ fn tool<A: DeserializeOwned>(
             "properties": properties,
             "additionalProperties": false,
         }),
-        handler: Box::new(move |game, arguments| run(game, parse_args(arguments)?)),
+        handler: Box::new(move |game, arguments| {
+            // Arguments are validated first so bad calls fail the same way
+            // regardless of game state. Every current tool reads fort data, so
+            // the fortress gate applies to all of them.
+            let parsed = parse_args(arguments)?;
+            if !game.map_loaded() {
+                return Err(NO_FORTRESS_LOADED.to_owned());
+            }
+            run(game, parsed)
+        }),
     }
 }
 
@@ -747,16 +761,58 @@ impl Default for ToolBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_state::{LifecycleState, LifecycleStatus};
     use crate::notifications::{NotificationHistory, Notifier};
 
+    /// A `GameState` with the given loading state. The watch sender is dropped,
+    /// but a receiver still reads back the last value it held.
+    fn game_state_with(state: LifecycleState) -> GameState {
+        let lifecycle = tokio::sync::watch::channel(LifecycleStatus {
+            state,
+            fortress_name: None,
+        })
+        .1;
+        GameState::new(Notifier::new(NotificationHistory::new()), lifecycle)
+    }
+
     fn game_state() -> GameState {
-        GameState::new(Notifier::new(NotificationHistory::new()))
+        game_state_with(LifecycleState::MapLoaded)
     }
 
     #[tokio::test]
     async fn unknown_tools_are_reported_as_errors() {
         let result = execute_named(&game_state(), "nope", json!({})).await;
         assert!(result.contains("Unknown tool: nope"));
+    }
+
+    #[tokio::test]
+    async fn tools_are_gated_until_a_fortress_is_loaded() {
+        for state in [
+            LifecycleState::Unreachable,
+            LifecycleState::Initialized,
+            LifecycleState::WorldLoaded,
+        ] {
+            let result =
+                execute_named(&game_state_with(state), "get_fortress_overview", json!({})).await;
+            assert_eq!(
+                serde_json::from_str::<Value>(&result).unwrap()["error"],
+                NO_FORTRESS_LOADED,
+                "a tool call with state {state:?} should be gated"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bad_arguments_are_reported_before_the_fortress_gate() {
+        // A bad argument still gets its own error even with no fortress loaded,
+        // because arguments are validated before the gate.
+        let game = game_state_with(LifecycleState::Unreachable);
+        let result = execute_named(&game, "list_residents", json!({"query": "dwarf"})).await;
+        let error = serde_json::from_str::<Value>(&result).unwrap()["error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(!error.is_empty() && error != NO_FORTRESS_LOADED, "{error}");
     }
 
     #[test]

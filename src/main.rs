@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
     let (app, queue_rx) = CompanionApp::load().map_err(std::io::Error::other)?;
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+    let lifecycle_poller = tokio::spawn(app.clone().run_lifecycle_poller());
     app.check_game_at_startup().await;
 
     let grpc_listener = TcpListener::bind(grpc_address).await?;
@@ -42,5 +43,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     worker.abort();
+    lifecycle_poller.abort();
     Ok(())
 }

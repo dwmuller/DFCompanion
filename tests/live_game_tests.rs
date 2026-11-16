@@ -194,7 +194,12 @@ async fn ai_tools_end_to_end() {
     use dfcompanion::ai_tools::execute_named;
     reload_lua_module();
     let history = NotificationHistory::new();
-    let game_state = dfcompanion::game_state::GameState::new(Notifier::new(history));
+    let lifecycle = tokio::sync::watch::channel(dfcompanion::game_state::LifecycleStatus {
+        state: dfcompanion::game_state::LifecycleState::MapLoaded,
+        fortress_name: None,
+    })
+    .1;
+    let game_state = dfcompanion::game_state::GameState::new(Notifier::new(history), lifecycle);
     let call = |name: &'static str, args: serde_json::Value| {
         let game_state = game_state.clone();
         async move {

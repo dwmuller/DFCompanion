@@ -15,14 +15,14 @@ local MESSAGE_PREFIX = 'DFCompanion:'
 
 enabled = enabled or false
 
-local function http_post(body)
+local function http_post(path, body)
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
     local ok, status_code, decoded = pcall(function()
         client:setTimeout(RESPONSE_TIMEOUT_SECONDS, 0)
         client:setBlocking()
 
         local request = table.concat({
-            'POST /api/plugin/events HTTP/1.1',
+            'POST ' .. path .. ' HTTP/1.1',
             'Host: 127.0.0.1:3000',
             'Content-Type: application/json',
             'Content-Length: ' .. #body,
@@ -86,7 +86,7 @@ end
 -- Sends one event; raises an error describing the failure if DFCompanion does
 -- not accept it.
 local function submit_event(event)
-    local ok, status_code, result = pcall(http_post, json.encode(event, {pretty = false}))
+    local ok, status_code, result = pcall(http_post, '/api/plugin/events', json.encode(event, {pretty = false}))
     if not ok then
         error('Could not submit an event to DFCompanion: ' .. tostring(status_code), 0)
     end
@@ -96,6 +96,15 @@ local function submit_event(event)
     if result.status ~= 'accepted' then
         error('DFCompanion did not accept an event (HTTP ' .. tostring(status_code) .. '): ' ..
             tostring(result.message), 0)
+    end
+end
+
+-- Reports the game's loading state to DFCompanion. Raises an error on failure;
+-- the caller decides whether that is worth surfacing.
+local function submit_lifecycle(payload)
+    local ok, status_code = pcall(http_post, '/api/plugin/lifecycle', json.encode(payload, {pretty = false}))
+    if not ok then
+        error('Could not report game state to DFCompanion: ' .. tostring(status_code), 0)
     end
 end
 
@@ -134,6 +143,37 @@ local function report_ai_block_pause(reason)
         'DFCompanion paused Dwarf Fortress because AI processing is blocked.[B]' ..
         detail .. '[B]Review the DFCompanion warning, then resume AI processing when ready.')
 end
+
+-- Reports the game's loading state to DFCompanion so it can gate fort queries.
+-- Registered at load, independent of the enable/disable toggle: the companion
+-- needs this state even when event forwarding is off. A failure is logged only;
+-- the companion also polls for state, so a missed push is not fatal.
+local LIFECYCLE_KEY = 'dfcompanion_lifecycle'
+
+local function push_lifecycle_state()
+    local map_loaded = dfhack.isMapLoaded()
+    local name = ''
+    if map_loaded then
+        name = rpc.fortress_name()
+    end
+    local ok, err = pcall(submit_lifecycle, {
+        world_loaded = dfhack.isWorldLoaded(),
+        map_loaded = map_loaded,
+        fortress_name = name,
+    })
+    if not ok then
+        dfhack.printerr(MESSAGE_PREFIX .. ' could not report game state: ' .. tostring(err))
+    end
+end
+
+local function on_lifecycle_change(state)
+    if state == SC_WORLD_LOADED or state == SC_WORLD_UNLOADED
+        or state == SC_MAP_LOADED or state == SC_MAP_UNLOADED then
+        push_lifecycle_state()
+    end
+end
+
+dfhack.onStateChange[LIFECYCLE_KEY] = on_lifecycle_change
 
 local function on_state_change(state)
     if state == SC_MAP_UNLOADED then

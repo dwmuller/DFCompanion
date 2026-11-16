@@ -43,6 +43,42 @@ fn blocked_warning_does_not_claim_to_pause_an_already_paused_game() {
 }
 
 #[tokio::test]
+async fn lifecycle_transitions_map_to_states_and_keep_the_fortress_name() {
+    let (app, _queue_rx) = CompanionApp::new();
+    assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
+
+    app.update_lifecycle(false, false, Some(String::new()));
+    assert_eq!(app.lifecycle().state, LifecycleState::Initialized);
+    assert_eq!(app.lifecycle().fortress_name, None);
+
+    app.update_lifecycle(true, false, None);
+    assert_eq!(app.lifecycle().state, LifecycleState::WorldLoaded);
+
+    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()));
+    assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
+    assert_eq!(
+        app.lifecycle().fortress_name.as_deref(),
+        Some("Bridgedmine")
+    );
+
+    // Unloading the map keeps the last fortress name.
+    app.update_lifecycle(true, false, None);
+    assert_eq!(app.lifecycle().state, LifecycleState::WorldLoaded);
+    assert_eq!(
+        app.lifecycle().fortress_name.as_deref(),
+        Some("Bridgedmine")
+    );
+
+    // Losing DFHack keeps the name too.
+    app.mark_lifecycle_unreachable();
+    assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
+    assert_eq!(
+        app.lifecycle().fortress_name.as_deref(),
+        Some("Bridgedmine")
+    );
+}
+
+#[tokio::test]
 async fn notification_history_replays_then_streams_live() {
     let (app, _queue_rx) = CompanionApp::new();
     let notifier = app.notifier();

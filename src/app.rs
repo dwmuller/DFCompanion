@@ -1,11 +1,12 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 use verbose_macros::debug;
 
 use crate::events::{EventQueue, QueueItem};
-use crate::game_state::GameState;
+use crate::game_state::{GameState, LifecycleState, LifecycleStatus};
 use crate::notifications::{
     DisplayMessage, DisplayMessageKind, InputState, NotificationHistory, NotificationId, Notifier,
 };
@@ -15,6 +16,9 @@ use crate::{ai, ai_config, ai_tools, chat_commands};
 pub use crate::session::ChatState;
 
 const EVENT_QUEUE_CAPACITY: usize = 50;
+/// How often to re-check the game's loading state when no state-change push
+/// arrives, so the state stays current even if the companion starts mid-game.
+const LIFECYCLE_POLL_INTERVAL: Duration = Duration::from_secs(20);
 
 const ORIENT_MESSAGE: &str = "[Automatic session start] You are now connected to the player's Dwarf Fortress game. Use the read-only game-state tools to get your bearings on the fortress, then give the player a brief greeting and summary of its situation.";
 
@@ -34,6 +38,9 @@ pub struct CompanionApp {
     game_state: GameState,
     chat_state: watch::Sender<ChatState>,
     rollback_floor: watch::Sender<Option<NotificationId>>,
+    /// How far the game has loaded, kept current by the Lua push and the
+    /// lifecycle poller. Read by tools to gate fort queries.
+    lifecycle: watch::Sender<LifecycleStatus>,
 }
 
 impl CompanionApp {
@@ -65,7 +72,8 @@ impl CompanionApp {
         let event_queue = EventQueue::new(queue_tx);
         // `history` is passed in directly.
         let notifier = Notifier::new(history.clone());
-        let game_state = GameState::new(notifier.clone());
+        let lifecycle = watch::channel(LifecycleStatus::default()).0;
+        let game_state = GameState::new(notifier.clone(), lifecycle.subscribe());
         let ai = ai::AiRuntime::new(configurations, game_state.clone());
         (
             Arc::new(Self {
@@ -79,6 +87,7 @@ impl CompanionApp {
                 game_state,
                 chat_state: watch::channel(ChatState::Idle).0,
                 rollback_floor: watch::channel(None).0,
+                lifecycle,
             }),
             queue_rx,
         )
@@ -108,6 +117,90 @@ impl CompanionApp {
 
     pub fn subscribe_rollback_floor(&self) -> watch::Receiver<Option<NotificationId>> {
         self.rollback_floor.subscribe()
+    }
+
+    /// A snapshot of the game's loading state.
+    pub fn lifecycle(&self) -> LifecycleStatus {
+        self.lifecycle.borrow().clone()
+    }
+
+    /// Subscribes to changes in the game's loading state.
+    pub fn subscribe_lifecycle(&self) -> watch::Receiver<LifecycleStatus> {
+        self.lifecycle.subscribe()
+    }
+
+    /// Records the game's loading state from a boolean reading, notifying the
+    /// player when the state actually changes.
+    pub fn update_lifecycle(
+        &self,
+        world_loaded: bool,
+        map_loaded: bool,
+        fortress_name: Option<String>,
+    ) {
+        let state = if map_loaded {
+            LifecycleState::MapLoaded
+        } else if world_loaded {
+            LifecycleState::WorldLoaded
+        } else {
+            LifecycleState::Initialized
+        };
+        self.set_lifecycle(state, fortress_name);
+    }
+
+    /// Records that DFHack could not be reached, keeping the last fortress
+    /// name so the UI can still name it.
+    pub fn mark_lifecycle_unreachable(&self) {
+        self.set_lifecycle(LifecycleState::Unreachable, None);
+    }
+
+    fn set_lifecycle(&self, state: LifecycleState, fortress_name: Option<String>) {
+        // Only touch the watch value when something actually changed, so
+        // subscribers are not woken by every poll that sees the same state.
+        let name = fortress_name.filter(|name| !name.is_empty());
+        let mut state_changed = false;
+        self.lifecycle.send_if_modified(|status| {
+            state_changed = status.state != state;
+            status.state = state;
+            let name_changed = match &name {
+                Some(name) if status.fortress_name.as_deref() != Some(name.as_str()) => {
+                    status.fortress_name = Some(name.clone());
+                    true
+                }
+                _ => false,
+            };
+            state_changed || name_changed
+        });
+        if state_changed {
+            let message = match state {
+                LifecycleState::MapLoaded => match self.lifecycle.borrow().fortress_name.as_deref()
+                {
+                    Some(name) => format!("Fortress loaded: {name}."),
+                    None => "A fortress is loaded.".to_owned(),
+                },
+                LifecycleState::WorldLoaded => "A world is loaded; no fortress yet.".to_owned(),
+                LifecycleState::Initialized => "No world is loaded.".to_owned(),
+                LifecycleState::Unreachable => "Lost contact with DFHack.".to_owned(),
+            };
+            self.notifier
+                .notify(DisplayMessage::new(DisplayMessageKind::Status, message));
+        }
+    }
+
+    /// Polls DFHack for the game's loading state so tools can be gated even when
+    /// no state-change push arrives, for example when the companion starts while
+    /// a fortress is already loaded, or after a missed push. Runs until aborted.
+    pub async fn run_lifecycle_poller(self: Arc<CompanionApp>) {
+        loop {
+            match self.game_state.run(|game| game.query_lifecycle()).await {
+                Ok(snapshot) => self.update_lifecycle(
+                    snapshot.world_loaded,
+                    snapshot.map_loaded,
+                    Some(snapshot.fortress_name),
+                ),
+                Err(_) => self.mark_lifecycle_unreachable(),
+            }
+            tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
+        }
     }
 
     /// What the session needs to know about the world to handle an event.

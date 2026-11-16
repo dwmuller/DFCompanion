@@ -471,7 +471,10 @@ fn make_test_runtime() -> AiRuntime {
     use crate::ai_config::ConfigurationRepository;
     let history = NotificationHistory::new();
     let notifier = Notifier::new(history);
-    let game_state = GameState::new(notifier);
+    let game_state = {
+        let lifecycle = tokio::sync::watch::channel(Default::default()).1;
+        GameState::new(notifier, lifecycle)
+    };
     AiRuntime::new(ConfigurationRepository::in_memory(), game_state)
 }
 

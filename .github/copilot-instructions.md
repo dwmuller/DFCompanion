@@ -13,8 +13,11 @@ Lua RPC and plugin scripts.
 - `src/` contains the main application code, written in Rust. It is a single
   binary crate.
 - Lua code runs in a context provided by DFHack.
-  - `scripts/dfcompanion.lua` is a DFHack plugin. Its main function is to notify
-    DFCompanion of game events.
+  - `scripts/dfcompanion.lua` is a DFHack plugin. It notifies DFCompanion of
+    game events, and reports the game's loading state (DFHack reachable, world
+    loaded, fortress loaded, and the fortress name) so the AI's game tools stay
+    inert until a fortress is ready. The service also polls DFHack for that
+    state on its own.
   - Scripts in `lua/rpc/` provide other supporting functions.
   - The Lua scripts have to be copied to a specific directory in the DFHack
     installation for testing.
