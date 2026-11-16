@@ -945,7 +945,7 @@ impl GameState {
             .filter(|row| search.as_deref().is_none_or(|s| matches_search(row, s)))
             .cloned()
             .collect::<Vec<_>>();
-        Ok(page_result(group, &matching, offset, limit)?)
+        page_result(group, &matching, offset, limit)
     }
 }
 

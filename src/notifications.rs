@@ -38,10 +38,7 @@ impl DisplayMessageKind {
     }
 
     pub fn is_markdown(self) -> bool {
-        match self {
-            Self::User | Self::Companion => true,
-            _ => false,
-        }
+        matches!(self, Self::User | Self::Companion)
     }
 }
 
@@ -266,7 +263,7 @@ impl NotificationHistory {
         let backlog = inner
             .entries
             .iter()
-            .filter(|(id, _)| after.map_or(true, |after| *id > after))
+            .filter(|(id, _)| after.is_none_or(|after| *id > after))
             .cloned()
             .collect();
         (backlog, self.live_tx.subscribe())
@@ -290,7 +287,7 @@ impl NotificationHistory {
         let backlog = inner
             .entries
             .iter()
-            .filter(|(id, _)| after.map_or(true, |after| *id > after))
+            .filter(|(id, _)| after.is_none_or(|after| *id > after))
             .cloned()
             .collect();
         Subscription {
@@ -312,6 +309,12 @@ impl NotificationHistory {
             })
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+}
+
+impl Default for NotificationHistory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

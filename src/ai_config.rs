@@ -66,13 +66,10 @@ pub fn supported_interaction_method_name(method: AdapterKind) -> Option<&'static
     }
 }
 pub fn supported_interaction_method_from_name(name: &str) -> Option<AdapterKind> {
-    match SUPPORTED_ADAPTERS
+    SUPPORTED_ADAPTERS
         .iter()
         .find(|adapter| adapter.name == name)
-    {
-        Some(adapter) => Some(adapter.kind),
-        None => None,
-    }
+        .map(|adapter| adapter.kind)
 }
 
 pub fn supported_interaction_methods() -> std::slice::Iter<'static, SupportedAdapter> {
@@ -106,20 +103,11 @@ where
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ConfigurationFile {
     configurations: Vec<AiConfiguration>,
     active_id: Option<String>,
-}
-
-impl Default for ConfigurationFile {
-    fn default() -> Self {
-        Self {
-            configurations: Vec::new(),
-            active_id: None,
-        }
-    }
 }
 
 pub struct ConfigurationRepository {
@@ -196,16 +184,16 @@ impl ConfigurationRepository {
         url: &str,
         system_text: &str,
     ) -> Result<AiConfiguration, String> {
-        validate_fields(interaction_method, &name, &model_id, &url, &system_text)?;
+        validate_fields(interaction_method, name, model_id, url, system_text)?;
         let mut current = self.write()?;
-        ensure_unique_name(&current.configurations, &name, None)?;
+        ensure_unique_name(&current.configurations, name, None)?;
         let id = new_configuration_id()?;
         let configuration = AiConfiguration {
             id,
             name: name.trim().to_owned(),
             interaction_method,
             model_id: model_id.trim().to_owned(),
-            url: normalize_url(&url)?,
+            url: normalize_url(url)?,
             system_text: system_text.trim().to_owned(),
         };
         let mut next = current.clone();
@@ -224,9 +212,9 @@ impl ConfigurationRepository {
         url: &str,
         system_text: &str,
     ) -> Result<AiConfiguration, String> {
-        validate_fields(interaction_method, &name, &model_id, &url, &system_text)?;
+        validate_fields(interaction_method, name, model_id, url, system_text)?;
         let mut current = self.write()?;
-        ensure_unique_name(&current.configurations, &name, Some(id))?;
+        ensure_unique_name(&current.configurations, name, Some(id))?;
         let mut next = current.clone();
         let configuration = next
             .configurations
@@ -236,7 +224,7 @@ impl ConfigurationRepository {
         configuration.name = name.trim().to_owned();
         configuration.interaction_method = interaction_method;
         configuration.model_id = model_id.trim().to_owned();
-        configuration.url = normalize_url(&url)?;
+        configuration.url = normalize_url(url)?;
         configuration.system_text = system_text.trim().to_owned();
         let updated = configuration.clone();
         self.persist(&next)?;

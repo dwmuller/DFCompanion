@@ -520,6 +520,7 @@ fn active_configuration_response(
 }
 
 /// Looks up a configuration and builds its list item, or the error response.
+#[allow(clippy::result_large_err)]
 fn configuration_item(
     app: &CompanionApp,
     configuration: &AiConfiguration,
@@ -535,6 +536,7 @@ fn configuration_item(
     ))
 }
 
+#[allow(clippy::result_large_err)]
 fn existing_configuration_item(
     app: &CompanionApp,
     id: &str,
@@ -558,14 +560,8 @@ fn as_partial(html: &str, target: &str, swap: &str) -> String {
 }
 
 fn get_active_configuration_selector(app: &CompanionApp) -> Result<String, RenderError> {
-    let (items, active_id) = match configuration_items(&app.ai.configurations) {
-        Ok(items) => items,
-        Err(re) => return Err(re),
-    };
-    match templates::render_active_configuration(&items, active_id.as_deref(), true, "") {
-        Ok(selector) => Ok(selector),
-        Err(error) => Err(error),
-    }
+    let (items, active_id) = configuration_items(&app.ai.configurations)?;
+    templates::render_active_configuration(&items, active_id.as_deref(), true, "")
 }
 
 /// Adds the active-configuration selector to the given HTML as an out-of-band
@@ -1035,9 +1031,7 @@ async fn chat_state_events(
     let stream = futures_util::stream::unfold(
         (app.subscribe_chat_state(), true),
         |(mut receiver, initial)| async move {
-            let chat_state = if initial {
-                Some(*receiver.borrow_and_update())
-            } else if receiver.changed().await.is_ok() {
+            let chat_state = if initial || receiver.changed().await.is_ok() {
                 Some(*receiver.borrow_and_update())
             } else {
                 None

@@ -348,7 +348,7 @@ pub fn render_configurations_page(
 ) -> Result<String, RenderError> {
     Ok(ConfigurationsPageTemplate {
         configurations,
-        active_id: active_id,
+        active_id,
         oob: false,
         error: "",
     }
@@ -436,14 +436,7 @@ pub fn render_edit_form(
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationEditFormTemplate {
-        values: FormFieldValues::new(
-            &id,
-            &name,
-            &interaction_method,
-            &url,
-            &model_id,
-            &system_text,
-        ),
+        values: FormFieldValues::new(id, name, interaction_method, url, model_id, system_text),
         error,
     }
     .render()?)

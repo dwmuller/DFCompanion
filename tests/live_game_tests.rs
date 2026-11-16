@@ -961,9 +961,13 @@ fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
     None
 }
 
+/// A decoded protobuf field: its number and, for length-delimited fields, its
+/// payload.
+type ProtoField<'a> = (u64, Option<&'a [u8]>);
+
 /// Strictly splits a buffer into (field number, length-delimited payload) pairs.
 /// Returns None if it is not a well-formed protobuf message.
-fn parse_fields(buf: &[u8]) -> Option<Vec<(u64, Option<&[u8]>)>> {
+fn parse_fields(buf: &[u8]) -> Option<Vec<ProtoField<'_>>> {
     let mut fields = Vec::new();
     let mut pos = 0;
     while pos < buf.len() {

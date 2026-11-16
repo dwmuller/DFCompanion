@@ -263,7 +263,7 @@ impl CompanionApp {
                         .notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
                 };
                 if self.has_active_configuration() {
-                    let _ = (&self).queue_tx.try_send(QueueItem::Orient);
+                    let _ = self.queue_tx.try_send(QueueItem::Orient);
                 }
             }
             Err(error) => {
@@ -292,27 +292,25 @@ impl CompanionApp {
     /// failure, automatic turns stop until the player resumes and sends a
     /// message, so a broken configuration cannot flood the chat or burn
     /// requests.
-    pub fn run_companion_worker(
+    pub async fn run_companion_worker(
         self: Arc<CompanionApp>,
         mut queue_rx: mpsc::Receiver<QueueItem>,
-    ) -> impl std::future::Future<Output = ()> + Send + 'static {
-        async move {
-            loop {
-                let (flush_at, check_at) = {
-                    let session = self.session.lock().unwrap();
-                    (session.flush_deadline(), session.check_deadline())
-                };
-                tokio::select! {
-                    item = queue_rx.recv() => match item {
-                        Some(item) => self.handle_queue_item(item).await,
-                        None => break,
-                    },
-                    _ = sleep_until(flush_at.unwrap_or(check_at)), if flush_at.is_some() => {
-                        self.dispatch(session::Event::FlushDue);
-                    }
-                    _ = sleep_until(check_at) => {
-                        self.dispatch(session::Event::CheckDue);
-                    }
+    ) {
+        loop {
+            let (flush_at, check_at) = {
+                let session = self.session.lock().unwrap();
+                (session.flush_deadline(), session.check_deadline())
+            };
+            tokio::select! {
+                item = queue_rx.recv() => match item {
+                    Some(item) => self.handle_queue_item(item).await,
+                    None => break,
+                },
+                _ = sleep_until(flush_at.unwrap_or(check_at)), if flush_at.is_some() => {
+                    self.dispatch(session::Event::FlushDue);
+                }
+                _ = sleep_until(check_at) => {
+                    self.dispatch(session::Event::CheckDue);
                 }
             }
         }

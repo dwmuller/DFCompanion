@@ -17,11 +17,11 @@ pub fn tools_tokens_estimate() -> usize {
         .map(|def| {
             def.schema
                 .as_ref()
-                .map_or(0, |s| s.as_str().map_or(0, |s| estimate_token_count(s)))
+                .map_or(0, |s| s.as_str().map_or(0, estimate_token_count))
                 + def
                     .description
                     .as_ref()
-                    .map_or(0, |d| estimate_token_count(&d))
+                    .map_or(0, |d| estimate_token_count(d))
         })
         .sum::<usize>()
 }

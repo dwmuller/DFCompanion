@@ -20,10 +20,8 @@ What feature or bug we're actively working on.
 
 Immediate next 1 to 3 tasks to work on.
 
-- Address the `cargo clippy` items below and adopt clippy in the standing
-  checks.
+- TBD
 
 ## Known Issues / Blockers
 
-- `cargo clippy` finds numerous minor issues that should be addressed. Add this
-  check to standing rules.
+- None.

@@ -265,8 +265,8 @@ pub fn build_prompt(
         .iter()
         .take_while(|&i| {
             if let AiInput::UserRequest { text, .. } = i {
-                content.push_str("\n");
-                content.push_str(&text);
+                content.push('\n');
+                content.push_str(text);
                 // Note: We don't assume that summing estimates for
                 // fragments is equivalent to estimating the concatenation
                 // of fragments.
@@ -302,7 +302,7 @@ pub fn build_prompt(
             .take_while(|&i| {
                 if let AiInput::GameReport { event, .. } = i {
                     let line = serde_json::to_string(&event).unwrap_or_else(|_| event.text.clone());
-                    content.push_str("\n");
+                    content.push('\n');
                     content.push_str(&line);
                     content_tokens = estimate_token_count(&content);
                     if content_tokens_limit > content_tokens {
@@ -331,14 +331,14 @@ pub fn build_prompt(
         tools_tokens,
         total_tokens,
     };
-    return Some(Prompt {
+    Some(Prompt {
         kind,
         content,
         included_inputs,
         through,
         included_rollback_note: rollback_note_due,
         token_estimates,
-    });
+    })
 }
 
 impl Prompt {
