@@ -36,6 +36,8 @@ Lua RPC and plugin scripts.
     Keep this up to date with the latest developments.
   - `notes/TODO.md` contains a list of tasks and planned improvements for the
     project. Remove items from here when they've been completed.
+  - `notes/architecturemd` contains notes on the overarching design
+    decisions and principles guiding the project.
 - The Git project's origin is a public GitHub project at
   `https://github.com/dwmuller/dfcompanion`.
 

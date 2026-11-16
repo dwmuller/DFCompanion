@@ -12,6 +12,10 @@ prepare underlying infrastructure.
 - Rename the queues and their items to reflect their input/output roles. Instead
   "notifications" and "queue items", they're really "outputs" and "inputs" of
   the companion.
+- Revisit the game time representation. Consider a machine-readable form of year
+  plus ticks since the start of that year, and/or a fixed-width, zero-padded
+  string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as
+  plain strings. The current `YYYY-MM-DD[:T]` string has variable-width parts.
 - ? Refactor AI tools as an MCP service.
 - ? Reconsider thread architecture.
   - We've eliminated the "recorder" thread associated with the
@@ -31,6 +35,7 @@ Items that are primarily about the mechanics of AI interactions.
   - This is in effect a handoff to a future chat session.
   - Never treat this context as system text, as it may incorporate input from
     game events and users, which is considered untrusted.
+  - Keep AI configuration settings and especially API keys out of game saves.
   - ? DFCompanion will send updates of the chat state to the Lua DFHack RPC
     module, which will persist it with the game, overwriting previous states.
   - ? State updates should include history and Done user input, but not game
