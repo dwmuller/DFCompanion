@@ -8,6 +8,17 @@ model that is given access to the state of the running game. The DFCompanion
 process interacts with the user via an HTTP service, and with the game through
 Lua RPC and plugin scripts.
 
+### Tool use during development
+
+- Rust tooling: `cargo` for building, checking, linting, and testing.
+- DFHack CLI and Lua scripting for interacting with the game.
+- HTTP client tools for testing the web interface.
+- Git for version control and collaboration.
+- Strongly prefer LSP tools over string searches for finding usages and
+  references in the code.
+
+
+
 ### Key files and directories
 
 - `src/` contains the main application code, written in Rust. It is a single
