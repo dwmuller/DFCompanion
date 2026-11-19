@@ -162,6 +162,12 @@ const NOTIFICATION_HISTORY_LIMIT: usize = 500;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NotificationId(pub u64);
 
+impl std::fmt::Display for NotificationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NotificationId({})", self.0)
+    }
+}
+
 /// What a caller gets back from [`NotificationHistory::subscribe_from`]: the
 /// messages to replay, a receiver for what comes after them, the current
 /// epoch, and whether the caller's own last-known epoch was stale (in which

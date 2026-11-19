@@ -9,9 +9,35 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Rename the queues and their items to reflect their input/output roles. Instead
-  "notifications" and "queue items", they're really "outputs" and "inputs" of
-  the companion.
+- Move AiUsage output items to debug! events.
+- Add info, trace, and debug events to instrument critical program activity.
+- ? Implement an optional tracing subscriber that enqueues OutputItems.
+- Refactor ChatSession API
+  - Effects
+    - Purely internal "effects" become module-internal states, with state
+      transitions managed by a module-specific function.
+    - Effects that drive external activity might remain, but look at other
+      straightforward ways of implementing them. E.g. they may be better
+      integrated with events::QueueItem. Or they may be elevated to a distinct
+      queue of internal app events.
+  - Events
+    - "Events" with an external origin get replaced by more straightforward self
+      functions.
+    - Events with an internal origin should be replaced by internal state.
+- Refactor 
+- Renamings
+  - mod session -> mod chat_session
+    - Session -> ChatSession
+    - Event -> ChatEvent
+  - events::QueueItem -> events::Event
+  - module notifications -> module outputs
+    - DisplayMessage -> OutputItem
+    - DisplayMessageKind -> OutputKind
+    - Notifier -> OutputSink
+      - ? This will be much less widely used after introducing tracing and might
+        go away.
+    - NotificationHistory -> OutputHistory
+    - NotificationId -> OutputId
 - Revisit the game time representation. Consider a machine-readable form of year
   plus ticks since the start of that year, and/or a fixed-width, zero-padded
   string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as

@@ -12,8 +12,10 @@
 use std::{collections::VecDeque, time::Duration};
 
 use itertools::Itertools;
+use name_variant::NamedVariant;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tracing::instrument;
 
 use crate::{
     ai::{
@@ -57,7 +59,7 @@ impl Context {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, NamedVariant)]
 pub enum Event {
     /// Something to ask the AI, which gets a turn right away. `id` is the id of
     /// the notification that displays it, if any.
@@ -313,15 +315,24 @@ impl Session {
         effects
     }
 
+    #[instrument(level = "debug", skip_all, fields(event = event.variant_name()))]
     fn step(&mut self, context: &Context, event: Event, effects: &mut Vec<Effect>) {
         match event {
             Event::UserRequest { text, id } => {
+                tracing::trace!(
+                    "Handling user request with id {}",
+                    id.map_or("<none>".to_string(), |id| id.to_string())
+                );
                 self.queue.push_back(AiInput::UserRequest { text, id });
                 self.flush_at = None;
                 self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                 self.try_start_turn(context, effects);
             }
             Event::Report { event, id } => {
+                tracing::trace!(
+                    "Handling game report with id {}",
+                    id.map_or("<none>".to_string(), |id| id.to_string())
+                );
                 self.queue.push_back(AiInput::GameReport { event, id });
                 self.flush_at.get_or_insert(context.now + EVENT_FLUSH_DELAY);
             }
@@ -339,6 +350,7 @@ impl Session {
                 }
             }
             Event::GameRunning(running) => {
+                tracing::trace!("Handling game running event: {running:?}");
                 if running == Some(true)
                     && context.periodic_turns
                     && !self.blocked
@@ -349,12 +361,19 @@ impl Session {
                 }
             }
             Event::TurnFinished { turn_id, result } => {
+                tracing::trace!("Handling turn finished event: {turn_id:?}");
+                tracing::trace!("Turn finished with result: {result:?}");
                 self.finish_turn(context, turn_id, result, effects)
             }
             Event::CompactionFinished {
                 compaction_id,
                 result,
-            } => self.finish_compaction(context, compaction_id, result, effects),
+            } => {
+                tracing::trace!(
+                    "Handling compaction finished event: {compaction_id:?}, {result:?}"
+                );
+                self.finish_compaction(context, compaction_id, result, effects)
+            }
             Event::CancelTurn => {
                 if let Some(in_flight) = &self.in_flight {
                     in_flight.cancel.cancel();
@@ -367,6 +386,7 @@ impl Session {
                 target,
                 editor_text,
             } => {
+                tracing::trace!("Handling rollback event: {target:?}");
                 self.rollback(context, target, editor_text, effects);
             }
         }

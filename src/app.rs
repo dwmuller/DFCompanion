@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant};
-use verbose_macros::debug;
+use tracing::debug;
 
 use crate::events::{EventQueue, QueueItem};
 use crate::game_state::{GameState, LifecycleState, LifecycleStatus};
@@ -66,8 +66,6 @@ impl CompanionApp {
         configurations: ai_config::ConfigurationRepository,
         history: NotificationHistory,
     ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
-        #[cfg(test)]
-        let _ = verbose_macros::try_set_debug(true);
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let event_queue = EventQueue::new(queue_tx);
         // `history` is passed in directly.

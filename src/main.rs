@@ -1,27 +1,55 @@
-use std::{error::Error, net::SocketAddr};
+use std::net::SocketAddr;
 
+use anyhow::anyhow;
 use dfcompanion::{app::CompanionApp, web};
+use regex::regex;
 use tokio::net::TcpListener;
+use tracing_subscriber::{self, fmt::format::FmtSpan, EnvFilter};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn main() -> anyhow::Result<()> {
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("none"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .init();
+    tracing::info!("Starting DFCompanion");
+
+    let mut http_tracing = false;
+    for arg in std::env::args().skip(1) {
+        let Some(caps) = regex!(r"^--(\w+(-\w+)*)").captures(&arg) else {
+            return Err(anyhow!("Invalid argument: {}", arg));
+        };
+        let opt = &caps[1];
+        match opt {
+            "trace-http" => {
+                http_tracing = true;
+            }
+            _ => {
+                return Err(anyhow!("Invalid option: {}", opt));
+            }
+        }
+    }
+
     let (app, queue_rx) = CompanionApp::load().map_err(std::io::Error::other)?;
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     let lifecycle_poller = tokio::spawn(app.clone().run_lifecycle_poller());
     app.check_game_at_startup().await;
-
     let http_listener = TcpListener::bind(http_address).await?;
-    let mut http_service = web::router(app);
-    if std::env::args().any(|arg| arg == "--trace-http") {
-        http_service = web::with_request_tracing(http_service);
-    }
+    let http_service = if http_tracing {
+        web::with_request_tracing(web::router(app.clone()))
+    } else {
+        web::router(app.clone())
+    };
     let http_server = axum::serve(http_listener, http_service);
 
     println!("DFCompanion web UI listening on http://{http_address}");
 
     tokio::select! {
-        result = http_server => result.map_err(|e| format!("HTTP server stopped: {e:?}"))?,
+        result = http_server => result.map_err(|e| anyhow!("HTTP server stopped: {e:?}"))?,
         result = tokio::signal::ctrl_c() => result?,
     }
 

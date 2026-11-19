@@ -18,7 +18,7 @@ tokio-stream = { version = "0.1", features = ["sync", "net"] }
 tokio-util = "0.7"
 url = "2"
 tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tower-http = { version = "0.7.1", features = ["trace"] }
 pulldown-cmark = "0.13.6"
 ammonia = "4.2.4"
@@ -27,7 +27,9 @@ serde_json_pretty = "0.1.0"
 tokenx-rs = "0.1.0"
 itertools = "0.15.0"
 chrono = "0.4.45"
-verbose-macros = "0.1.1"
+regex = "1.13.2"
+anyhow = "1.0.104"
+name-variant = "0.1.0"
 
 [dev-dependencies]
 # Same prost version that dfhack-proto generates its messages with.
