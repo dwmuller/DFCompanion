@@ -676,8 +676,8 @@ function find_candidates(options_json)
         if entry.skills then
             candidate.matching_skills = {table.unpack(entry.skills, 1, 3)}
         end
-        if options.attribute or sort_attribute then
-            local name = options.attribute or sort_attribute
+        local name = options.attribute or sort_attribute
+        if name then
             candidate.attribute = {name = name:lower(), value = attribute_value(entry.unit, name)}
         end
         local health = health_of(entry.unit)
