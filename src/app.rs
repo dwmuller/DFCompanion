@@ -22,6 +22,8 @@ const LIFECYCLE_POLL_INTERVAL: Duration = Duration::from_secs(20);
 
 const ORIENT_MESSAGE: &str = "[Automatic session start] You are now connected to the player's Dwarf Fortress game. Use the read-only game-state tools to get your bearings on the fortress, then give the player a brief greeting and summary of its situation.";
 
+/// Main companion application structure, managing the AI, game state, and event
+/// queue.
 pub struct CompanionApp {
     queue_tx: EventQueue,
     notifier: Notifier,

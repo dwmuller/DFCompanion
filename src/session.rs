@@ -193,6 +193,11 @@ impl TurnRecord {
     }
 }
 
+/// The session state for a conversation, including the input queue, history,
+/// completed turns, and in-flight operations.
+///
+/// Decides when when AI runs, tracks turns for rollback, and manages history
+/// compaction. Uses a turn-dispatch pattern to facilitate testing.
 pub struct Session {
     /// Inputs for the AI, oldest first.
     queue: VecDeque<AiInput>,
