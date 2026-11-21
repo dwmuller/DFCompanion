@@ -20,6 +20,9 @@ What feature or bug we're actively working on.
   replaceable pending snapshot. Generation/site checks and a Lua-side site
   recheck reject stale writes. Trace-level spans cover state load/save duration;
   snapshot contents are not logged.
+- The main page shows a discreet live DFHack/world/fortress indicator beside the
+  chat state. It renders immediately and updates through an HTMX SSE stream;
+  the last fortress name remains visible after unload.
 - The AI's game tools are gated on a loaded fortress: a tool call with no
   fortress loaded returns an error the model can relay, while the conversation
   itself is never paused. This fixes a crash where querying fort data during a
@@ -40,8 +43,6 @@ What feature or bug we're actively working on.
 
 Immediate next 1 to 3 tasks to work on.
 
-- Show the game state on the main page: an SSE stream and a small, discreet
-  indicator, fed by the lifecycle watch channel (see `notes/TODO.md`).
 - Run the live DFHack acceptance sequence for chat persistence: complete a
   user turn, save and reload, verify restored context and dates, repeat after a
   rollback, and switch between two fortress saves. Then review the trace output

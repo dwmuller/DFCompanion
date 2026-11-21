@@ -1,0 +1,10 @@
+<span class="lifecycle-indicator"
+      data-lifecycle-state="{{ lifecycle.state_class }}"
+      title="{{ lifecycle.accessible_description }}"
+      aria-label="{{ lifecycle.accessible_description }}">
+  <span class="lifecycle-dot" aria-hidden="true"></span>
+  <span class="lifecycle-label">{{ lifecycle.label }}</span>
+  {% if let Some(detail) = lifecycle.detail %}
+    <span class="lifecycle-detail">{{ detail }}</span>
+  {% endif %}
+</span>

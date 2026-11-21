@@ -112,6 +112,7 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
         .route("/chat", post(chat))
         .route("/chat/resume", post(resume_chat))
         .route("/chat-state", get(chat_state_events))
+        .route("/lifecycle-state", get(lifecycle_state_events))
         .route("/conversation.md", get(copy_conversation))
         .route("/rollback/:id", post(rollback))
         .route("/rollback-floor-events", get(rollback_floor_events))
@@ -279,7 +280,12 @@ async fn index(State(app): State<Arc<CompanionApp>>) -> Response {
     match configuration_items(&app.ai.configurations) {
         Ok((items, active_id)) => fragment_response(
             StatusCode::OK,
-            templates::render_index(&items, active_id.as_deref(), app.chat_state()),
+            templates::render_index(
+                &items,
+                active_id.as_deref(),
+                app.chat_state(),
+                &app.lifecycle(),
+            ),
             "page",
         ),
         Err(err) => render_error_response("index", err),
@@ -1071,6 +1077,31 @@ async fn chat_state_events(
                 Err(error) => {
                     eprintln!("Could not render chat state: {error}");
                     Event::default().data("Chat status is unavailable. Refresh the page.")
+                }
+            };
+            Some((Ok(event), (receiver, false)))
+        },
+    );
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Streams the current game lifecycle state and subsequent changes as
+/// server-rendered HTML.
+async fn lifecycle_state_events(
+    State(app): State<Arc<CompanionApp>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let stream = futures_util::stream::unfold(
+        (app.subscribe_lifecycle(), true),
+        |(mut receiver, initial)| async move {
+            if !initial && receiver.changed().await.is_err() {
+                return None;
+            }
+            let lifecycle = receiver.borrow_and_update().clone();
+            let event = match templates::render_lifecycle_state_content(&lifecycle) {
+                Ok(html) => Event::default().data(html),
+                Err(error) => {
+                    eprintln!("Could not render lifecycle state: {error}");
+                    Event::default().data("Game status is unavailable. Refresh the page.")
                 }
             };
             Some((Ok(event), (receiver, false)))

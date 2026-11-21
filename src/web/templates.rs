@@ -9,6 +9,7 @@ use crate::{
     ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
     app::ChatState,
+    game_state::{LifecycleState, LifecycleStatus},
     notifications::{DisplayMessage, InputState},
 };
 
@@ -147,6 +148,7 @@ struct IndexTemplate<'a> {
     active_id: Option<&'a str>,
     chat_state_message: &'static str,
     chat_state_blocked: bool,
+    lifecycle: LifecycleStateView,
     oob: bool,
     value: &'a str,
     error: &'a str,
@@ -157,6 +159,70 @@ struct IndexTemplate<'a> {
 struct ChatStateContentTemplate {
     chat_state_message: &'static str,
     chat_state_blocked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LifecycleStateView {
+    state_class: &'static str,
+    label: String,
+    detail: Option<String>,
+    accessible_description: String,
+}
+
+impl LifecycleStateView {
+    fn new(status: &LifecycleStatus) -> Self {
+        let retained = status.fortress_name.as_deref().map(str::trim);
+        let (state_class, label, detail) = match status.state {
+            LifecycleState::Unreachable => (
+                "unreachable",
+                "DFHack unavailable",
+                retained
+                    .filter(|name| !name.is_empty())
+                    .map(|name| format!("Last fortress: {name}")),
+            ),
+            LifecycleState::Initialized => (
+                "initialized",
+                "DFHack connected",
+                Some(match retained {
+                    Some(name) if !name.is_empty() => {
+                        format!("No world loaded · last fortress: {name}")
+                    }
+                    _ => "No world loaded".to_owned(),
+                }),
+            ),
+            LifecycleState::WorldLoaded => (
+                "world-loaded",
+                "World loaded",
+                Some(match retained {
+                    Some(name) if !name.is_empty() => {
+                        format!("No fortress loaded · last: {name}")
+                    }
+                    _ => "No fortress loaded".to_owned(),
+                }),
+            ),
+            LifecycleState::MapLoaded => (
+                "map-loaded",
+                "Fortress loaded",
+                retained.filter(|name| !name.is_empty()).map(str::to_owned),
+            ),
+        };
+        let accessible_description = match &detail {
+            Some(detail) => format!("{label}. {detail}"),
+            None => label.to_owned(),
+        };
+        Self {
+            state_class,
+            label: label.to_owned(),
+            detail,
+            accessible_description,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "lifecycle-state-content.html")]
+struct LifecycleStateContentTemplate {
+    lifecycle: LifecycleStateView,
 }
 
 #[derive(Template)]
@@ -308,6 +374,7 @@ pub fn render_index(
     configurations: &[ConfigurationListItem],
     active_id: Option<&str>,
     chat_state: ChatState,
+    lifecycle: &LifecycleStatus,
 ) -> Result<String, RenderError> {
     let (chat_state_message, chat_state_blocked) = chat_state_content(chat_state);
     Ok(IndexTemplate {
@@ -315,11 +382,20 @@ pub fn render_index(
         active_id,
         chat_state_message,
         chat_state_blocked,
+        lifecycle: LifecycleStateView::new(lifecycle),
         oob: false,
         value: "",
         error: "",
     }
     .render()?)
+}
+
+pub fn render_lifecycle_state_content(lifecycle: &LifecycleStatus) -> Result<String, RenderError> {
+    Ok(LifecycleStateContentTemplate {
+        lifecycle: LifecycleStateView::new(lifecycle),
+    }
+    .render()?
+    .replace('\r', ""))
 }
 
 pub fn render_chat_state_content(chat_state: ChatState) -> Result<String, RenderError> {
@@ -545,8 +621,13 @@ mod test {
             true,
         )];
 
-        let index = render_index(&configurations, Some("one"), ChatState::Idle)
-            .expect("index should render");
+        let index = render_index(
+            &configurations,
+            Some("one"),
+            ChatState::Idle,
+            &LifecycleStatus::default(),
+        )
+        .expect("index should render");
         assert!(index.contains("id=\"active-configuration\""));
         assert!(index.contains("value=\"one\" checked"));
         assert!(index.contains("htmx-config"));
@@ -557,6 +638,8 @@ mod test {
         assert!(index.contains("Copy conversation as Markdown"));
         assert!(index.contains("id=\"copy-conversation-status\" role=\"status\""));
         assert!(index.contains("id=\"chat-state\""));
+        assert!(index.contains("id=\"lifecycle-state\""));
+        assert!(index.contains("data-lifecycle-state=\"unreachable\""));
         assert!(!index.contains("Waiting for AI response"));
         assert!(!index.contains("hx-trigger=\"load\"\n           hx-swap"));
         assert!(!index.contains("hx-swap-oob"));
@@ -566,6 +649,58 @@ mod test {
         assert!(page.contains("id=\"configuration-list\""));
         assert!(page.contains("First"));
         assert!(!page.contains("Loading configurations"));
+    }
+
+    #[test]
+    fn lifecycle_content_should_show_loaded_fortress_name_and_escape_it() {
+        let lifecycle = LifecycleStatus {
+            state: LifecycleState::MapLoaded,
+            fortress_name: Some("<Bridgedmine>".to_owned()),
+            site_id: Some(41),
+        };
+
+        let rendered = render_lifecycle_state_content(&lifecycle).unwrap();
+
+        assert!(
+            rendered.contains("data-lifecycle-state=\"map-loaded\"")
+                && rendered.contains("Fortress loaded")
+                && rendered.contains("&#60;Bridgedmine&#62;")
+                && !rendered.contains("<Bridgedmine>")
+        );
+    }
+
+    #[test]
+    fn lifecycle_content_should_show_last_fortress_after_unload() {
+        let lifecycle = LifecycleStatus {
+            state: LifecycleState::WorldLoaded,
+            fortress_name: Some("Bridgedmine".to_owned()),
+            site_id: Some(41),
+        };
+
+        let rendered = render_lifecycle_state_content(&lifecycle).unwrap();
+
+        assert!(
+            rendered.contains("data-lifecycle-state=\"world-loaded\"")
+                && rendered.contains("No fortress loaded")
+                && rendered.contains("last: Bridgedmine")
+        );
+    }
+
+    #[test]
+    fn lifecycle_content_should_distinguish_dfhack_from_world_state() {
+        let disconnected = render_lifecycle_state_content(&LifecycleStatus::default()).unwrap();
+        let no_world = render_lifecycle_state_content(&LifecycleStatus {
+            state: LifecycleState::Initialized,
+            fortress_name: None,
+            site_id: None,
+        })
+        .unwrap();
+
+        assert!(
+            disconnected.contains("DFHack unavailable")
+                && no_world.contains("DFHack connected")
+                && no_world.contains("No world loaded")
+        );
     }
 
     #[test]

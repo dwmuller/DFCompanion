@@ -214,6 +214,40 @@ fn an_eligible_notification_renders_a_rollback_button_and_an_ineligible_one_does
 }
 
 #[tokio::test]
+async fn lifecycle_state_streams_initial_and_changed_fortress_status() {
+    let (app, _) = CompanionApp::new();
+    let response = router(app.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/lifecycle-state")
+                .header(header::HOST, HTTP_HOST)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body().into_data_stream();
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("initial lifecycle state should be sent")
+        .unwrap()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&initial).contains("DFHack unavailable"));
+
+    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    let updated = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("changed lifecycle state should be sent")
+        .unwrap()
+        .unwrap();
+    let updated = String::from_utf8_lossy(&updated);
+    assert!(
+        updated.contains("data-lifecycle-state=\"map-loaded\"") && updated.contains("Bridgedmine")
+    );
+}
+
+#[tokio::test]
 async fn rollback_floor_events_streams_the_floor_as_a_named_event() {
     let (app, _queue_rx) = CompanionApp::new();
     let response = router(app.clone())

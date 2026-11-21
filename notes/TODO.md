@@ -42,11 +42,6 @@ Items that are primarily about the mechanics of AI interactions.
 
 ## Main page UI improvements
 
-- Show the current game state discreetly: DFHack reachable or not, whether a
-  world and a fortress are loaded, and the fortress name (kept after unload).
-  The companion already tracks this in a watch channel; it needs an SSE stream
-  (like `/chat-state`) and a small indicator.d
-  - Try right-justified beside the chat state indicator.
 - Arrange various options as a top-of-page menu?
   - Sort of did this, but it's not beautiful yet.
 - Do some styling to get away from the drear black and white.

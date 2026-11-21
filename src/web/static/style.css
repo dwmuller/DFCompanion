@@ -250,9 +250,58 @@ textarea {
   gap: 0 0.75rem;
 }
 
+#lifecycle-state {
+  margin-left: auto;
+}
+
+.lifecycle-indicator {
+  align-items: baseline;
+  display: inline-flex;
+  gap: 0.4rem;
+  color: #555;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.lifecycle-dot {
+  background: #777;
+  border-radius: 50%;
+  display: inline-block;
+  height: 0.65rem;
+  width: 0.65rem;
+}
+
+.lifecycle-label {
+  font-weight: 600;
+}
+
+[data-lifecycle-state="unreachable"] .lifecycle-dot {
+  background: #b42318;
+}
+
+[data-lifecycle-state="initialized"] .lifecycle-dot,
+[data-lifecycle-state="world-loaded"] .lifecycle-dot {
+  background: #b7791f;
+}
+
+[data-lifecycle-state="map-loaded"] .lifecycle-dot {
+  background: #24834a;
+}
+
+.lifecycle-detail {
+  color: #666;
+}
+
 #chat-state form,
 #chat-state button {
   margin: 0;
+}
+
+@media (max-width: 40rem) {
+  #lifecycle-state {
+    margin-left: 0;
+    width: 100%;
+  }
 }
 
 section {
