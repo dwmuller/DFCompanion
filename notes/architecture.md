@@ -29,7 +29,7 @@ the UI for the convenience of the AI.
 
 - **Player:** interacts directly with Dwarf Fortress and converses with the AI
   through the companion.
-- **AI:** converses with the player and receives/querys game observations
+- **AI:** converses with the player and receives/queries game observations
   through the companion.
 - **Game environment:** Dwarf Fortress is the authoritative simulation; DFHack
   is the observation interface into it.
@@ -40,21 +40,38 @@ Direct player/game interaction is outside the companion's scope.
 
 ## Major components
 
-DFCompanion runs as a single process. The main thread is the companion worker.
+DFCompanion runs as a single asynchronous process with an embedded HTTP service,
+a companion worker, and a lifecycle poller. The service binds to
+`127.0.0.1:3000`, serves the HTMX-based UI, accepts user input, and provides
+separate endpoints for the DFHack `dfcompanion` plugin's reports and lifecycle
+updates.
 
-An HTTP service embedded in the process serves up the user's UI, and accepts
-inputs from both the user and a DFHack Lua plugin named `dfcompanion`. The
-DFHack plugin uses this mechanism to send updates about game state and game
-"reports" similar to those seen in the game's own UI. Inputs are sent as
-QueueItem objects to the companion worker.
+`CompanionApp` owns the shared application state and bounded event queue. User
+messages and game reports arrive as `ExternalEvent` values on the queue (capacity
+50). The worker feeds them to `ChatSession`; lifecycle pushes update the shared
+loading state directly. The DFHack plugin pauses the game and alerts the player
+if a report cannot be delivered, rather than silently losing it.
 
-CompanionApp maintains state for and implements the code for the companion
-worker loop which consumes QueueItem objects. It drives much of the activity
-with in the app, especially interactions with the AI.
+`ChatSession` is the conversation state machine. It contains pending inputs,
+conversation history, the in-flight turn or compaction, automatic-turn timers,
+and rollback checkpoints. It performs no I/O: it consumes `ChatEvents` and
+returns ordered `Effect` values. `CompanionApp` performs those effects, including
+publishing UI state, starting asynchronous AI work, pausing a blocked game, and
+updating the notification history. Slow operations therefore do not hold the
+worker loop or Dwarf Fortress.
 
-AI tools are provided which query the live game for data. The queries are
-ultimately implemented by a Lua module running under control of DFHack, distinct
-from the plugin.
+`AiRuntime` is stateless with respect to the conversation. It executes one AI
+turn or one history-compaction request from the supplied configuration, history,
+and prompt. Game tools are application-owned rather than provider-owned and may
+use both DFHack RemoteFortressReader queries and the companion's `rpc.dfcompanion`
+Lua module. The latter is distinct from the event-forwarding
+`dfcompanion` plugin.
+
+The current lifecycle state is maintained by pushes from the DFHack plugin and
+by a 20-second polling fallback. Its states distinguish DFHack unreachable, no
+world, world loaded, and fortress map loaded. Fortress-data tools are gated
+until a fortress is loaded; ordinary conversation remains available at every
+loading state.
 
 ## Semantic inference
 
@@ -75,9 +92,12 @@ information unavailable from native events.
 - Treat browser access to localhost as a security boundary: validate request
   origin/host, protect state-changing endpoints against cross-site requests,
   avoid permissive CORS, and do not put credentials in URLs or logs.
+- The service validates the exact local host. Browser state changes require the
+  expected `Origin`; plugin endpoints reject browser-originated requests
+  instead.
 - Store AI credentials in the operating system credential vault; never in the
   app settings file, a game save, logs, or URLs.
-- Local  traffic is unencrypted and unauthenticated. A shared-secret mechanism
+- Local traffic is unencrypted and unauthenticated. A shared-secret mechanism
   may be added later to protect against forged local messages.
 
 ## AI context and provider
@@ -94,10 +114,35 @@ not permit the project's intended use.
 Currently, player messages trigger one sequential AI turn and reports accumulate
 as context; optionally, the AI also gets an automatic turn within 5 seconds of a
 game event and every 30 seconds while the game runs, and may abstain by replying
-`NO_COMMENT`. The worker estimates a 16,000-token input limit, accounting for
-the selected system text, dropping oldest pending reports first and then older
-conversation turns, and caps output at 8,192 tokens. API failures are surfaced
-while pending chat and reports are retained for retry.
+`NO_COMMENT`. Automatic event turns and periodic turns are independently
+enabled and are off by default.
+
+Prompts have an estimated 16,000-token input budget and a hard 8,192-token output
+cap. Prompt construction accounts for the configured system text, tool
+definitions, history, and pending content, then includes a fitting contiguous
+prefix of user requests or reports; content that does not fit remains queued.
+Large completed histories are compacted before another turn by replacing older
+messages with an AI-written rolling summary while retaining the six most recent
+messages verbatim. The summary is carried into subsequent requests and is
+treated as untrusted conversation data, not as instructions.
+
+Within a turn, `AiRuntime` repeatedly sends the growing `ChatRequest` until the
+provider returns a final text response. Each tool-use round appends the
+provider's assistant message and one combined message containing every result
+from that batch. The combined result message is required for Anthropic-style
+tool-use APIs. Tool messages remain only in the current request; they do not
+become conversation-history messages after the turn.
+
+The 16,000-token estimate covers the initial prompt, not the tool messages
+accumulated during subsequent request rounds. Tool calls are therefore bounded
+in number by an application budget, and tools should return compact data rather
+than relying on the initial prompt limit to constrain their replies.
+
+Turns run sequentially. A failed turn or compaction blocks further AI
+processing, pauses the game when possible, and retains pending inputs plus the
+pre-failure history for the player to resume or roll back. A rollback restores
+the corresponding pre-turn history and notification state, cancels in-flight
+work, and returns dropped player text to the editor.
 
 ## Game timestamps
 
@@ -126,10 +171,15 @@ Dwarf Fortress should remain authoritative for current game state. The companion
 should not duplicate current state merely for convenience if it can be queried
 reliably through DFHack.
 
-AI configuration and user preferences are stored locally.
+AI configuration metadata and the active selection are stored in a local
+settings file. API keys are stored separately in the operating system credential
+vault. Conversation history and notification state are currently in memory for
+the lifetime of the companion process.
 
-Chat history is stored as part of Dwarf Fortress game saves and includes enough
-context to continue a companion chat session. 
+Persistence of chat history as part of the Dwarf Fortress save is a planned
+feature, not a current capability. The persisted form should include enough
+context to continue a companion chat session:
+
 - Must include game timestamp so the AI can estimate how stale it is compared to
   the running game state.
 - Must not include sensitive or machine-specific data.
@@ -138,7 +188,7 @@ context to continue a companion chat session.
 - Will be sent to the Lua component after every completed user AI interaction so
   that it will be persisted when the user saves a game.
 - Will be loaded the first time that DFCompanion interacts with currently loaded
-  fortress, before any AI interaction in that fortress' context.
+  fortress, before any AI interaction in that fortress's context.
 
 ## Learning goals
 

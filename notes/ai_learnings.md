@@ -7,6 +7,30 @@ AIs, I'm keeping notes on the process and lessons learned.
 I look at this from the PoV of a former professional developer who now
 approaches it as a cherished hobby.
 
+## Tool-call context growth
+
+An AI tool turn is not one fixed request. The assistant's tool-use message and
+the corresponding tool results are appended to the request before each later
+round, so repeated tool calls can grow the within-turn input dramatically even
+when the initial prompt is under budget.
+
+The output allowance also applies to intermediate model responses. A model can
+use it for reasoning or further tool calls and then return no final text.
+
+One observed failure expanded from an estimated 17,000-token initial request to
+an estimated 157,366 tokens after five tool-call batches, then consumed the
+entire then-available 4,096-token output allowance without producing a final
+answer. Most of the growth came from accumulated tool-call/result context.
+
+Design responses should therefore include:
+
+- compact tool outputs and pagination;
+- a per-turn tool-call budget;
+- purpose-built tools that avoid forcing models to infer a simple fact through
+  many broad detail calls; and
+- enough observability to distinguish initial-prompt usage from later
+  tool-round usage.
+
 ## Commercial API access
 
 The market is burgeoning and complex. All I can touch on here is what I've
