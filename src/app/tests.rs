@@ -1,7 +1,7 @@
 use super::*;
-use crate::events::{GameEvent, QueueItem};
+use crate::chat_session::{EVENT_FLUSH_DELAY, PERIODIC_CHECK_INTERVAL};
+use crate::events::{ExternalEvent, GameEvent};
 use crate::notifications::{HistoryEvent, NotificationId};
-use crate::session::{EVENT_FLUSH_DELAY, PERIODIC_CHECK_INTERVAL};
 use tokio::sync::broadcast;
 
 /// Waits for the next new message (skipping state-change and reset events)
@@ -146,7 +146,7 @@ async fn web_chat_input_is_enqueued_as_user_input() {
     assert!(String::from_utf8_lossy(&body).contains("hx-swap-oob"));
     assert_eq!(
         queue_rx.recv().await.unwrap(),
-        QueueItem::UserInput("hello Companion".to_owned())
+        ExternalEvent::UserInput("hello Companion".to_owned())
     );
 }
 
@@ -158,7 +158,7 @@ async fn worker_runs_chat_commands_without_involving_the_ai() {
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     for text in ["/call no_such_tool a=1", "/bogus"] {
         queue_tx
-            .try_send(QueueItem::UserInput(text.to_owned()))
+            .try_send(ExternalEvent::UserInput(text.to_owned()))
             .unwrap();
     }
 
@@ -191,7 +191,7 @@ async fn pending_ai_inputs_carry_the_ids_of_their_notifications() {
     let queue_tx = app.queue_tx.clone();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     queue_tx
-        .try_send(QueueItem::GameEvent(GameEvent {
+        .try_send(ExternalEvent::GameEvent(GameEvent {
             id: None,
             date: "250-01-01:0".to_owned(),
             report_type: None,
@@ -202,7 +202,7 @@ async fn pending_ai_inputs_carry_the_ids_of_their_notifications() {
     let (event_id, event) = recv_added(&mut notifications).await;
     assert_eq!(event.kind, DisplayMessageKind::GameEvent);
     queue_tx
-        .try_send(QueueItem::UserInput("hello".to_owned()))
+        .try_send(ExternalEvent::UserInput("hello".to_owned()))
         .unwrap();
     let (user_id, user) = recv_added(&mut notifications).await;
     assert_eq!(user.kind, DisplayMessageKind::User);
@@ -240,7 +240,7 @@ async fn inputs_are_pending_until_an_ai_turn_takes_them() {
     let queue_tx = app.queue_tx.clone();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     queue_tx
-        .try_send(QueueItem::UserInput("hello".to_owned()))
+        .try_send(ExternalEvent::UserInput("hello".to_owned()))
         .unwrap();
     let (user_id, _) = recv_added(&mut notifications).await;
 
@@ -280,7 +280,7 @@ async fn a_failed_turn_returns_its_inputs_to_pending() {
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     let mut chat_state = app.subscribe_chat_state();
     queue_tx
-        .try_send(QueueItem::UserInput("hello".to_owned()))
+        .try_send(ExternalEvent::UserInput("hello".to_owned()))
         .unwrap();
 
     chat_state
@@ -368,7 +368,7 @@ async fn rollback_recovers_a_queued_request_then_rejects_the_same_target() {
     let mut notifications = app.history.subscribe(None).1;
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     app.queue_tx
-        .try_send(QueueItem::UserInput("hello".to_owned()))
+        .try_send(ExternalEvent::UserInput("hello".to_owned()))
         .unwrap();
 
     let (id, _) = recv_added(&mut notifications).await;
@@ -513,7 +513,7 @@ async fn chat_without_api_key_retains_pending_context_after_failure() {
     app.ai.configurations.set_active(Some(&config.id)).unwrap();
     let (_, mut notifications_rx) = app.history.subscribe(None);
     app.queue_tx
-        .try_send(QueueItem::GameEvent(GameEvent {
+        .try_send(ExternalEvent::GameEvent(GameEvent {
             id: None,
             date: "254-07-05:1061".to_owned(),
             report_type: None,
@@ -522,7 +522,7 @@ async fn chat_without_api_key_retains_pending_context_after_failure() {
         }))
         .unwrap();
     app.queue_tx
-        .try_send(QueueItem::UserInput("What happened?".to_owned()))
+        .try_send(ExternalEvent::UserInput("What happened?".to_owned()))
         .unwrap();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
 
@@ -541,8 +541,8 @@ async fn chat_without_api_key_retains_pending_context_after_failure() {
 
 const EVENT_BODY: &str = r#"{"id":42,"date":"254-07-05:1061","type":"CANCEL_JOB","category":"jobs","text":"Make ash cancelled."}"#;
 
-fn sample_event() -> QueueItem {
-    QueueItem::GameEvent(GameEvent {
+fn sample_event() -> ExternalEvent {
+    ExternalEvent::GameEvent(GameEvent {
         id: None,
         date: "254-07-05:1061".to_owned(),
         report_type: None,
@@ -725,7 +725,7 @@ async fn lua_http_event_is_enqueued() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         queue_rx.recv().await.unwrap(),
-        QueueItem::GameEvent(GameEvent {
+        ExternalEvent::GameEvent(GameEvent {
             id: Some(42),
             date: "254-07-05:1061".to_owned(),
             report_type: Some("CANCEL_JOB".to_owned()),
@@ -776,7 +776,7 @@ async fn lua_http_event_reports_full_queue_without_accepting_event() {
     let (app, queue_rx) = CompanionApp::new();
     for i in 0..EVENT_QUEUE_CAPACITY {
         app.queue_tx
-            .try_send(QueueItem::UserInput(format!("filler {i}")))
+            .try_send(ExternalEvent::UserInput(format!("filler {i}")))
             .unwrap();
     }
 

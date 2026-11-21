@@ -36,9 +36,10 @@ impl GameEvent {
     }
 }
 
-/// Items that can be queued for processing by the companion AI.
+/// Events from external sources such as user input and game events, which are
+/// intended for processing by the companion AI.
 #[derive(Clone, Debug, PartialEq)]
-pub enum QueueItem {
+pub enum ExternalEvent {
     UserInput(String),
     /// An AI configuration was just selected: give the AI a turn to look around.
     Orient,
@@ -47,14 +48,14 @@ pub enum QueueItem {
 
 #[derive(Clone)]
 pub struct EventQueue {
-    queue_tx: mpsc::Sender<QueueItem>,
+    queue_tx: mpsc::Sender<ExternalEvent>,
 }
 
 impl EventQueue {
-    pub fn new(queue_tx: mpsc::Sender<QueueItem>) -> Self {
+    pub fn new(queue_tx: mpsc::Sender<ExternalEvent>) -> Self {
         Self { queue_tx }
     }
-    pub fn try_send(&self, item: QueueItem) -> Result<(), String> {
+    pub fn try_send(&self, item: ExternalEvent) -> Result<(), String> {
         match self.queue_tx.try_send(item) {
             Ok(_) => Ok(()),
             Err(TrySendError::Full(_)) => Err(format!(

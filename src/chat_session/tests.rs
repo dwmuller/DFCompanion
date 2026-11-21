@@ -32,15 +32,15 @@ fn report(text: &str) -> GameEvent {
     }
 }
 
-fn user(text: &str, id: u64) -> Event {
-    Event::UserRequest {
+fn user(text: &str, id: u64) -> ChatEvents {
+    ChatEvents::UserRequest {
         text: text.to_owned(),
         id: Some(NotificationId(id)),
     }
 }
 
-fn game_report(text: &str, id: u64) -> Event {
-    Event::Report {
+fn game_report(text: &str, id: u64) -> ChatEvents {
+    ChatEvents::Report {
         event: report(text),
         id: Some(NotificationId(id)),
     }
@@ -98,14 +98,14 @@ fn answer(history: &History, prompt: &Prompt, text: &str) -> Result<TurnOutput, 
     })
 }
 
-fn finished(turn_id: u64, result: Result<TurnOutput, TurnError>) -> Event {
-    Event::TurnFinished { turn_id, result }
+fn finished(turn_id: u64, result: Result<TurnOutput, TurnError>) -> ChatEvents {
+    ChatEvents::TurnFinished { turn_id, result }
 }
 
 #[test]
 fn a_user_request_starts_a_turn_right_away() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
 
     let (turn_id, prompt, _, _) = started_turn(&effects).expect("a turn starts");
@@ -122,7 +122,7 @@ fn a_user_request_starts_a_turn_right_away() {
 #[test]
 fn a_successful_turn_answers_commits_history_and_goes_idle() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
@@ -148,7 +148,7 @@ fn a_successful_turn_answers_commits_history_and_goes_idle() {
 #[test]
 fn input_arriving_during_a_turn_waits_and_then_gets_its_own_turn() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("first", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
@@ -181,7 +181,7 @@ fn input_arriving_during_a_turn_waits_and_then_gets_its_own_turn() {
 #[test]
 fn a_failed_turn_returns_its_inputs_to_pending_and_blocks() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, ..) = started_turn(&effects).unwrap();
 
@@ -207,7 +207,7 @@ fn a_failed_turn_returns_its_inputs_to_pending_and_blocks() {
 #[test]
 fn nothing_starts_while_blocked_until_resumed() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, ..) = started_turn(&effects).unwrap();
     session.handle(
@@ -219,7 +219,7 @@ fn nothing_starts_while_blocked_until_resumed() {
     assert!(started_turn(&effects).is_none());
     assert_eq!(session.chat_state(), ChatState::Blocked);
 
-    let effects = session.handle(&context(now), Event::Resume);
+    let effects = session.handle(&context(now), ChatEvents::Resume);
     assert_eq!(published(&effects), vec![ChatState::Idle]);
     // Resuming alone sends nothing; the next input does, and it carries every
     // request retained during the block.
@@ -233,7 +233,7 @@ fn nothing_starts_while_blocked_until_resumed() {
 #[test]
 fn a_request_without_a_configuration_blocks_and_keeps_the_input() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let mut context = context(now);
     context.configuration = Ok(None);
 
@@ -252,7 +252,7 @@ fn a_request_without_a_configuration_blocks_and_keeps_the_input() {
 #[test]
 fn a_configuration_error_blocks_with_the_error() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let mut context = context(now);
     context.configuration = Err("cannot read configuration".to_owned());
 
@@ -267,11 +267,11 @@ fn a_configuration_error_blocks_with_the_error() {
 #[test]
 fn cancelling_returns_the_inputs_to_pending_without_blocking() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, _, _, cancel) = started_turn(&effects).unwrap();
 
-    let effects = session.handle(&context(now), Event::CancelTurn);
+    let effects = session.handle(&context(now), ChatEvents::CancelTurn);
     assert!(cancel.is_cancelled());
     // The turn is still in flight until it reports back.
     assert!(effects.is_empty());
@@ -289,7 +289,7 @@ fn cancelling_returns_the_inputs_to_pending_without_blocking() {
 #[test]
 fn a_report_from_a_turn_that_is_not_in_flight_is_ignored() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
@@ -318,7 +318,7 @@ fn a_report_from_a_turn_that_is_not_in_flight_is_ignored() {
 #[test]
 fn reports_wait_for_the_flush_timer_and_are_sent_together() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     assert_eq!(session.flush_deadline(), None);
 
     let effects = session.handle(&context(now), game_report("one", 1));
@@ -331,7 +331,7 @@ fn reports_wait_for_the_flush_timer_and_are_sent_together() {
     assert_eq!(session.flush_deadline(), Some(now + EVENT_FLUSH_DELAY));
 
     let due = now + EVENT_FLUSH_DELAY;
-    let effects = session.handle(&context(due), Event::FlushDue);
+    let effects = session.handle(&context(due), ChatEvents::FlushDue);
     let (_, prompt, ..) = started_turn(&effects).expect("the flush starts a turn");
     assert_eq!(prompt.included_inputs, 2);
     assert_eq!(session.flush_deadline(), None);
@@ -341,12 +341,12 @@ fn reports_wait_for_the_flush_timer_and_are_sent_together() {
 #[test]
 fn flushing_does_nothing_when_event_turns_are_off() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
 
     let mut off = context(now);
     off.event_turns = false;
-    let effects = session.handle(&off, Event::FlushDue);
+    let effects = session.handle(&off, ChatEvents::FlushDue);
 
     assert!(started_turn(&effects).is_none());
     // The report stays queued for the next turn.
@@ -357,13 +357,13 @@ fn flushing_does_nothing_when_event_turns_are_off() {
 #[test]
 fn flushing_does_nothing_while_blocked() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let mut none = context(now);
     none.configuration = Ok(None);
     session.handle(&none, user("hello", 1)); // Blocks: no configuration.
     session.handle(&context(now), game_report("one", 2));
 
-    let effects = session.handle(&context(now), Event::FlushDue);
+    let effects = session.handle(&context(now), ChatEvents::FlushDue);
 
     assert!(started_turn(&effects).is_none());
     assert_eq!(session.pending_report_count(), 1);
@@ -372,7 +372,7 @@ fn flushing_does_nothing_while_blocked() {
 #[test]
 fn a_user_request_cancels_the_pending_flush() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
     assert!(session.flush_deadline().is_some());
 
@@ -389,23 +389,23 @@ fn a_user_request_cancels_the_pending_flush() {
 #[test]
 fn a_periodic_check_asks_whether_the_game_runs_before_starting_a_turn() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
     let due = now + PERIODIC_CHECK_INTERVAL;
 
-    let effects = session.handle(&context(due), Event::CheckDue);
+    let effects = session.handle(&context(due), ChatEvents::CheckDue);
     assert!(effects
         .iter()
         .any(|e| matches!(e, Effect::QueryGameRunning)));
     assert!(started_turn(&effects).is_none());
     assert_eq!(session.check_deadline(), due + PERIODIC_CHECK_INTERVAL);
 
-    let effects = session.handle(&context(due), Event::GameRunning(Some(false)));
+    let effects = session.handle(&context(due), ChatEvents::GameRunning(Some(false)));
     assert!(started_turn(&effects).is_none());
-    let effects = session.handle(&context(due), Event::GameRunning(None));
+    let effects = session.handle(&context(due), ChatEvents::GameRunning(None));
     assert!(started_turn(&effects).is_none());
 
-    let effects = session.handle(&context(due), Event::GameRunning(Some(true)));
+    let effects = session.handle(&context(due), ChatEvents::GameRunning(Some(true)));
     let (_, prompt, ..) = started_turn(&effects).expect("a running game gets a check");
     assert_eq!(prompt.included_inputs, 1);
     assert_eq!(session.flush_deadline(), None);
@@ -414,25 +414,25 @@ fn a_periodic_check_asks_whether_the_game_runs_before_starting_a_turn() {
 #[test]
 fn periodic_checks_are_silent_when_off_or_without_a_configuration() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let due = now + PERIODIC_CHECK_INTERVAL;
 
     let mut off = context(due);
     off.periodic_turns = false;
-    assert!(session.handle(&off, Event::CheckDue).is_empty());
+    assert!(session.handle(&off, ChatEvents::CheckDue).is_empty());
 
     let mut none = context(due);
     none.configuration = Ok(None);
-    assert!(session.handle(&none, Event::CheckDue).is_empty());
+    assert!(session.handle(&none, ChatEvents::CheckDue).is_empty());
     assert_eq!(session.chat_state(), ChatState::Idle);
 }
 
 #[test]
 fn a_no_comment_answer_to_an_automatic_turn_is_neither_shown_nor_remembered() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
-    let effects = session.handle(&context(now), Event::GameRunning(Some(true)));
+    let effects = session.handle(&context(now), ChatEvents::GameRunning(Some(true)));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
     let effects = session.handle(
@@ -451,9 +451,9 @@ fn a_no_comment_answer_to_an_automatic_turn_is_neither_shown_nor_remembered() {
 #[test]
 fn an_automatic_answer_is_shown_with_a_beep_and_remembered() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
-    let effects = session.handle(&context(now), Event::GameRunning(Some(true)));
+    let effects = session.handle(&context(now), ChatEvents::GameRunning(Some(true)));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
     let effects = session.handle(
@@ -475,10 +475,10 @@ fn an_automatic_answer_is_shown_with_a_beep_and_remembered() {
 #[test]
 fn only_changes_of_chat_state_are_published() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     // Still idle: nothing to publish.
     assert!(published(&session.handle(&context(now), game_report("one", 1))).is_empty());
-    assert!(published(&session.handle(&context(now), Event::Resume)).is_empty());
+    assert!(published(&session.handle(&context(now), ChatEvents::Resume)).is_empty());
 }
 
 fn published_floors(effects: &[Effect]) -> Vec<Option<NotificationId>> {
@@ -494,14 +494,14 @@ fn published_floors(effects: &[Effect]) -> Vec<Option<NotificationId>> {
 #[test]
 fn the_rollback_floor_is_none_until_something_is_queued() {
     let now = Instant::now();
-    let session = Session::new(now);
+    let session = ChatSession::new(now);
     assert_eq!(session.rollback_floor(), None);
 }
 
 #[test]
 fn the_rollback_floor_is_the_oldest_queued_input() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let mut context = context(now);
     // No configuration, so inputs stay queued instead of starting a turn.
     context.configuration = Ok(None);
@@ -519,7 +519,7 @@ fn the_rollback_floor_is_the_oldest_queued_input() {
 #[test]
 fn the_rollback_floor_moves_to_processing_inputs_while_a_turn_is_in_flight() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     // The input is now Processing, not Pending, but it is still queued and
     // still the floor: it has not been committed to history yet. It was
@@ -532,7 +532,7 @@ fn the_rollback_floor_moves_to_processing_inputs_while_a_turn_is_in_flight() {
 #[test]
 fn the_rollback_floor_stays_on_a_committed_turns_inputs() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
@@ -550,7 +550,7 @@ fn the_rollback_floor_stays_on_a_committed_turns_inputs() {
 #[test]
 fn the_rollback_floor_returns_to_a_failed_turns_inputs() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, ..) = started_turn(&effects).unwrap();
     // Already the floor while in flight: failure does not move it.
@@ -579,8 +579,8 @@ fn truncated_from(effects: &[Effect]) -> Option<NotificationId> {
     })
 }
 
-fn rollback(target: u64, editor_text: &str) -> Event {
-    Event::Rollback {
+fn rollback(target: u64, editor_text: &str) -> ChatEvents {
+    ChatEvents::Rollback {
         target: NotificationId(target),
         editor_text: editor_text.to_owned(),
     }
@@ -589,7 +589,7 @@ fn rollback(target: u64, editor_text: &str) -> Event {
 #[test]
 fn rolling_back_to_a_committed_turn_restores_its_history_and_drops_later_work() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("one", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
     session.handle(
@@ -622,7 +622,7 @@ fn rolling_back_to_a_committed_turn_restores_its_history_and_drops_later_work() 
 #[test]
 fn rolling_back_into_the_in_flight_batch_cancels_the_turn_and_drops_the_queue() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("one", 1));
     let (_, _, _, cancel) = started_turn(&effects).unwrap();
     session.handle(&context(now), game_report("report", 2));
@@ -645,7 +645,7 @@ fn rolling_back_into_the_in_flight_batch_cancels_the_turn_and_drops_the_queue() 
 #[test]
 fn rolling_back_to_a_queued_input_leaves_the_in_flight_turn_alone() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("one", 1));
     let (_, _, _, cancel) = started_turn(&effects).unwrap();
     session.handle(&context(now), user("two", 2));
@@ -667,7 +667,7 @@ fn rolling_back_to_a_queued_input_leaves_the_in_flight_turn_alone() {
 #[test]
 fn rolling_back_to_an_ineligible_target_errors_without_changing_anything() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("one", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
     session.handle(
@@ -686,7 +686,7 @@ fn rolling_back_to_an_ineligible_target_errors_without_changing_anything() {
 #[test]
 fn rolling_back_clears_a_block() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let mut context = context(now);
     context.configuration = Ok(None);
     session.handle(&context, user("one", 1));
@@ -702,7 +702,7 @@ fn rolling_back_clears_a_block() {
 #[test]
 fn a_rollback_note_is_sent_once_on_the_next_turn() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     let effects = session.handle(&context(now), user("one", 1));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
     session.handle(
@@ -729,7 +729,7 @@ fn a_rollback_note_is_sent_once_on_the_next_turn() {
 #[test]
 fn only_the_newest_fifty_turns_can_be_rolled_back() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     for id in 1..=MAX_TURN_RECORDS as u64 + 1 {
         let effects = session.handle(&context(now), user(&format!("m{id}"), id));
         complete_pending_work(&mut session, now, effects);
@@ -763,15 +763,18 @@ fn compacted(summary: &str, recent: &History) -> Result<CompactionOutput, TurnEr
     })
 }
 
-fn compaction_finished(compaction_id: u64, result: Result<CompactionOutput, TurnError>) -> Event {
-    Event::CompactionFinished {
+fn compaction_finished(
+    compaction_id: u64,
+    result: Result<CompactionOutput, TurnError>,
+) -> ChatEvents {
+    ChatEvents::CompactionFinished {
         compaction_id,
         result,
     }
 }
 
 /// Completes turns until `session` needs to compact before the next turn.
-fn drive_past_compaction_threshold(session: &mut Session, now: Instant) {
+fn drive_past_compaction_threshold(session: &mut ChatSession, now: Instant) {
     for id in 1..=((MAX_HISTORY_MESSAGES as u64 / 2) + 1) {
         let effects = session.handle(&context(now), user(&format!("m{id}"), id));
         let (turn_id, prompt, history, _) =
@@ -786,7 +789,7 @@ fn drive_past_compaction_threshold(session: &mut Session, now: Instant) {
 
 /// Completes whatever work the effects start — a turn or a compaction — until
 /// nothing more is pending, as the real worker would.
-fn complete_pending_work(session: &mut Session, now: Instant, mut effects: Vec<Effect>) {
+fn complete_pending_work(session: &mut ChatSession, now: Instant, mut effects: Vec<Effect>) {
     loop {
         if let Some((turn_id, prompt, history, _)) = started_turn(&effects) {
             effects = session.handle(
@@ -809,7 +812,7 @@ fn complete_pending_work(session: &mut Session, now: Instant, mut effects: Vec<E
 #[test]
 fn a_large_history_triggers_compaction_before_the_next_turn() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     // Complete turns up to the message limit: exactly 20 messages, so no
     // compaction is needed yet even though the verbatim window is smaller.
     for id in 1..=(MAX_HISTORY_MESSAGES as u64 / 2) {
@@ -852,7 +855,7 @@ fn a_large_history_triggers_compaction_before_the_next_turn() {
 #[test]
 fn a_successful_compaction_replaces_history_and_resumes_the_turn() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     drive_past_compaction_threshold(&mut session, now);
     let before = session.history().clone();
 
@@ -873,7 +876,7 @@ fn a_successful_compaction_replaces_history_and_resumes_the_turn() {
 #[test]
 fn a_failed_compaction_blocks_without_changing_history() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     drive_past_compaction_threshold(&mut session, now);
     let before = session.history().clone();
 
@@ -897,7 +900,7 @@ fn a_failed_compaction_blocks_without_changing_history() {
 #[test]
 fn a_cancelled_compaction_does_not_block_or_change_history() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     drive_past_compaction_threshold(&mut session, now);
     let before = session.history().clone();
 
@@ -917,7 +920,7 @@ fn a_cancelled_compaction_does_not_block_or_change_history() {
 #[test]
 fn a_stale_compaction_result_is_ignored() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     drive_past_compaction_threshold(&mut session, now);
     let before = session.history().clone();
 
@@ -943,7 +946,7 @@ fn a_stale_compaction_result_is_ignored() {
 #[test]
 fn rollback_cancels_in_flight_compaction() {
     let now = Instant::now();
-    let mut session = Session::new(now);
+    let mut session = ChatSession::new(now);
     drive_past_compaction_threshold(&mut session, now);
 
     let effects = session.handle(&context(now), user("next", 500));

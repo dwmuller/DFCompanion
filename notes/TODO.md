@@ -12,52 +12,16 @@ prepare underlying infrastructure.
 - Move AiUsage output items to debug! events.
 - Add info, trace, and debug events to instrument critical program activity.
 - ? Implement an optional tracing subscriber that enqueues OutputItems.
-- Refactor ChatSession API
-  - Effects
-    - Purely internal "effects" become module-internal states, with state
-      transitions managed by a module-specific function.
-    - Effects that drive external activity might remain, but look at other
-      straightforward ways of implementing them. E.g. they may be better
-      integrated with events::QueueItem. Or they may be elevated to a distinct
-      queue of internal app events.
-  - Events
-    - "Events" with an external origin get replaced by more straightforward self
-      functions.
-    - Events with an internal origin should be replaced by internal state.
-- Refactor 
-- Renamings
-  - mod session -> mod chat_session
-    - Session -> ChatSession
-    - Event -> ChatEvent
-  - events::QueueItem -> events::Event
-  - module notifications -> module outputs
-    - DisplayMessage -> OutputItem
-    - DisplayMessageKind -> OutputKind
-    - Notifier -> OutputSink
-      - ? This will be much less widely used after introducing tracing and might
-        go away.
-    - NotificationHistory -> OutputHistory
-    - NotificationId -> OutputId
 - Revisit the game time representation. Consider a machine-readable form of year
   plus ticks since the start of that year, and/or a fixed-width, zero-padded
   string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as
   plain strings. The current `YYYY-MM-DD[:T]` string has variable-width parts.
 - ? Refactor AI tools as an MCP service.
-- ? Reconsider thread architecture.
-  - We've eliminated the "recorder" thread associated with the
-    NotificationHistory and the unused gRPC server, so now we have the HTTP
-    listener and the app worker which mainly coordinates turning inputs into
-    display items and queueing things to the AI. But in fact the AI interactions
-    are one of the slowest operations in the program and might warrant a
-    dedicated thread.
 
 ## AI interaction
 
 Items that are primarily about the mechanics of AI interactions.
 
-- Provide a tool like "note_for_later" so that models can remember something
-  about game reports even if it doesn't warrant the user's immediate attention
-  ("no comment" replies).
 - Save chat state, embedded in a DF game save.
   - This is in effect a handoff to a future chat session.
   - Never treat this context as system text, as it may incorporate input from
@@ -69,6 +33,16 @@ Items that are primarily about the mechanics of AI interactions.
     reports.
   - ? State updates should be sent to DFHack on completion of each turn that
     includes user input.
+- The optional periodic check-in with the AI is currently probably not effective
+  -- it seems to only check for already-enqueued activity without generating a
+  prompt to the AI.
+  - Replace it with a check-in based on elapsed *game time*, which sends the
+    current time to the AI and instruct it to take the opportunity to check for
+    significant for changes.
+  - Run this once per game day.
+- Provide a tool like "note_for_later" so that models can remember something
+  about game reports even if it doesn't warrant the user's immediate attention
+  ("no comment" replies).
 - Support for other media types in chat, both outgoing and incoming.
 - Optional ability of AI to maintain a fort history document.
 - Optional ability to log entire chat.

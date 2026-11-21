@@ -59,8 +59,10 @@ impl Context {
     }
 }
 
+/// Inputs to the chat session, representing events that the session needs to
+/// handle.
 #[derive(Debug, NamedVariant)]
-pub enum Event {
+pub enum ChatEvents {
     /// Something to ask the AI, which gets a turn right away. `id` is the id of
     /// the notification that displays it, if any.
     UserRequest {
@@ -198,7 +200,7 @@ impl TurnRecord {
 ///
 /// Decides when when AI runs, tracks turns for rollback, and manages history
 /// compaction. Uses a turn-dispatch pattern to facilitate testing.
-pub struct Session {
+pub struct ChatSession {
     /// Inputs for the AI, oldest first.
     queue: VecDeque<AiInput>,
     history: History,
@@ -229,7 +231,7 @@ fn failure_message(error: &str) -> String {
     )
 }
 
-impl Session {
+impl ChatSession {
     pub fn new(now: Instant) -> Self {
         Self {
             queue: VecDeque::new(),
@@ -304,7 +306,7 @@ impl Session {
     }
 
     /// Handles an event and returns what the caller has to do about it, in order.
-    pub fn handle(&mut self, context: &Context, event: Event) -> Vec<Effect> {
+    pub fn handle(&mut self, context: &Context, event: ChatEvents) -> Vec<Effect> {
         let mut effects = Vec::new();
         self.step(context, event, &mut effects);
         let state = self.chat_state();
@@ -321,9 +323,9 @@ impl Session {
     }
 
     #[instrument(level = "debug", skip_all, fields(event = event.variant_name()))]
-    fn step(&mut self, context: &Context, event: Event, effects: &mut Vec<Effect>) {
+    fn step(&mut self, context: &Context, event: ChatEvents, effects: &mut Vec<Effect>) {
         match event {
-            Event::UserRequest { text, id } => {
+            ChatEvents::UserRequest { text, id } => {
                 tracing::trace!(
                     "Handling user request with id {}",
                     id.map_or("<none>".to_string(), |id| id.to_string())
@@ -333,7 +335,7 @@ impl Session {
                 self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                 self.try_start_turn(context, effects);
             }
-            Event::Report { event, id } => {
+            ChatEvents::Report { event, id } => {
                 tracing::trace!(
                     "Handling game report with id {}",
                     id.map_or("<none>".to_string(), |id| id.to_string())
@@ -341,20 +343,20 @@ impl Session {
                 self.queue.push_back(AiInput::GameReport { event, id });
                 self.flush_at.get_or_insert(context.now + EVENT_FLUSH_DELAY);
             }
-            Event::FlushDue => {
+            ChatEvents::FlushDue => {
                 self.flush_at = None;
                 if context.event_turns && !self.blocked && context.has_configuration() {
                     self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                     self.try_start_turn(context, effects);
                 }
             }
-            Event::CheckDue => {
+            ChatEvents::CheckDue => {
                 self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                 if context.periodic_turns && !self.blocked && context.has_configuration() {
                     effects.push(Effect::QueryGameRunning);
                 }
             }
-            Event::GameRunning(running) => {
+            ChatEvents::GameRunning(running) => {
                 tracing::trace!("Handling game running event: {running:?}");
                 if running == Some(true)
                     && context.periodic_turns
@@ -365,12 +367,12 @@ impl Session {
                     self.try_start_turn(context, effects);
                 }
             }
-            Event::TurnFinished { turn_id, result } => {
+            ChatEvents::TurnFinished { turn_id, result } => {
                 tracing::trace!("Handling turn finished event: {turn_id:?}");
                 tracing::trace!("Turn finished with result: {result:?}");
                 self.finish_turn(context, turn_id, result, effects)
             }
-            Event::CompactionFinished {
+            ChatEvents::CompactionFinished {
                 compaction_id,
                 result,
             } => {
@@ -379,15 +381,15 @@ impl Session {
                 );
                 self.finish_compaction(context, compaction_id, result, effects)
             }
-            Event::CancelTurn => {
+            ChatEvents::CancelTurn => {
                 if let Some(in_flight) = &self.in_flight {
                     in_flight.cancel.cancel();
                 }
             }
-            Event::Resume => {
+            ChatEvents::Resume => {
                 self.blocked = false;
             }
-            Event::Rollback {
+            ChatEvents::Rollback {
                 target,
                 editor_text,
             } => {
@@ -398,7 +400,7 @@ impl Session {
     }
 }
 
-impl Session {
+impl ChatSession {
     /// Stops processing until the player resumes it, and says why.
     fn block(&mut self, reason: String, effects: &mut Vec<Effect>) {
         if !self.blocked {

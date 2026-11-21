@@ -25,7 +25,7 @@ use crate::{
     },
     ai_providers::built_in_providers,
     app::CompanionApp,
-    events::{GameEvent, QueueItem},
+    events::{ExternalEvent, GameEvent},
     notifications::{DisplayMessage, DisplayMessageKind, HistoryEvent, InputState, NotificationId},
     web::templates::{render_configuration_form_error, ConfigurationListItem, RenderError},
 };
@@ -195,7 +195,7 @@ async fn plugin_event(
         return plugin_event_response(status_code, "rejected", &message);
     }
 
-    match app.event_queue().try_send(QueueItem::GameEvent(event)) {
+    match app.event_queue().try_send(ExternalEvent::GameEvent(event)) {
         Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
         Err(message) => {
             app.notifier().notify(DisplayMessage::new(
@@ -519,7 +519,7 @@ async fn select_configuration_fragment(
         return active_configuration_response(&app, StatusCode::BAD_REQUEST, error);
     }
     if id.is_some() {
-        let _ = app.event_queue().try_send(QueueItem::Orient);
+        let _ = app.event_queue().try_send(ExternalEvent::Orient);
     }
 
     active_configuration_response(&app, StatusCode::OK, String::new())
@@ -1024,7 +1024,7 @@ async fn chat(
 
     match app
         .event_queue()
-        .try_send(QueueItem::UserInput(message.to_owned()))
+        .try_send(ExternalEvent::UserInput(message.to_owned()))
     {
         Ok(()) => fragment_response(StatusCode::OK, templates::render_chat_sent(), "chat status"),
         Err(error) => {

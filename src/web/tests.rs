@@ -114,7 +114,7 @@ async fn resume_chat_requires_local_origin_and_clears_blocked_state() {
     let mut state_changes = app.subscribe_chat_state();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     app.event_queue()
-        .try_send(QueueItem::UserInput(
+        .try_send(ExternalEvent::UserInput(
             "A request without an active configuration".to_owned(),
         ))
         .unwrap();
@@ -411,7 +411,7 @@ async fn a_live_input_state_change_is_sent_as_an_out_of_band_swap() {
     let mut stream = response.into_body().into_data_stream();
 
     app.event_queue()
-        .try_send(QueueItem::UserInput("hello".to_owned()))
+        .try_send(ExternalEvent::UserInput("hello".to_owned()))
         .unwrap();
 
     let mut body = String::new();

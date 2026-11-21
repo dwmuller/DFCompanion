@@ -5,15 +5,15 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 use tracing::debug;
 
-use crate::events::{EventQueue, QueueItem};
+use crate::chat_session::{self, ChatSession, Context, Effect};
+use crate::events::{EventQueue, ExternalEvent};
 use crate::game_state::{GameState, LifecycleState, LifecycleStatus};
 use crate::notifications::{
     DisplayMessage, DisplayMessageKind, InputState, NotificationHistory, NotificationId, Notifier,
 };
-use crate::session::{self, Context, Effect, Session};
 use crate::{ai, ai_config, ai_tools, chat_commands};
 
-pub use crate::session::ChatState;
+pub use crate::chat_session::ChatState;
 
 const EVENT_QUEUE_CAPACITY: usize = 50;
 /// How often to re-check the game's loading state when no state-change push
@@ -30,7 +30,7 @@ pub struct CompanionApp {
     pub history: NotificationHistory,
     pub ai: ai::AiRuntime,
     /// The state of the AI conversation. All changes go through [`Self::dispatch`].
-    session: Mutex<Session>,
+    session: Mutex<ChatSession>,
     /// Whether the AI gets a turn shortly after game events arrive. Off by
     /// default because automatic turns spend tokens without the player asking.
     pub event_turns: std::sync::atomic::AtomicBool,
@@ -46,7 +46,7 @@ pub struct CompanionApp {
 }
 
 impl CompanionApp {
-    pub fn new() -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
+    pub fn new() -> (Arc<Self>, mpsc::Receiver<ExternalEvent>) {
         // Create a fresh NotificationHistory and pass it in.
         let history = NotificationHistory::new();
         let (s, r) = Self::with_config_and_channels(
@@ -56,7 +56,7 @@ impl CompanionApp {
         (s, r)
     }
 
-    pub fn load() -> Result<(Arc<Self>, mpsc::Receiver<QueueItem>), String> {
+    pub fn load() -> Result<(Arc<Self>, mpsc::Receiver<ExternalEvent>), String> {
         let configurations = ai_config::ConfigurationRepository::load_default()?;
         // Build a fresh NotificationHistory for the loaded configuration.
         let history = NotificationHistory::new();
@@ -67,7 +67,7 @@ impl CompanionApp {
     fn with_config_and_channels(
         configurations: ai_config::ConfigurationRepository,
         history: NotificationHistory,
-    ) -> (Arc<Self>, mpsc::Receiver<QueueItem>) {
+    ) -> (Arc<Self>, mpsc::Receiver<ExternalEvent>) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let event_queue = EventQueue::new(queue_tx);
         // `history` is passed in directly.
@@ -81,7 +81,7 @@ impl CompanionApp {
                 notifier,
                 history,
                 ai,
-                session: Mutex::new(Session::new(Instant::now())),
+                session: Mutex::new(ChatSession::new(Instant::now())),
                 event_turns: Default::default(),
                 periodic_turns: Default::default(),
                 game_state,
@@ -218,7 +218,7 @@ impl CompanionApp {
     /// Effects are carried out while the session is locked, so that those of
     /// concurrent events keep their order. They never wait: slow work is
     /// spawned and reports back with another event.
-    fn dispatch(self: &Arc<Self>, event: session::Event) {
+    fn dispatch(self: &Arc<Self>, event: chat_session::ChatEvents) {
         self.dispatch_with(event, |_| ());
     }
 
@@ -226,8 +226,8 @@ impl CompanionApp {
     /// session just before the event is handled.
     fn dispatch_with<T>(
         self: &Arc<Self>,
-        event: session::Event,
-        inspect: impl FnOnce(&Session) -> T,
+        event: chat_session::ChatEvents,
+        inspect: impl FnOnce(&ChatSession) -> T,
     ) -> T {
         let mut session = self.session.lock().unwrap();
         let inspected = inspect(&session);
@@ -273,7 +273,7 @@ impl CompanionApp {
                         .ai
                         .run_turn(&configuration, &history, &prompt, &cancel)
                         .await;
-                    this.dispatch(session::Event::TurnFinished { turn_id, result });
+                    this.dispatch(chat_session::ChatEvents::TurnFinished { turn_id, result });
                 });
             }
             Effect::StartCompaction {
@@ -288,7 +288,7 @@ impl CompanionApp {
                         .ai
                         .compact_history(&configuration, &history, &cancel)
                         .await;
-                    this.dispatch(session::Event::CompactionFinished {
+                    this.dispatch(chat_session::ChatEvents::CompactionFinished {
                         compaction_id,
                         result,
                     });
@@ -298,7 +298,7 @@ impl CompanionApp {
                 let this = self.clone();
                 tokio::spawn(async move {
                     let running = this.game_is_running().await;
-                    this.dispatch(session::Event::GameRunning(running));
+                    this.dispatch(chat_session::ChatEvents::GameRunning(running));
                 });
             }
             Effect::Block { reason } => {
@@ -356,7 +356,7 @@ impl CompanionApp {
                         .notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
                 };
                 if self.has_active_configuration() {
-                    let _ = self.queue_tx.try_send(QueueItem::Orient);
+                    let _ = self.queue_tx.try_send(ExternalEvent::Orient);
                 }
             }
             Err(error) => {
@@ -387,7 +387,7 @@ impl CompanionApp {
     /// requests.
     pub async fn run_companion_worker(
         self: Arc<CompanionApp>,
-        mut queue_rx: mpsc::Receiver<QueueItem>,
+        mut queue_rx: mpsc::Receiver<ExternalEvent>,
     ) {
         loop {
             let (flush_at, check_at) = {
@@ -400,28 +400,28 @@ impl CompanionApp {
                     None => break,
                 },
                 _ = sleep_until(flush_at.unwrap_or(check_at)), if flush_at.is_some() => {
-                    self.dispatch(session::Event::FlushDue);
+                    self.dispatch(chat_session::ChatEvents::FlushDue);
                 }
                 _ = sleep_until(check_at) => {
-                    self.dispatch(session::Event::CheckDue);
+                    self.dispatch(chat_session::ChatEvents::CheckDue);
                 }
             }
         }
     }
 
-    async fn handle_queue_item(self: &Arc<Self>, item: QueueItem) {
+    async fn handle_queue_item(self: &Arc<Self>, item: ExternalEvent) {
         match item {
-            QueueItem::Orient => {
+            ExternalEvent::Orient => {
                 if self.has_active_configuration() {
                     // The orientation prompt is not shown to the player, so it
                     // has no notification.
-                    self.dispatch(session::Event::UserRequest {
+                    self.dispatch(chat_session::ChatEvents::UserRequest {
                         text: ORIENT_MESSAGE.to_owned(),
                         id: None,
                     });
                 }
             }
-            QueueItem::UserInput(text) => {
+            ExternalEvent::UserInput(text) => {
                 if let Some(command) = chat_commands::ChatCommand::parse(&text) {
                     self.notifier
                         .notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, &text));
@@ -432,9 +432,9 @@ impl CompanionApp {
                     DisplayMessage::new(DisplayMessageKind::User, &text)
                         .with_input_state(InputState::Pending),
                 );
-                self.dispatch(session::Event::UserRequest { text, id: Some(id) });
+                self.dispatch(chat_session::ChatEvents::UserRequest { text, id: Some(id) });
             }
-            QueueItem::GameEvent(event) => {
+            ExternalEvent::GameEvent(event) => {
                 let id = self.notifier.notify(
                     DisplayMessage::new(
                         DisplayMessageKind::GameEvent,
@@ -442,7 +442,7 @@ impl CompanionApp {
                     )
                     .with_input_state(InputState::Pending),
                 );
-                self.dispatch(session::Event::Report {
+                self.dispatch(chat_session::ChatEvents::Report {
                     event,
                     id: Some(id),
                 });
@@ -466,7 +466,7 @@ impl CompanionApp {
 
     /// Clears the blocked state. Returns whether chat was blocked.
     pub fn resume_if_blocked(self: &Arc<Self>) -> bool {
-        self.dispatch_with(session::Event::Resume, |session| {
+        self.dispatch_with(chat_session::ChatEvents::Resume, |session| {
             session.chat_state() == ChatState::Blocked
         })
     }
@@ -484,7 +484,7 @@ impl CompanionApp {
         let mut session = self.session.lock().unwrap();
         let effects = session.handle(
             &self.session_context(),
-            session::Event::Rollback {
+            chat_session::ChatEvents::Rollback {
                 target,
                 editor_text,
             },
