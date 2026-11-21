@@ -86,5 +86,4 @@ Items that are primarily about the mechanics of AI interactions.
 
 ## AI configuration for development tasks
 
-- ? Provide the official Git MCP server.
-  - Might reduce the use of custom Git commands via shell.
+None atm.
