@@ -435,7 +435,7 @@ fn build_client(configuration: &AiConfiguration, key: &str) -> Result<Client, St
 
 /// The AI engine: the configurations, and the means to run a turn with one of
 /// them. It keeps no conversation state; see [`crate::session::Session`].
-/// 
+///
 /// Executes a single AI turn with the given configuration and history; sends
 /// prompt, runs tools, returns response.
 pub struct AiRuntime {
