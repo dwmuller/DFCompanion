@@ -175,12 +175,8 @@ async fn plugin_event(
     headers: HeaderMap,
     axum::Json(event): axum::Json<PluginEvent>,
 ) -> impl IntoResponse {
-    if headers.contains_key(header::ORIGIN) {
-        return plugin_event_response(
-            StatusCode::FORBIDDEN,
-            "rejected",
-            "Browser-originated requests are not accepted.",
-        );
+    if let Some(error) = reject_browser_requests(&headers) {
+        return error;
     }
 
     let event = GameEvent {
@@ -228,12 +224,8 @@ async fn plugin_lifecycle(
     headers: HeaderMap,
     axum::Json(payload): axum::Json<PluginLifecycle>,
 ) -> impl IntoResponse {
-    if headers.contains_key(header::ORIGIN) {
-        return plugin_event_response(
-            StatusCode::FORBIDDEN,
-            "rejected",
-            "Browser-originated requests are not accepted.",
-        );
+    if let Some(error) = reject_browser_requests(&headers) {
+        return error;
     }
     app.update_lifecycle(
         payload.world_loaded,
@@ -1151,6 +1143,21 @@ async fn validate_local_request(request: Request<Body>, next: Next) -> Response 
         HeaderValue::from_static("no-referrer"),
     );
     response
+}
+
+/// Rejects requests that appear to originate from a browser by checking for an ORIGIN header.
+/// Plugin and CLI requests (which don't send ORIGIN) are allowed.
+/// Returns an error response if the request appears browser-originated.
+fn reject_browser_requests(headers: &HeaderMap) -> Option<Response> {
+    if headers.contains_key(header::ORIGIN) {
+        Some(plugin_event_response(
+            StatusCode::FORBIDDEN,
+            "rejected",
+            "Browser-originated requests are not accepted.",
+        ))
+    } else {
+        None
+    }
 }
 
 /// If an Origin header is present, validates that it matches the expected local origin.
