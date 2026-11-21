@@ -47,27 +47,29 @@ async fn lifecycle_transitions_map_to_states_and_keep_the_fortress_name() {
     let (app, _queue_rx) = CompanionApp::new();
     assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
 
-    app.update_lifecycle(false, false, Some(String::new()));
+    app.update_lifecycle(false, false, Some(String::new()), None);
     assert_eq!(app.lifecycle().state, LifecycleState::Initialized);
     assert_eq!(app.lifecycle().fortress_name, None);
 
-    app.update_lifecycle(true, false, None);
+    app.update_lifecycle(true, false, None, None);
     assert_eq!(app.lifecycle().state, LifecycleState::WorldLoaded);
 
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()));
+    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
     assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
     assert_eq!(
         app.lifecycle().fortress_name.as_deref(),
         Some("Bridgedmine")
     );
+    assert_eq!(app.lifecycle().site_id, Some(41));
 
     // Unloading the map keeps the last fortress name.
-    app.update_lifecycle(true, false, None);
+    app.update_lifecycle(true, false, None, None);
     assert_eq!(app.lifecycle().state, LifecycleState::WorldLoaded);
     assert_eq!(
         app.lifecycle().fortress_name.as_deref(),
         Some("Bridgedmine")
     );
+    assert_eq!(app.lifecycle().site_id, Some(41));
 
     // Losing DFHack keeps the name too.
     app.mark_lifecycle_unreachable();
@@ -76,6 +78,128 @@ async fn lifecycle_transitions_map_to_states_and_keep_the_fortress_name() {
         app.lifecycle().fortress_name.as_deref(),
         Some("Bridgedmine")
     );
+    assert_eq!(app.lifecycle().site_id, Some(41));
+}
+
+#[tokio::test]
+async fn a_new_fortress_event_preempts_and_clears_the_full_normal_queue() {
+    let (app, queue_rx) = CompanionApp::new();
+    for i in 0..EVENT_QUEUE_CAPACITY {
+        app.queue_tx
+            .try_send(ExternalEvent::UserInput(format!("stale {i}")))
+            .unwrap();
+    }
+    app.queue_tx
+        .try_send_lifecycle(LifecycleEvent::Snapshot(LifecycleSnapshot {
+            world_loaded: true,
+            map_loaded: true,
+            fortress_name: "Bridgedmine".to_owned(),
+            site_id: Some(41),
+        }))
+        .unwrap();
+    let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
+
+    for _ in 0..100 {
+        if app.lifecycle().state == LifecycleState::MapLoaded {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(
+        (
+            app.lifecycle().site_id,
+            app.pending_user_message_count(),
+            app.pending_report_count(),
+        ),
+        (Some(41), 0, 0)
+    );
+
+    app.queue_tx
+        .try_send(ExternalEvent::UserInput(
+            "pending in first session".to_owned(),
+        ))
+        .unwrap();
+    for _ in 0..100 {
+        if app.pending_user_message_count() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    app.queue_tx
+        .try_send_lifecycle(LifecycleEvent::Snapshot(LifecycleSnapshot {
+            world_loaded: true,
+            map_loaded: false,
+            fortress_name: String::new(),
+            site_id: None,
+        }))
+        .unwrap();
+    app.queue_tx
+        .try_send_lifecycle(LifecycleEvent::Snapshot(LifecycleSnapshot {
+            world_loaded: true,
+            map_loaded: true,
+            fortress_name: "Bridgedmine".to_owned(),
+            site_id: Some(41),
+        }))
+        .unwrap();
+    for _ in 0..100 {
+        if app.lifecycle().state == LifecycleState::MapLoaded
+            && app.pending_user_message_count() == 0
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        (app.lifecycle().state, app.pending_user_message_count()),
+        (LifecycleState::MapLoaded, 0)
+    );
+    worker.abort();
+}
+
+#[test]
+fn a_chat_restore_installs_valid_history_for_the_current_site() {
+    let (app, _queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.lifecycle_generation.store(3, Ordering::Relaxed);
+    let saved = ai::History::with_test_summary("Build a northern wall.", &ai::History::default())
+        .to_snapshot_json(41, "250-01-01:600")
+        .unwrap();
+
+    app.finish_chat_restore(
+        3,
+        41,
+        Ok(Some(LoadedChatState {
+            state: saved,
+            current_game_date: "250-02-03:400".to_owned(),
+        })),
+    );
+
+    assert_eq!(
+        app.session.lock().unwrap().history().summary(),
+        "Build a northern wall."
+    );
+}
+
+#[test]
+fn a_stale_chat_restore_cannot_replace_the_current_sites_history() {
+    let (app, _queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.lifecycle_generation.store(4, Ordering::Relaxed);
+    let saved = ai::History::with_test_summary("Old site context.", &ai::History::default())
+        .to_snapshot_json(41, "250-01-01:600")
+        .unwrap();
+
+    app.finish_chat_restore(
+        3,
+        41,
+        Ok(Some(LoadedChatState {
+            state: saved,
+            current_game_date: "250-02-03:400".to_owned(),
+        })),
+    );
+
+    assert!(app.session.lock().unwrap().history().is_empty());
 }
 
 #[tokio::test]

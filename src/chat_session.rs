@@ -139,6 +139,8 @@ pub enum Effect {
         history: History,
         cancel: CancellationToken,
     },
+    /// Persist the committed history as part of the current fortress save.
+    PersistChatState(History),
     /// Find out whether the game is running and report it with
     /// [`Event::GameRunning`].
     QueryGameRunning,
@@ -214,6 +216,9 @@ pub struct ChatSession {
     /// Whether the next turn should carry the "the conversation was rolled
     /// back" note. Cleared once a turn that included it succeeds.
     rolled_back_note_due: bool,
+    /// The saved and current game dates for the one-time note after durable
+    /// history is restored.
+    restoration_note_dates: Option<(String, String)>,
     next_turn_id: u64,
     next_compaction_id: u64,
     flush_at: Option<Instant>,
@@ -241,6 +246,7 @@ impl ChatSession {
             in_flight_compaction: None,
             blocked: false,
             rolled_back_note_due: false,
+            restoration_note_dates: None,
             next_turn_id: 0,
             next_compaction_id: 0,
             flush_at: None,
@@ -262,6 +268,35 @@ impl ChatSession {
 
     pub fn history(&self) -> &History {
         &self.history
+    }
+
+    /// Installs validated history for the current site and makes the next
+    /// prompt explain the possible gap between the saved and live game dates.
+    pub fn restore_history(
+        &mut self,
+        history: History,
+        saved_game_date: String,
+        current_game_date: String,
+    ) {
+        self.history = history;
+        self.restoration_note_dates = Some((saved_game_date, current_game_date));
+    }
+
+    /// Discards all state belonging to the previous fortress. Operation IDs
+    /// remain monotonic so a late result from cancelled work cannot be
+    /// mistaken for work in the new session.
+    pub fn reset_for_fortress(&mut self, now: Instant) {
+        if let Some(in_flight) = &self.in_flight {
+            in_flight.cancel.cancel();
+        }
+        if let Some(compaction) = &self.in_flight_compaction {
+            compaction.cancel.cancel();
+        }
+        let next_turn_id = self.next_turn_id;
+        let next_compaction_id = self.next_compaction_id;
+        *self = Self::new(now);
+        self.next_turn_id = next_turn_id;
+        self.next_compaction_id = next_compaction_id;
     }
 
     /// When to send [`Event::FlushDue`], if a flush is waiting.
@@ -435,6 +470,9 @@ impl ChatSession {
             &self.queue,
             &configuration.system_text,
             self.rolled_back_note_due,
+            self.restoration_note_dates
+                .as_ref()
+                .map(|(saved, current)| (saved.as_str(), current.as_str())),
         ) else {
             return;
         };
@@ -520,6 +558,9 @@ impl ChatSession {
                 if prompt.included_rollback_note {
                     self.rolled_back_note_due = false;
                 }
+                if prompt.included_restoration_note {
+                    self.restoration_note_dates = None;
+                }
                 if is_user_interaction || !is_no_comment(&answer) {
                     effects.push(Effect::Notify(
                         DisplayMessage::new(DisplayMessageKind::Companion, answer)
@@ -531,6 +572,9 @@ impl ChatSession {
                     usage.iter().map(|u| u.summary()).join("\n"),
                 )));
                 effects.extend(finish_inputs(InputState::Done));
+                if is_user_interaction {
+                    effects.push(Effect::PersistChatState(self.history.clone()));
+                }
                 if !self.queue.is_empty() {
                     self.try_start_turn(context, effects);
                 }
@@ -573,6 +617,7 @@ impl ChatSession {
                     DisplayMessageKind::Status,
                     "Conversation history was compacted to stay within the AI context budget.",
                 )));
+                effects.push(Effect::PersistChatState(self.history.clone()));
                 self.try_start_turn(context, effects);
             }
             Err(TurnError::Failed(error)) => {
@@ -664,6 +709,7 @@ impl ChatSession {
         )));
         self.rolled_back_note_due = true;
         self.blocked = false;
+        effects.push(Effect::PersistChatState(self.history.clone()));
         if !self
             .queue
             .iter()

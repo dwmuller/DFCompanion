@@ -46,11 +46,14 @@ a companion worker, and a lifecycle poller. The service binds to
 separate endpoints for the DFHack `dfcompanion` plugin's reports and lifecycle
 updates.
 
-`CompanionApp` owns the shared application state and bounded event queue. User
-messages and game reports arrive as `ExternalEvent` values on the queue (capacity
-50). The worker feeds them to `ChatSession`; lifecycle pushes update the shared
-loading state directly. The DFHack plugin pauses the game and alerts the player
-if a report cannot be delivered, rather than silently losing it.
+`CompanionApp` owns the shared application state and event ingress. User
+messages and game reports use a bounded FIFO queue (capacity 50), while
+lifecycle and persistence control events use a priority channel. The worker
+handles all of these in one loop. A newly loaded fortress preempts and clears
+older normal input, resets fortress-scoped state, and pauses normal consumption
+until saved chat state has been loaded. The DFHack plugin pauses the game and
+alerts the player if a report cannot be delivered, rather than silently losing
+it.
 
 `ChatSession` is the conversation state machine. It contains pending inputs,
 conversation history, the in-flight turn or compaction, automatic-turn timers,
@@ -68,10 +71,11 @@ Lua module. The latter is distinct from the event-forwarding
 `dfcompanion` plugin.
 
 The current lifecycle state is maintained by pushes from the DFHack plugin and
-by a 20-second polling fallback. Its states distinguish DFHack unreachable, no
-world, world loaded, and fortress map loaded. Fortress-data tools are gated
-until a fortress is loaded; ordinary conversation remains available at every
-loading state.
+by a 20-second polling fallback. Both paths enter through the worker. Lifecycle
+snapshots carry the stable site ID as well as the name and loaded flags. States
+distinguish DFHack unreachable, no world, world loaded, and fortress map loaded.
+Fortress-data tools are gated until a fortress is loaded; ordinary conversation
+remains available at every loading state.
 
 ## Semantic inference
 
@@ -173,22 +177,30 @@ reliably through DFHack.
 
 AI configuration metadata and the active selection are stored in a local
 settings file. API keys are stored separately in the operating system credential
-vault. Conversation history and notification state are currently in memory for
-the lifetime of the companion process.
+vault. The active conversation history is in memory, with a durable copy in the
+fortress save. The visible notification transcript is process-local and is reset
+when a different fortress activation begins.
 
-Persistence of chat history as part of the Dwarf Fortress save is a planned
-feature, not a current capability. The persisted form should include enough
-context to continue a companion chat session:
+Durable AI history is stored in DFHack persistent site data, so it travels with
+the Dwarf Fortress save for that fortress. The versioned snapshot contains the
+site ID, save-time game date, rolling summary, and retained recent user/assistant
+messages. It excludes AI configuration, credentials, pending/in-flight inputs,
+tool results, rollback checkpoints, and the visible status/usage/event log.
 
-- Must include game timestamp so the AI can estimate how stale it is compared to
-  the running game state.
-- Must not include sensitive or machine-specific data.
-- Should also avoid bloat from ephemeral game data that can be reconstructed
-  from AI tools.
-- Will be sent to the Lua component after every completed user AI interaction so
-  that it will be persisted when the user saves a game.
-- Will be loaded the first time that DFCompanion interacts with currently loaded
-  fortress, before any AI interaction in that fortress's context.
+After a successful user turn, successful compaction, or rollback, `ChatSession`
+emits a persistence effect. The worker serializes saves, keeping at most one in
+flight and replacing a single pending request with the newest committed
+snapshot. The save operation rereads the game date and the Lua layer verifies
+the expected site ID immediately before calling
+`dfhack.persistent.saveSiteDataString`.
+
+On each fortress activation, the worker clears the old session and transcript,
+loads that site's snapshot asynchronously, and does not consume new normal
+events until loading finishes. Site and generation checks reject stale
+completions. Invalid or unavailable data produces a visible warning and leaves
+a fresh session. Restored history is conversation data, not system text; its
+saved and current game dates are inserted once in the next prompt so the model
+knows the context may be stale.
 
 ## Learning goals
 

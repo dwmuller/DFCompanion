@@ -89,6 +89,7 @@ struct PluginLifecycle {
     world_loaded: bool,
     map_loaded: bool,
     fortress_name: String,
+    site_id: Option<i64>,
 }
 
 /// Logs every HTTP request and response to stdout. Enabled by `--trace-http`.
@@ -227,12 +228,19 @@ async fn plugin_lifecycle(
     if let Some(error) = reject_browser_requests(&headers) {
         return error;
     }
-    app.update_lifecycle(
-        payload.world_loaded,
-        payload.map_loaded,
-        Some(payload.fortress_name),
-    );
-    plugin_event_response(StatusCode::OK, "accepted", "Game state accepted.")
+    match app
+        .event_queue()
+        .try_send_lifecycle(crate::events::LifecycleEvent::Snapshot(
+            crate::game_state::LifecycleSnapshot {
+                world_loaded: payload.world_loaded,
+                map_loaded: payload.map_loaded,
+                fortress_name: payload.fortress_name,
+                site_id: payload.site_id,
+            },
+        )) {
+        Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Game state accepted."),
+        Err(error) => plugin_event_response(StatusCode::SERVICE_UNAVAILABLE, "unavailable", &error),
+    }
 }
 fn render_error_response(what: &str, error: RenderError) -> Response {
     eprintln!("Could not render {what}: {error}");

@@ -3,6 +3,8 @@ local _ENV = mkmodule('rpc.dfcompanion')
 local json = require('json')
 
 local ai_block_pause_reason
+local CHAT_STATE_KEY = 'dfcompanion/chat'
+local MAX_CHAT_STATE_BYTES = 1024 * 1024
 
 -- Functions the companion service calls through DFHack's RunLua RPC. DFHack only
 -- allows RunLua on modules whose names start with "rpc." (its documented
@@ -714,19 +716,56 @@ function fortress_name()
     return native .. ', "' .. english .. '"'
 end
 
+-- Returns the stable identifier for the currently loaded fortress site.
+local function require_chat_site(expected_site_id)
+    if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
+        error('Cannot access saved chat state because no fortress site is loaded.')
+    end
+    local site = dfhack.world.getCurrentSite()
+    if not site then
+        error('Cannot identify the loaded fortress site.')
+    end
+    if expected_site_id ~= nil and tostring(site.id) ~= tostring(expected_site_id) then
+        error('The loaded fortress site changed before chat state could be accessed.')
+    end
+    return site
+end
+
+-- Loads raw DFCompanion chat state. An empty result means that this site has
+-- no saved state.
+function load_chat_state(expected_site_id)
+    require_chat_site(expected_site_id)
+    return dfhack.persistent.getSiteDataString(CHAT_STATE_KEY) or ''
+end
+
+-- Replaces DFCompanion chat state for the expected loaded site.
+function save_chat_state(expected_site_id, state)
+    require_chat_site(expected_site_id)
+    state = tostring(state or '')
+    if #state > MAX_CHAT_STATE_BYTES then
+        error('Chat state exceeds the supported size limit.')
+    end
+    dfhack.persistent.saveSiteDataString(CHAT_STATE_KEY, state)
+    return 'true'
+end
+
 -- How far the game has loaded, so the companion knows when fort queries are
 -- safe. Safe to call at any screen, including before a world exists: it reads
--- only the loaded/not-loaded flags and, with a map loaded, the site name.
+-- only the loaded/not-loaded flags and, with a map loaded, site identity.
 function lifecycle_state()
     local map_loaded = dfhack.isMapLoaded()
     local name = ''
+    local site_id = nil
     if map_loaded then
         name = fortress_name()
+        local site = require_chat_site()
+        site_id = site.id
     end
     return json.encode({
         world_loaded = dfhack.isWorldLoaded(),
         map_loaded = map_loaded,
         fortress_name = name,
+        site_id = site_id,
     })
 end
 

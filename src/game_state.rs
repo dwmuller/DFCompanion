@@ -34,6 +34,7 @@ pub const MAX_DETAIL_UNITS: usize = 10;
 pub const MAX_CANDIDATES: usize = 25;
 const MAX_WORK_DETAIL_OFFSET: usize = 5_000;
 const MAX_WORK_ORDER_OFFSET: usize = 5_000;
+const MAX_CHAT_STATE_BYTES: usize = 1024 * 1024;
 
 /// Filters for `find_candidates`; all are optional and combined with AND.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -291,15 +292,18 @@ pub struct LifecycleStatus {
     /// The last non-empty fortress name observed, kept across an unload so the
     /// UI can still name the fortress the player was in.
     pub fortress_name: Option<String>,
+    /// Stable identity of the last loaded fortress site.
+    pub site_id: Option<i64>,
 }
 
 /// A single reading of the game's loading state, as returned by the Lua module.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifecycleSnapshot {
     pub world_loaded: bool,
     pub map_loaded: bool,
     pub fortress_name: String,
+    pub site_id: Option<i64>,
 }
 
 /// Cheaply cloneable handle to the shared DFHack connection.
@@ -341,6 +345,58 @@ impl GameState {
             .value;
         serde_json::from_str(&reply.concat())
             .map_err(|error| format!("Could not parse the game state reply: {error}"))
+    }
+
+    /// Loads the raw DFCompanion chat state associated with `site_id`.
+    #[tracing::instrument(level = "trace", skip(self), fields(site_id), err)]
+    pub fn load_chat_state(&self, site_id: i64) -> Result<Option<String>, String> {
+        let reply = self
+            .with_client("Could not load saved chat history", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "load_chat_state".to_owned(),
+                    arguments: vec![site_id.to_string()],
+                })
+            })?
+            .reply
+            .value
+            .concat();
+        Ok((!reply.is_empty()).then_some(reply))
+    }
+
+    /// Replaces the raw DFCompanion chat state associated with `site_id`.
+    ///
+    /// The Lua side checks the site again immediately before writing so a
+    /// delayed request cannot save one fortress's state into another.
+    #[tracing::instrument(
+        level = "trace",
+        skip(self, state),
+        fields(site_id, state_bytes = state.len()),
+        err
+    )]
+    pub fn save_chat_state(&self, site_id: i64, state: &str) -> Result<(), String> {
+        if state.len() > MAX_CHAT_STATE_BYTES {
+            return Err(format!(
+                "Chat history snapshot exceeds the {MAX_CHAT_STATE_BYTES}-byte limit."
+            ));
+        }
+        let state = state.to_owned();
+        let result = self
+            .with_client("Could not save chat history", |client| {
+                client.core().run_lua(CoreRunLuaRequest {
+                    module: LUA_MODULE.to_owned(),
+                    function: "save_chat_state".to_owned(),
+                    arguments: vec![site_id.to_string(), state.clone()],
+                })
+            })?
+            .reply
+            .value
+            .concat();
+        parse_lua_boolean_result(&result, "save_chat_state").and_then(|saved| {
+            saved
+                .then_some(())
+                .ok_or_else(|| "DFHack reported that chat history was not saved.".to_owned())
+        })
     }
 
     /// Runs a blocking query on the blocking thread pool.
@@ -430,7 +486,7 @@ impl GameState {
         KnownCreatures::parse(&reply.concat())
     }
 
-    fn game_date(&self) -> Result<String, String> {
+    pub(crate) fn game_date(&self) -> Result<String, String> {
         let reply = self
             .with_client("Could not retrieve the game date", |client| {
                 client.core().run_lua(CoreRunLuaRequest {

@@ -22,6 +22,31 @@ fn game_dates_are_validated() {
 }
 
 #[test]
+fn should_parse_lifecycle_snapshot_when_fortress_site_is_loaded() {
+    let snapshot: LifecycleSnapshot = serde_json::from_value(json!({
+        "world_loaded": true,
+        "map_loaded": true,
+        "fortress_name": "Bridgedmine",
+        "site_id": 41
+    }))
+    .unwrap();
+
+    assert_eq!(snapshot.site_id, Some(41));
+}
+
+#[test]
+fn should_parse_lifecycle_snapshot_when_no_fortress_site_is_loaded() {
+    let snapshot: LifecycleSnapshot = serde_json::from_value(json!({
+        "world_loaded": true,
+        "map_loaded": false,
+        "fortress_name": ""
+    }))
+    .unwrap();
+
+    assert_eq!(snapshot.site_id, None);
+}
+
+#[test]
 fn empty_detail_lists_are_restored() {
     let mut details = json!({
         "skills": {},

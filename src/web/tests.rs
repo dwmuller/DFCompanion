@@ -238,7 +238,8 @@ async fn rollback_floor_events_streams_the_floor_as_a_named_event() {
 
 #[tokio::test]
 async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
-    let (app, _) = CompanionApp::new();
+    let (app, queue_rx) = CompanionApp::new();
+    let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
 
     let accepted = router(app.clone())
@@ -249,18 +250,25 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
                 .header(header::HOST, HTTP_HOST)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine"}"#,
+                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","site_id":41}"#,
                 ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(accepted.status(), StatusCode::OK);
+    for _ in 0..100 {
+        if app.lifecycle().state == LifecycleState::MapLoaded {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
     assert_eq!(
         app.lifecycle().fortress_name.as_deref(),
         Some("Bridgedmine")
     );
+    assert_eq!(app.lifecycle().site_id, Some(41));
 
     let rejected = router(app.clone())
         .oneshot(
@@ -271,7 +279,7 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
                 .header(header::ORIGIN, HTTP_ORIGIN)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"world_loaded":false,"map_loaded":false,"fortress_name":""}"#,
+                    r#"{"world_loaded":false,"map_loaded":false,"fortress_name":"","site_id":null}"#,
                 ))
                 .unwrap(),
         )
@@ -279,6 +287,7 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
         .unwrap();
     assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
     assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
+    worker.abort();
 }
 
 async fn get_events_body(app: &Arc<CompanionApp>, last_event_id: Option<&str>) -> String {

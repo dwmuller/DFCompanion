@@ -14,6 +14,7 @@ local STATE_KEY = 'dfcompanion'
 local MESSAGE_PREFIX = 'DFCompanion:'
 
 enabled = enabled or false
+pending_event = pending_event or nil
 
 local function http_post(path, body)
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
@@ -110,6 +111,7 @@ end
 
 local function disable()
     enabled = false
+    pending_event = nil
     dfhack.onStateChange[STATE_KEY] = nil
     eventful.onReport[STATE_KEY] = nil
     print('DFCompanion Lua script disabled.')
@@ -118,7 +120,10 @@ end
 -- Pauses the game and notifies the player with a one-line alert badge plus a
 -- dismissible popup. Unpausing is enough to carry on. Forwarding stays
 -- enabled: if the problem persists, the next report pauses the game again.
-local function report_failure(err)
+local function report_failure(err, event)
+    if event then
+        pending_event = event
+    end
     -- Drop the "Could not submit" wrapper, source file prefixes and C++ exception
     -- boilerplate so the popup shows just the cause.
     local detail = tostring(err):gsub('^Could not submit an event to DFCompanion:%s*', '')
@@ -133,6 +138,22 @@ local function report_failure(err)
         popup_detail .. '[B]Start or fix the DFCompanion service and unpause, ' ..
         'or run "disable dfcompanion" to stop forwarding events.')
     dfhack.printerr(MESSAGE_PREFIX .. ' ' .. tostring(err))
+end
+
+-- Retries the report that caused the service-outage pause once the player
+-- unpauses. If the service is still unavailable, report_failure pauses again.
+local function retry_pending_event()
+    if not enabled or not pending_event then
+        return
+    end
+    local event = pending_event
+    local ok, err = pcall(submit_event, event)
+    if not ok then
+        report_failure(err, event)
+        return
+    end
+    pending_event = nil
+    dfhack.printerr(MESSAGE_PREFIX .. ' resumed event forwarding.')
 end
 
 local function report_ai_block_pause(reason)
@@ -153,13 +174,16 @@ local LIFECYCLE_KEY = 'dfcompanion_lifecycle'
 local function push_lifecycle_state()
     local map_loaded = dfhack.isMapLoaded()
     local name = ''
+    local site_id = nil
     if map_loaded then
         name = rpc.fortress_name()
+        site_id = df.global.plotinfo.site_id
     end
     local ok, err = pcall(submit_lifecycle, {
         world_loaded = dfhack.isWorldLoaded(),
         map_loaded = map_loaded,
         fortress_name = name,
+        site_id = site_id,
     })
     if not ok then
         dfhack.printerr(MESSAGE_PREFIX .. ' could not report game state: ' .. tostring(err))
@@ -183,6 +207,8 @@ local function on_state_change(state)
         if reason ~= '' then
             report_ai_block_pause(reason)
         end
+    elseif state == SC_UNPAUSED then
+        retry_pending_event()
     end
 end
 
@@ -196,9 +222,10 @@ local function on_report(report_id)
         return
     end
 
-    local ok, err = pcall(submit_event, rpc.report_entry(report))
+    local event = rpc.report_entry(report)
+    local ok, err = pcall(submit_event, event)
     if not ok then
-        report_failure(err)
+        report_failure(err, event)
     end
 end
 
@@ -208,15 +235,21 @@ local function enable()
     end
 
     if not enabled then
-        submit_event({
+        enabled = true
+        eventful.enableEvent(eventful.eventType.REPORT, 1)
+        eventful.onReport[STATE_KEY] = on_report
+        dfhack.onStateChange[STATE_KEY] = on_state_change
+
+        local event = {
             date = rpc.game_date(),
             category = 'test',
             text = 'DFHack Lua connection test; DFCompanion is enabled and forwarding announcements.',
-        })
-        eventful.enableEvent(eventful.eventType.REPORT, 1)
-        eventful.onReport[STATE_KEY] = on_report
-        enabled = true
-        dfhack.onStateChange[STATE_KEY] = on_state_change
+        }
+        local ok, err = pcall(submit_event, event)
+        if not ok then
+            report_failure(err, event)
+            return
+        end
         print('DFCompanion Lua script enabled.')
     else
         print('DFCompanion Lua script is already enabled.')

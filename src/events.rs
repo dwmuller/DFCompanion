@@ -1,7 +1,10 @@
 use serde::Serialize;
-use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError};
 
-use crate::game_state::validate_game_date;
+use crate::{
+    ai::History,
+    game_state::{validate_game_date, LifecycleSnapshot},
+};
 
 /// A game event in the format of the `get_recent_reports` tool.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -44,18 +47,120 @@ pub enum ExternalEvent {
     /// An AI configuration was just selected: give the AI a turn to look around.
     Orient,
     GameEvent(GameEvent),
+    /// A high-priority observation of the game's loading state.
+    Lifecycle(LifecycleEvent),
+    /// Completion of a site-bound chat restore operation.
+    ChatStateLoaded {
+        generation: u64,
+        site_id: i64,
+        result: Result<Option<LoadedChatState>, String>,
+    },
+    /// A committed history snapshot that should be coalesced with other
+    /// pending saves and written to the current fortress.
+    ChatStateSaveRequested(ChatSaveRequest),
+    /// Completion of one serialized site-persistent save.
+    ChatStateSaved {
+        save_id: u64,
+        generation: u64,
+        site_id: i64,
+        result: Result<(), String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LifecycleEvent {
+    Snapshot(LifecycleSnapshot),
+    Unreachable,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedChatState {
+    pub state: String,
+    pub current_game_date: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatSaveRequest {
+    pub generation: u64,
+    pub site_id: i64,
+    pub history: History,
+}
+
+/// Receives normal events in bounded FIFO order and control events (lifecycle
+/// and persistence) on a priority channel.
+pub struct EventReceiver {
+    pub(crate) normal: mpsc::Receiver<ExternalEvent>,
+    pub(crate) lifecycle: mpsc::UnboundedReceiver<ExternalEvent>,
+}
+
+impl EventReceiver {
+    pub async fn recv(&mut self) -> Option<ExternalEvent> {
+        let lifecycle_open = !self.lifecycle.is_closed();
+        tokio::select! {
+            biased;
+            item = self.lifecycle.recv(), if lifecycle_open => {
+                if let Some(item) = item {
+                    Some(item)
+                } else {
+                    self.normal.recv().await
+                }
+            },
+            item = self.normal.recv() => item,
+        }
+    }
+
+    pub fn try_recv(&mut self) -> Result<ExternalEvent, TryRecvError> {
+        match self.lifecycle.try_recv() {
+            Ok(event) => Ok(event),
+            Err(TryRecvError::Empty) => self.normal.try_recv(),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.normal.len() + self.lifecycle.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn drain_normal(&mut self) -> usize {
+        let mut dropped = 0;
+        while self.normal.try_recv().is_ok() {
+            dropped += 1;
+        }
+        dropped
+    }
 }
 
 #[derive(Clone)]
 pub struct EventQueue {
     queue_tx: mpsc::Sender<ExternalEvent>,
+    lifecycle_tx: mpsc::UnboundedSender<ExternalEvent>,
 }
 
 impl EventQueue {
-    pub fn new(queue_tx: mpsc::Sender<ExternalEvent>) -> Self {
-        Self { queue_tx }
+    pub fn new(
+        queue_tx: mpsc::Sender<ExternalEvent>,
+        lifecycle_tx: mpsc::UnboundedSender<ExternalEvent>,
+    ) -> Self {
+        Self {
+            queue_tx,
+            lifecycle_tx,
+        }
     }
     pub fn try_send(&self, item: ExternalEvent) -> Result<(), String> {
+        match item {
+            ExternalEvent::Lifecycle(event) => self.try_send_lifecycle(event),
+            item @ (ExternalEvent::ChatStateLoaded { .. }
+            | ExternalEvent::ChatStateSaveRequested(_)
+            | ExternalEvent::ChatStateSaved { .. }) => self.try_send_priority(item),
+            item => self.try_send_normal(item),
+        }
+    }
+
+    fn try_send_normal(&self, item: ExternalEvent) -> Result<(), String> {
         match self.queue_tx.try_send(item) {
             Ok(_) => Ok(()),
             Err(TrySendError::Full(_)) => Err(format!(
@@ -66,5 +171,54 @@ impl EventQueue {
                 Err("The event queue is closed, failed to send.".to_owned())
             }
         }
+    }
+
+    /// Enqueues a lifecycle observation without sharing the capacity of the
+    /// bounded user/report queue.
+    pub fn try_send_lifecycle(&self, event: LifecycleEvent) -> Result<(), String> {
+        self.lifecycle_tx
+            .send(ExternalEvent::Lifecycle(event))
+            .map_err(|_| "The lifecycle event queue is closed, failed to send.".to_owned())
+    }
+
+    pub(crate) fn try_send_chat_state_loaded(
+        &self,
+        generation: u64,
+        site_id: i64,
+        result: Result<Option<LoadedChatState>, String>,
+    ) -> Result<(), String> {
+        self.try_send_priority(ExternalEvent::ChatStateLoaded {
+            generation,
+            site_id,
+            result,
+        })
+    }
+
+    pub(crate) fn try_send_chat_state_save_requested(
+        &self,
+        request: ChatSaveRequest,
+    ) -> Result<(), String> {
+        self.try_send_priority(ExternalEvent::ChatStateSaveRequested(request))
+    }
+
+    pub(crate) fn try_send_chat_state_saved(
+        &self,
+        save_id: u64,
+        generation: u64,
+        site_id: i64,
+        result: Result<(), String>,
+    ) -> Result<(), String> {
+        self.try_send_priority(ExternalEvent::ChatStateSaved {
+            save_id,
+            generation,
+            site_id,
+            result,
+        })
+    }
+
+    fn try_send_priority(&self, item: ExternalEvent) -> Result<(), String> {
+        self.lifecycle_tx
+            .send(item)
+            .map_err(|_| "The priority event queue is closed, failed to send.".to_owned())
     }
 }

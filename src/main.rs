@@ -37,7 +37,6 @@ async fn main() -> anyhow::Result<()> {
     let (app, queue_rx) = CompanionApp::load().map_err(std::io::Error::other)?;
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     let lifecycle_poller = tokio::spawn(app.clone().run_lifecycle_poller());
-    app.check_game_at_startup().await;
     let http_listener = TcpListener::bind(http_address).await?;
     let http_service = if http_tracing {
         web::with_request_tracing(web::router(app.clone()))

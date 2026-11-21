@@ -11,7 +11,7 @@
       "preLaunchTask": "Build and Install DFCompanion (Debug)",
       "terminal": "integrated",
       "env": {
-        "RUST_LOG": "none,dfcompanion=trace",
+        "RUST_LOG": "info,dfcompanion::game_state=trace",
         "RUST_BACKTRACE": "1"
       }
     }

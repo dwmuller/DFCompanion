@@ -197,6 +197,7 @@ async fn ai_tools_end_to_end() {
     let lifecycle = tokio::sync::watch::channel(dfcompanion::game_state::LifecycleStatus {
         state: dfcompanion::game_state::LifecycleState::MapLoaded,
         fortress_name: None,
+        site_id: None,
     })
     .1;
     let game_state = dfcompanion::game_state::GameState::new(Notifier::new(history), lifecycle);

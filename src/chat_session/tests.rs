@@ -90,6 +90,16 @@ fn notified(effects: &[Effect], kind: DisplayMessageKind) -> Vec<String> {
         .collect()
 }
 
+fn persisted(effects: &[Effect]) -> Vec<&History> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::PersistChatState(history) => Some(history),
+            _ => None,
+        })
+        .collect()
+}
+
 fn answer(history: &History, prompt: &Prompt, text: &str) -> Result<TurnOutput, TurnError> {
     Ok(TurnOutput {
         history: crate::ai::history_after_turn(history, prompt, text),
@@ -141,6 +151,7 @@ fn a_successful_turn_answers_commits_history_and_goes_idle() {
     );
     assert_eq!(published(&effects), vec![ChatState::Idle]);
     assert_eq!(session.history().len(), 2);
+    assert_eq!(persisted(&effects), vec![session.history()]);
     assert_eq!(session.pending_through(), None);
     assert!(started_turn(&effects).is_none());
 }
@@ -202,6 +213,7 @@ fn a_failed_turn_returns_its_inputs_to_pending_and_blocks() {
     assert_eq!(session.pending_user_message_count(), 1);
     assert_eq!(session.pending_through(), Some(NotificationId(1)));
     assert_eq!(session.history().len(), 0);
+    assert!(persisted(&effects).is_empty());
 }
 
 #[test]
@@ -313,6 +325,33 @@ fn a_report_from_a_turn_that_is_not_in_flight_is_ignored() {
     );
     assert!(repeat.is_empty());
     assert_eq!(session.history().len(), 2);
+}
+
+#[test]
+fn resetting_for_a_new_fortress_cancels_old_work_and_starts_new_operation_ids() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let (old_turn_id, old_prompt, old_history, old_cancel) =
+        started_turn(&session.handle(&context(now), user("old", 1))).unwrap();
+
+    session.reset_for_fortress(now + Duration::from_secs(1));
+    let stale_effects = session.handle(
+        &context(now + Duration::from_secs(1)),
+        finished(old_turn_id, answer(&old_history, &old_prompt, "stale")),
+    );
+    let (new_turn_id, _, _, _) =
+        started_turn(&session.handle(&context(now + Duration::from_secs(1)), user("new", 2)))
+            .unwrap();
+
+    assert_eq!(
+        (
+            old_cancel.is_cancelled(),
+            stale_effects.is_empty(),
+            new_turn_id,
+            session.pending_user_message_count(),
+        ),
+        (true, true, old_turn_id + 1, 1)
+    );
 }
 
 #[test]
@@ -617,6 +656,7 @@ fn rolling_back_to_a_committed_turn_restores_its_history_and_drops_later_work() 
     );
     assert_eq!(notified(&effects, DisplayMessageKind::Status).len(), 1);
     assert_eq!(session.rollback_floor(), None);
+    assert_eq!(persisted(&effects), vec![session.history()]);
 }
 
 #[test]
@@ -724,6 +764,29 @@ fn a_rollback_note_is_sent_once_on_the_next_turn() {
     let effects = session.handle(&context(now), user("three", 3));
     let (_, prompt, _, _) = started_turn(&effects).unwrap();
     assert!(!prompt.included_rollback_note);
+}
+
+#[test]
+fn a_restoration_note_is_sent_once_on_the_next_turn() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    session.restore_history(
+        History::with_test_summary("Durable strategy.", &History::default()),
+        "250-01-01:0".to_owned(),
+        "250-02-03:400".to_owned(),
+    );
+
+    let effects = session.handle(&context(now), user("one", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    assert!(prompt.included_restoration_note);
+    session.handle(
+        &context(now),
+        finished(turn_id, answer(&history, &prompt, "a")),
+    );
+
+    let effects = session.handle(&context(now), user("two", 2));
+    let (_, prompt, _, _) = started_turn(&effects).unwrap();
+    assert!(!prompt.included_restoration_note);
 }
 
 #[test]
@@ -871,6 +934,7 @@ fn a_successful_compaction_replaces_history_and_resumes_the_turn() {
     assert_eq!(session.history().len(), COMPACTION_KEEP_RECENT_MESSAGES);
     assert!(started_turn(&effects).is_some());
     assert_eq!(notified(&effects, DisplayMessageKind::Status).len(), 1);
+    assert_eq!(persisted(&effects), vec![session.history()]);
 }
 
 #[test]

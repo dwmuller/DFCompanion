@@ -54,7 +54,7 @@ The install target builds DFCompanion and copies `scripts/*.lua` to `${DFHACK_IN
 
 The service tracks how far the game has loaded—DFHack reachable, world loaded, fortress loaded, and the fortress name—so its AI game tools stay inert until a fortress is ready; this avoids querying fort data while a fortress is loading, which can crash the game. The state is kept current two ways. `scripts/dfcompanion.lua` pushes it to the service on DFHack's world/map load and unload events, and the service also polls DFHack for it (about every 20 seconds), so the state converges even if no push arrives, such as when the service starts while a fortress is already loaded.
 
-The push is registered when the script runs, independently of the `enable dfcompanion` event-forwarding toggle. Run `enable dfcompanion` to both forward events and report state; to report state without forwarding events, add `dfcompanion status` to a `dfhack-config/init/dfhack*.init` file (it works with no fortress loaded). If the script never runs, the service still learns the state from its own periodic check.
+The push is registered when the script runs, independently of the `enable dfcompanion` event-forwarding toggle. Run `enable dfcompanion` to forward events and report state. Once enabled, a delivery failure retains the failed report and pauses the game without disabling forwarding; restarting the service and unpausing retries that report. To report state without forwarding events, add `dfcompanion status` to a `dfhack-config/init/dfhack*.init` file (it works with no fortress loaded). If the script never runs, the service still learns the state from its own periodic check.
 
 For a release build:
 

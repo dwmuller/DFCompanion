@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
@@ -6,8 +9,10 @@ use tokio::time::{sleep_until, Instant};
 use tracing::debug;
 
 use crate::chat_session::{self, ChatSession, Context, Effect};
-use crate::events::{EventQueue, ExternalEvent};
-use crate::game_state::{GameState, LifecycleState, LifecycleStatus};
+use crate::events::{
+    ChatSaveRequest, EventQueue, EventReceiver, ExternalEvent, LifecycleEvent, LoadedChatState,
+};
+use crate::game_state::{GameState, LifecycleSnapshot, LifecycleState, LifecycleStatus};
 use crate::notifications::{
     DisplayMessage, DisplayMessageKind, InputState, NotificationHistory, NotificationId, Notifier,
 };
@@ -31,6 +36,8 @@ pub struct CompanionApp {
     pub ai: ai::AiRuntime,
     /// The state of the AI conversation. All changes go through [`Self::dispatch`].
     session: Mutex<ChatSession>,
+    /// Distinguishes restore completions from later fortress activations.
+    lifecycle_generation: AtomicU64,
     /// Whether the AI gets a turn shortly after game events arrive. Off by
     /// default because automatic turns spend tokens without the player asking.
     pub event_turns: std::sync::atomic::AtomicBool,
@@ -46,7 +53,7 @@ pub struct CompanionApp {
 }
 
 impl CompanionApp {
-    pub fn new() -> (Arc<Self>, mpsc::Receiver<ExternalEvent>) {
+    pub fn new() -> (Arc<Self>, EventReceiver) {
         // Create a fresh NotificationHistory and pass it in.
         let history = NotificationHistory::new();
         let (s, r) = Self::with_config_and_channels(
@@ -56,7 +63,7 @@ impl CompanionApp {
         (s, r)
     }
 
-    pub fn load() -> Result<(Arc<Self>, mpsc::Receiver<ExternalEvent>), String> {
+    pub fn load() -> Result<(Arc<Self>, EventReceiver), String> {
         let configurations = ai_config::ConfigurationRepository::load_default()?;
         // Build a fresh NotificationHistory for the loaded configuration.
         let history = NotificationHistory::new();
@@ -67,9 +74,10 @@ impl CompanionApp {
     fn with_config_and_channels(
         configurations: ai_config::ConfigurationRepository,
         history: NotificationHistory,
-    ) -> (Arc<Self>, mpsc::Receiver<ExternalEvent>) {
+    ) -> (Arc<Self>, EventReceiver) {
         let (queue_tx, queue_rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
-        let event_queue = EventQueue::new(queue_tx);
+        let (lifecycle_tx, lifecycle_rx) = mpsc::unbounded_channel();
+        let event_queue = EventQueue::new(queue_tx, lifecycle_tx);
         // `history` is passed in directly.
         let notifier = Notifier::new(history.clone());
         let lifecycle = watch::channel(LifecycleStatus::default()).0;
@@ -82,6 +90,7 @@ impl CompanionApp {
                 history,
                 ai,
                 session: Mutex::new(ChatSession::new(Instant::now())),
+                lifecycle_generation: AtomicU64::new(0),
                 event_turns: Default::default(),
                 periodic_turns: Default::default(),
                 game_state,
@@ -89,7 +98,10 @@ impl CompanionApp {
                 rollback_floor: watch::channel(None).0,
                 lifecycle,
             }),
-            queue_rx,
+            EventReceiver {
+                normal: queue_rx,
+                lifecycle: lifecycle_rx,
+            },
         )
     }
 
@@ -136,6 +148,7 @@ impl CompanionApp {
         world_loaded: bool,
         map_loaded: bool,
         fortress_name: Option<String>,
+        site_id: Option<i64>,
     ) {
         let state = if map_loaded {
             LifecycleState::MapLoaded
@@ -144,22 +157,27 @@ impl CompanionApp {
         } else {
             LifecycleState::Initialized
         };
-        self.set_lifecycle(state, fortress_name);
+        self.set_lifecycle(state, fortress_name, site_id);
     }
 
     /// Records that DFHack could not be reached, keeping the last fortress
     /// name so the UI can still name it.
     pub fn mark_lifecycle_unreachable(&self) {
-        self.set_lifecycle(LifecycleState::Unreachable, None);
+        self.set_lifecycle(LifecycleState::Unreachable, None, None);
     }
 
-    fn set_lifecycle(&self, state: LifecycleState, fortress_name: Option<String>) {
+    fn set_lifecycle(
+        &self,
+        state: LifecycleState,
+        fortress_name: Option<String>,
+        site_id: Option<i64>,
+    ) {
         // Only touch the watch value when something actually changed, so
         // subscribers are not woken by every poll that sees the same state.
         let name = fortress_name.filter(|name| !name.is_empty());
-        let mut state_changed = false;
+        let mut lifecycle_changed = false;
         self.lifecycle.send_if_modified(|status| {
-            state_changed = status.state != state;
+            let state_changed = status.state != state;
             status.state = state;
             let name_changed = match &name {
                 Some(name) if status.fortress_name.as_deref() != Some(name.as_str()) => {
@@ -168,9 +186,17 @@ impl CompanionApp {
                 }
                 _ => false,
             };
-            state_changed || name_changed
+            let site_changed = match site_id {
+                Some(site_id) if status.site_id != Some(site_id) => {
+                    status.site_id = Some(site_id);
+                    true
+                }
+                _ => false,
+            };
+            lifecycle_changed = state_changed || name_changed || site_changed;
+            lifecycle_changed
         });
-        if state_changed {
+        if lifecycle_changed {
             let message = match state {
                 LifecycleState::MapLoaded => match self.lifecycle.borrow().fortress_name.as_deref()
                 {
@@ -192,12 +218,16 @@ impl CompanionApp {
     pub async fn run_lifecycle_poller(self: Arc<CompanionApp>) {
         loop {
             match self.game_state.run(|game| game.query_lifecycle()).await {
-                Ok(snapshot) => self.update_lifecycle(
-                    snapshot.world_loaded,
-                    snapshot.map_loaded,
-                    Some(snapshot.fortress_name),
-                ),
-                Err(_) => self.mark_lifecycle_unreachable(),
+                Ok(snapshot) => {
+                    let _ = self
+                        .queue_tx
+                        .try_send_lifecycle(LifecycleEvent::Snapshot(snapshot));
+                }
+                Err(_) => {
+                    let _ = self
+                        .queue_tx
+                        .try_send_lifecycle(LifecycleEvent::Unreachable);
+                }
             }
             tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
         }
@@ -260,6 +290,26 @@ impl CompanionApp {
             // [`Self::rollback`], before the rest reach here. This arm keeps
             // the match exhaustive.
             Effect::ReplyEditorText(_) => {}
+            Effect::PersistChatState(history) => {
+                let lifecycle = self.lifecycle.borrow();
+                let Some(site_id) = lifecycle
+                    .site_id
+                    .filter(|_| lifecycle.state == LifecycleState::MapLoaded)
+                else {
+                    debug!(
+                        "Committed chat state is not being saved because no fortress is loaded."
+                    );
+                    return;
+                };
+                let request = ChatSaveRequest {
+                    generation: self.lifecycle_generation.load(Ordering::Relaxed),
+                    site_id,
+                    history,
+                };
+                if let Err(error) = self.queue_tx.try_send_chat_state_save_requested(request) {
+                    tracing::warn!("{error}");
+                }
+            }
             Effect::StartTurn {
                 turn_id,
                 configuration,
@@ -332,11 +382,6 @@ impl CompanionApp {
     fn has_active_configuration(&self) -> bool {
         matches!(self.ai.configurations.active(), Ok(Some(_)))
     }
-    /// Verifies the game link at startup. Returns the status line, or the error.
-    async fn startup_summary(&self) -> Result<String, String> {
-        self.game_state.run(|game| game.startup_summary()).await
-    }
-
     /// Whether the game is running; `None` when it cannot be reached.
     async fn game_is_running(&self) -> Option<bool> {
         self.game_state
@@ -344,28 +389,6 @@ impl CompanionApp {
             .await
             .ok()
             .map(|paused| !paused)
-    }
-
-    /// Checks the game connection once at startup, reports the result, and if the
-    /// game responds gives the AI an orientation turn.
-    pub async fn check_game_at_startup(&self) {
-        match self.startup_summary().await {
-            Ok(summary) => {
-                {
-                    self.notifier
-                        .notify(DisplayMessage::new(DisplayMessageKind::Status, summary));
-                };
-                if self.has_active_configuration() {
-                    let _ = self.queue_tx.try_send(ExternalEvent::Orient);
-                }
-            }
-            Err(error) => {
-                self.notifier.notify(DisplayMessage::new(
-                            DisplayMessageKind::Warning,
-                            format!("The game is not responding yet ({error}). Is Dwarf Fortress running with a fortress loaded?"),
-                        ));
-            }
-        }
     }
 
     pub fn event_turns_enabled(&self) -> bool {
@@ -385,41 +408,161 @@ impl CompanionApp {
     /// failure, automatic turns stop until the player resumes and sends a
     /// message, so a broken configuration cannot flood the chat or burn
     /// requests.
-    pub async fn run_companion_worker(
-        self: Arc<CompanionApp>,
-        mut queue_rx: mpsc::Receiver<ExternalEvent>,
-    ) {
+    pub async fn run_companion_worker(self: Arc<CompanionApp>, mut queue_rx: EventReceiver) {
+        let mut restoring_chat = false;
+        let mut next_save_id = 0;
+        let mut save_in_flight: Option<u64> = None;
+        let mut pending_save: Option<ChatSaveRequest> = None;
         loop {
             let (flush_at, check_at) = {
                 let session = self.session.lock().unwrap();
                 (session.flush_deadline(), session.check_deadline())
             };
             tokio::select! {
-                item = queue_rx.recv() => match item {
+                biased;
+                item = queue_rx.lifecycle.recv(), if !queue_rx.lifecycle.is_closed() => match item {
+                    Some(item) => {
+                        if self.is_new_fortress_event(&item) {
+                            let dropped = queue_rx.drain_normal();
+                            debug!("Dropped {dropped} queued external events for a new fortress.");
+                            restoring_chat = true;
+                            pending_save = None;
+                        }
+                        if self.is_current_chat_load_completion(&item) {
+                            restoring_chat = false;
+                        }
+                        match item {
+                            ExternalEvent::ChatStateSaveRequested(request) => {
+                                if self.chat_save_request_is_current(&request) {
+                                    if save_in_flight.is_some() {
+                                        pending_save = Some(request);
+                                    } else {
+                                        let save_id = next_save_id;
+                                        next_save_id += 1;
+                                        save_in_flight = Some(save_id);
+                                        self.start_chat_save(save_id, request);
+                                    }
+                                }
+                            }
+                            ExternalEvent::ChatStateSaved {
+                                save_id,
+                                generation,
+                                site_id,
+                                result,
+                            } => {
+                                if save_in_flight != Some(save_id) {
+                                    debug!("Ignoring unexpected chat save completion {save_id}.");
+                                    continue;
+                                }
+                                save_in_flight = None;
+                                if generation
+                                    == self.lifecycle_generation.load(Ordering::Relaxed)
+                                    && self.lifecycle.borrow().site_id == Some(site_id)
+                                {
+                                    if let Err(error) = result {
+                                        self.notifier.notify(DisplayMessage::new(
+                                            DisplayMessageKind::Warning,
+                                            format!(
+                                                "Companion chat state was not saved with the fortress. {error}"
+                                            ),
+                                        ));
+                                    }
+                                }
+                                if let Some(request) = pending_save
+                                    .take_if(|request| self.chat_save_request_is_current(request))
+                                {
+                                    let save_id = next_save_id;
+                                    next_save_id += 1;
+                                    save_in_flight = Some(save_id);
+                                    self.start_chat_save(save_id, request);
+                                }
+                            }
+                            item => self.handle_external_event(item).await,
+                        }
+                    },
+                    None => break,
+                },
+                item = queue_rx.normal.recv(), if !restoring_chat => match item {
                     Some(item) => self.handle_external_event(item).await,
                     None => break,
                 },
-                _ = sleep_until(flush_at.unwrap_or(check_at)), if flush_at.is_some() => {
+                _ = sleep_until(flush_at.unwrap_or(check_at)), if !restoring_chat && flush_at.is_some() => {
                     self.dispatch(chat_session::ChatEvents::FlushDue);
                 }
-                _ = sleep_until(check_at) => {
+                _ = sleep_until(check_at), if !restoring_chat => {
                     self.dispatch(chat_session::ChatEvents::CheckDue);
                 }
             }
         }
     }
 
+    fn is_new_fortress_event(&self, item: &ExternalEvent) -> bool {
+        let ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(snapshot)) = item else {
+            return false;
+        };
+        self.snapshot_starts_new_session(snapshot)
+    }
+
+    fn snapshot_starts_new_session(&self, snapshot: &LifecycleSnapshot) -> bool {
+        let Some(site_id) = snapshot.site_id.filter(|_| snapshot.map_loaded) else {
+            return false;
+        };
+        let lifecycle = self.lifecycle.borrow();
+        lifecycle.site_id != Some(site_id)
+            || matches!(
+                lifecycle.state,
+                LifecycleState::Initialized | LifecycleState::WorldLoaded
+            )
+    }
+
+    fn is_current_chat_load_completion(&self, item: &ExternalEvent) -> bool {
+        matches!(
+            item,
+            ExternalEvent::ChatStateLoaded { generation, .. }
+                if *generation == self.lifecycle_generation.load(Ordering::Relaxed)
+        )
+    }
+
+    fn chat_save_request_is_current(&self, request: &ChatSaveRequest) -> bool {
+        self.lifecycle_generation.load(Ordering::Relaxed) == request.generation
+            && self.lifecycle.borrow().state == LifecycleState::MapLoaded
+            && self.lifecycle.borrow().site_id == Some(request.site_id)
+    }
+
     async fn handle_external_event(self: &Arc<Self>, item: ExternalEvent) {
         match item {
-            ExternalEvent::Orient => {
-                if self.has_active_configuration() {
-                    // The orientation prompt is not shown to the player, so it
-                    // has no notification.
-                    self.dispatch(chat_session::ChatEvents::UserRequest {
-                        text: ORIENT_MESSAGE.to_owned(),
-                        id: None,
-                    });
+            ExternalEvent::Lifecycle(LifecycleEvent::Unreachable) => {
+                self.mark_lifecycle_unreachable();
+            }
+            ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(snapshot)) => {
+                let is_new_fortress = self.snapshot_starts_new_session(&snapshot);
+                if is_new_fortress {
+                    {
+                        let mut session = self.session.lock().unwrap();
+                        session.reset_for_fortress(Instant::now());
+                    }
+                    self.history.clear();
+                    self.chat_state.send_replace(ChatState::Idle);
+                    self.rollback_floor.send_replace(None);
                 }
+                self.update_lifecycle(
+                    snapshot.world_loaded,
+                    snapshot.map_loaded,
+                    Some(snapshot.fortress_name),
+                    snapshot.site_id,
+                );
+                if let Some(site_id) = snapshot.site_id.filter(|_| is_new_fortress) {
+                    let generation = self.lifecycle_generation.fetch_add(1, Ordering::Relaxed) + 1;
+                    self.start_chat_restore(generation, site_id);
+                }
+            }
+            ExternalEvent::ChatStateLoaded {
+                generation,
+                site_id,
+                result,
+            } => self.finish_chat_restore(generation, site_id, result),
+            ExternalEvent::Orient => {
+                self.orient();
             }
             ExternalEvent::UserInput(text) => {
                 if let Some(command) = chat_commands::ChatCommand::parse(&text) {
@@ -447,6 +590,120 @@ impl CompanionApp {
                     id: Some(id),
                 });
             }
+            ExternalEvent::ChatStateSaveRequested(_) | ExternalEvent::ChatStateSaved { .. } => {
+                unreachable!("chat save events are coordinated by the worker loop")
+            }
+        }
+    }
+
+    fn start_chat_restore(self: &Arc<Self>, generation: u64, site_id: i64) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            let result = this
+                .game_state
+                .run(move |game| {
+                    let Some(state) = game.load_chat_state(site_id)? else {
+                        return Ok(None);
+                    };
+                    let current_game_date = game.game_date()?;
+                    Ok(Some(LoadedChatState {
+                        state,
+                        current_game_date,
+                    }))
+                })
+                .await;
+            let _ = this
+                .queue_tx
+                .try_send_chat_state_loaded(generation, site_id, result);
+        });
+    }
+
+    fn start_chat_save(self: &Arc<Self>, save_id: u64, request: ChatSaveRequest) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            let history = request.history;
+            let site_id = request.site_id;
+            let generation = request.generation;
+            let result = this
+                .game_state
+                .run(move |game| {
+                    let game_date = game.game_date()?;
+                    let state = history.to_snapshot_json(site_id, &game_date)?;
+                    game.save_chat_state(site_id, &state)
+                })
+                .await;
+            let _ = this
+                .queue_tx
+                .try_send_chat_state_saved(save_id, generation, site_id, result);
+        });
+    }
+
+    fn finish_chat_restore(
+        self: &Arc<Self>,
+        generation: u64,
+        site_id: i64,
+        result: Result<Option<LoadedChatState>, String>,
+    ) {
+        if generation != self.lifecycle_generation.load(Ordering::Relaxed)
+            || self.lifecycle.borrow().site_id != Some(site_id)
+        {
+            debug!(
+                "Ignoring stale chat restore completion for site {site_id}, generation {generation}."
+            );
+            return;
+        }
+
+        match result {
+            Ok(None) => {
+                self.notifier.notify(DisplayMessage::new(
+                    DisplayMessageKind::Status,
+                    "No saved companion chat state was found for this fortress.",
+                ));
+            }
+            Ok(Some(saved)) => match ai::History::from_snapshot_json(&saved.state, site_id) {
+                Ok((history, saved_game_date)) => {
+                    self.session.lock().unwrap().restore_history(
+                        history,
+                        saved_game_date.clone(),
+                        saved.current_game_date.clone(),
+                    );
+                    self.notifier.notify(DisplayMessage::new(
+                            DisplayMessageKind::Status,
+                            format!(
+                                "Restored companion chat state saved at game date {saved_game_date}; current game date is {}.",
+                                saved.current_game_date
+                            ),
+                        ));
+                }
+                Err(error) => {
+                    self.notifier.notify(DisplayMessage::new(
+                            DisplayMessageKind::Warning,
+                            format!(
+                                "Saved companion chat state could not be restored; starting fresh. {error}"
+                            ),
+                        ));
+                }
+            },
+            Err(error) => {
+                self.notifier.notify(DisplayMessage::new(
+                    DisplayMessageKind::Warning,
+                    format!(
+                        "Saved companion chat state could not be loaded; starting fresh. {error}"
+                    ),
+                ));
+            }
+        }
+        self.orient();
+    }
+
+    fn orient(self: &Arc<Self>) {
+        if self.has_active_configuration() {
+            // The orientation prompt is not shown to the player, so it has no
+            // notification.
+            self.dispatch(chat_session::ChatEvents::UserRequest {
+                text: ORIENT_MESSAGE.to_owned(),
+                id: None,
+            });
         }
     }
 

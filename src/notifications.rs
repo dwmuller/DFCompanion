@@ -252,6 +252,19 @@ impl NotificationHistory {
         removed
     }
 
+    /// Clears every displayed message while preserving notification IDs and
+    /// the live subscription channel. Connected clients rebuild from the new
+    /// epoch instead of retaining a previous fortress's transcript.
+    pub fn clear(&self) -> usize {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let removed = inner.entries.len();
+        inner.entries.clear();
+        inner.epoch += 1;
+        let epoch = inner.epoch;
+        let _ = self.live_tx.send(HistoryEvent::Reset(epoch));
+        removed
+    }
+
     /// The recorded messages with an id greater than `after` (all of them when
     /// `after` is `None`) and a receiver for every message after those. Ids
     /// increase with each message, so a reconnecting browser can resume where
@@ -456,6 +469,22 @@ mod tests {
         let backlog = history.subscribe(None).0;
         assert_eq!(backlog.len(), 1);
         assert_eq!(backlog[0].0, a.0);
+    }
+
+    #[test]
+    fn clear_removes_the_transcript_without_reusing_notification_ids() {
+        let history = NotificationHistory::new();
+        let before = input(&history, "before");
+        let mut live = history.subscribe(None).1;
+        let _ = live.try_recv();
+
+        let removed = history.clear();
+        let after = input(&history, "after");
+
+        assert_eq!(
+            (removed, live.try_recv(), after),
+            (1, Ok(HistoryEvent::Reset(1)), NotificationId(before.0 + 1))
+        );
     }
 
     #[test]

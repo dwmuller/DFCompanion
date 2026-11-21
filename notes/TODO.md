@@ -22,17 +22,6 @@ prepare underlying infrastructure.
 
 Items that are primarily about the mechanics of AI interactions.
 
-- Save chat state, embedded in a DF game save.
-  - This is in effect a handoff to a future chat session.
-  - Never treat this context as system text, as it may incorporate input from
-    game events and users, which is considered untrusted.
-  - Keep AI configuration settings and especially API keys out of game saves.
-  - ? DFCompanion will send updates of the chat state to the Lua DFHack RPC
-    module, which will persist it with the game, overwriting previous states.
-  - ? State updates should include history and Done user input, but not game
-    reports.
-  - ? State updates should be sent to DFHack on completion of each turn that
-    includes user input.
 - The optional periodic check-in with the AI is currently probably not effective
   -- it seems to only check for already-enqueued activity without generating a
   prompt to the AI.
