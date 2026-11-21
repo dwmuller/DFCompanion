@@ -396,7 +396,7 @@ impl CompanionApp {
             };
             tokio::select! {
                 item = queue_rx.recv() => match item {
-                    Some(item) => self.handle_queue_item(item).await,
+                    Some(item) => self.handle_external_event(item).await,
                     None => break,
                 },
                 _ = sleep_until(flush_at.unwrap_or(check_at)), if flush_at.is_some() => {
@@ -409,7 +409,7 @@ impl CompanionApp {
         }
     }
 
-    async fn handle_queue_item(self: &Arc<Self>, item: ExternalEvent) {
+    async fn handle_external_event(self: &Arc<Self>, item: ExternalEvent) {
         match item {
             ExternalEvent::Orient => {
                 if self.has_active_configuration() {
