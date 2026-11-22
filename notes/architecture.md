@@ -70,6 +70,14 @@ use both DFHack RemoteFortressReader queries and the companion's `rpc.dfcompanio
 Lua module. The latter is distinct from the event-forwarding
 `dfcompanion` plugin.
 
+User-visible diagnostic events use a dedicated tracing layer. `ChatSession`
+emits typed `UserEvent` effects without doing I/O; the application emits those
+through allowlisted `user-*` tracing targets, and the subscriber converts them
+into `DisplayMessage` entries in notification history. The subscriber is
+independent of the console `EnvFilter`, so categories such as AI usage remain
+visible when normal tracing is disabled. Arbitrary application tracing targets
+never enter the conversation UI.
+
 Geometry is exposed as bounded, read-only observations rather than raw map
 dumps. A geometry overview summarizes the existing player-visible place
 inventory by UI z level. Floor plans request a limited rectangle from DFHack's

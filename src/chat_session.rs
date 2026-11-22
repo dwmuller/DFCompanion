@@ -25,6 +25,7 @@ use crate::{
     ai_config::AiConfiguration,
     events::GameEvent,
     notifications::{DisplayMessage, DisplayMessageKind, InputState, NotificationId},
+    user_events::{UserEvent, UserEventKind},
 };
 
 /// How often the AI gets a turn on its own while the game is running.
@@ -118,6 +119,8 @@ pub enum ChatEvents {
 #[derive(Debug)]
 pub enum Effect {
     Notify(DisplayMessage),
+    /// Emit an event through the user-visible tracing subscriber.
+    UserEvent(UserEvent),
     /// Change the state of the inputs up to and including `through`.
     TransitionInputs {
         through: NotificationId,
@@ -503,8 +506,8 @@ impl ChatSession {
                 to: InputState::Processing,
             });
         }
-        effects.push(Effect::Notify(DisplayMessage::new(
-            DisplayMessageKind::AiUsage,
+        effects.push(Effect::UserEvent(UserEvent::new(
+            UserEventKind::AiUsage,
             prompt.token_estimates_summary(),
         )));
         let cancel = CancellationToken::new();
@@ -591,8 +594,8 @@ impl ChatSession {
                             .with_beep(!is_user_interaction),
                     ));
                 }
-                effects.push(Effect::Notify(DisplayMessage::new(
-                    DisplayMessageKind::AiUsage,
+                effects.push(Effect::UserEvent(UserEvent::new(
+                    UserEventKind::AiUsage,
                     usage.iter().map(|u| u.summary()).join("\n"),
                 )));
                 effects.extend(finish_inputs(InputState::Done));
@@ -636,8 +639,8 @@ impl ChatSession {
             Ok(output) => {
                 self.history = output.history;
                 if !output.usage.is_empty() {
-                    effects.push(Effect::Notify(DisplayMessage::new(
-                        DisplayMessageKind::AiUsage,
+                    effects.push(Effect::UserEvent(UserEvent::new(
+                        UserEventKind::AiUsage,
                         output.usage.iter().map(|u| u.summary()).join("\n"),
                     )));
                 }

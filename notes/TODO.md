@@ -9,11 +9,7 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Add a tracing subscriber that can turn selected events into DisplayMessage
-  objects and enqueue them.
-  - ? Affects targets with pattern "user-<category>". Add UI to select what
-    categories are displayed.
-  - Move AiUsage output items to events and use this mechanism for display.
+- ? Add UI to select which user-event tracing categories are displayed.
 - Add info, trace, and debug events to instrument critical program activity.
 - Revisit the game time representation. Consider a machine-readable form of year
   plus ticks since the start of that year, and/or a fixed-width, zero-padded

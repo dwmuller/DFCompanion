@@ -28,6 +28,10 @@ What feature or bug we're actively working on.
   itself is never paused. This fixes a crash where querying fort data during a
   fortress load could crash the game. The lifecycle flags themselves are safe to
   read at any screen, so the poller carries no such risk.
+- Selected user-facing diagnostics now travel through allowlisted `user-*`
+  tracing targets into the notification history. AI-usage estimate and reported
+  usage messages use this path while normal console tracing remains controlled
+  independently by `RUST_LOG`.
 - Fort geometry is available through `get_fortress_geometry` and
   `get_floor_plan`. The overview reports per-level counts for known housing,
   zones, workshops, and stockpiles. Floor plans are bounded ASCII maps that

@@ -1,20 +1,27 @@
 use std::net::SocketAddr;
 
 use anyhow::anyhow;
-use dfcompanion::{app::CompanionApp, web};
+use dfcompanion::{app::CompanionApp, user_events::UserEventLayer, web};
 use regex::regex;
 use tokio::net::TcpListener;
-use tracing_subscriber::{self, fmt::format::FmtSpan, EnvFilter};
+use tracing_subscriber::{
+    self, fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let http_address: SocketAddr = "127.0.0.1:3000".parse()?;
 
+    let (app, queue_rx) = CompanionApp::load().map_err(std::io::Error::other)?;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("none"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_filter(filter);
+    let user_event_layer = UserEventLayer::new(app.notifier().clone());
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(user_event_layer)
         .init();
     tracing::info!("Starting DFCompanion");
 
@@ -34,7 +41,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let (app, queue_rx) = CompanionApp::load().map_err(std::io::Error::other)?;
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     let lifecycle_poller = tokio::spawn(app.clone().run_lifecycle_poller());
     let http_listener = TcpListener::bind(http_address).await?;

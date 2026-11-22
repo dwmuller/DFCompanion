@@ -90,6 +90,16 @@ fn notified(effects: &[Effect], kind: DisplayMessageKind) -> Vec<String> {
         .collect()
 }
 
+fn user_event_texts(effects: &[Effect], kind: crate::user_events::UserEventKind) -> Vec<String> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::UserEvent(event) if event.kind == kind => Some(event.text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn persisted(effects: &[Effect]) -> Vec<&History> {
     effects
         .iter()
@@ -296,6 +306,48 @@ fn cancelling_returns_the_inputs_to_pending_without_blocking() {
     );
     assert_eq!(published(&effects), vec![ChatState::Idle]);
     assert_eq!(session.pending_user_message_count(), 1);
+}
+
+#[test]
+fn a_started_turn_emits_prompt_estimates_as_a_user_event() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+
+    let usage = user_event_texts(&effects, crate::user_events::UserEventKind::AiUsage);
+    assert_eq!(usage.len(), 1);
+    assert!(usage[0].contains("Estimated prompt tokens"));
+}
+
+#[test]
+fn a_completed_turn_emits_reported_usage_as_a_user_event() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    let output = TurnOutput {
+        history: crate::ai::history_after_turn(&history, &prompt, "done"),
+        answer: "done".to_owned(),
+        usage: vec![crate::ai_usage::AiTurnUsage {
+            purpose: "test request".to_owned(),
+            prompt_tokens: Some(12),
+            completion_tokens: Some(3),
+            total_reported: Some(15),
+            ..Default::default()
+        }],
+    };
+
+    let effects = session.handle(
+        &context(now),
+        ChatEvents::TurnFinished {
+            turn_id,
+            result: Ok(output),
+        },
+    );
+
+    let usage = user_event_texts(&effects, crate::user_events::UserEventKind::AiUsage);
+    assert_eq!(usage.len(), 1);
+    assert!(usage[0].contains("Tokens for test request"));
 }
 
 #[test]

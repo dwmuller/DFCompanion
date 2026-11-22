@@ -11,4 +11,5 @@ pub mod events;
 pub mod game_state;
 mod geometry;
 pub mod notifications;
+pub mod user_events;
 pub mod web;

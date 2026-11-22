@@ -229,6 +229,26 @@ fn an_unloaded_site_restore_does_not_start_an_orientation_turn() {
     assert_eq!(app.chat_state(), ChatState::Idle);
 }
 
+#[test]
+fn user_event_effects_reach_notification_history() {
+    use tracing_subscriber::prelude::*;
+
+    let (app, _queue_rx) = CompanionApp::new();
+    let layer = crate::user_events::UserEventLayer::new(app.notifier().clone());
+    let subscriber = tracing_subscriber::registry().with(layer);
+
+    tracing::subscriber::with_default(subscriber, || {
+        app.perform(Effect::UserEvent(crate::user_events::UserEvent::new(
+            crate::user_events::UserEventKind::Diagnostic,
+            "from tracing",
+        )));
+    });
+
+    let message = &app.history.subscribe_from(None).backlog[0].1;
+    assert_eq!(message.kind, DisplayMessageKind::Diagnostic);
+    assert_eq!(message.text, "from tracing");
+}
+
 #[tokio::test]
 async fn notification_history_replays_then_streams_live() {
     let (app, _queue_rx) = CompanionApp::new();

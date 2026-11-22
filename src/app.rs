@@ -16,6 +16,7 @@ use crate::game_state::{GameState, LifecycleSnapshot, LifecycleState, LifecycleS
 use crate::notifications::{
     DisplayMessage, DisplayMessageKind, InputState, NotificationHistory, NotificationId, Notifier,
 };
+use crate::user_events::emit;
 use crate::{ai, ai_config, ai_tools, chat_commands};
 
 pub use crate::chat_session::ChatState;
@@ -272,6 +273,9 @@ impl CompanionApp {
         match effect {
             Effect::Notify(message) => {
                 self.notifier.notify(message);
+            }
+            Effect::UserEvent(event) => {
+                emit(event);
             }
             Effect::TransitionInputs { through, from, to } => {
                 self.notifier.transition_inputs(through, from, to);
