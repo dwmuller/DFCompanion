@@ -299,6 +299,27 @@ fn cancelling_returns_the_inputs_to_pending_without_blocking() {
 }
 
 #[test]
+fn cancelling_an_unnotified_turn_discards_its_hidden_input() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let effects = session.handle(
+        &context(now),
+        ChatEvents::UserRequest {
+            text: "[Automatic session start]".to_owned(),
+            id: None,
+        },
+    );
+    let (turn_id, _, _, cancel) = started_turn(&effects).unwrap();
+
+    session.handle(&context(now), ChatEvents::CancelUnnotifiedTurn);
+    assert!(cancel.is_cancelled());
+    session.handle(&context(now), finished(turn_id, Err(TurnError::Cancelled)));
+
+    assert_eq!(session.pending_user_message_count(), 0);
+    assert_eq!(session.chat_state(), ChatState::Idle);
+}
+
+#[test]
 fn a_report_from_a_turn_that_is_not_in_flight_is_ignored() {
     let now = Instant::now();
     let mut session = ChatSession::new(now);

@@ -532,10 +532,16 @@ impl CompanionApp {
     async fn handle_external_event(self: &Arc<Self>, item: ExternalEvent) {
         match item {
             ExternalEvent::Lifecycle(LifecycleEvent::Unreachable) => {
+                self.dispatch(chat_session::ChatEvents::CancelUnnotifiedTurn);
                 self.mark_lifecycle_unreachable();
             }
             ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(snapshot)) => {
                 let is_new_fortress = self.snapshot_starts_new_session(&snapshot);
+                if !snapshot.map_loaded
+                    && self.lifecycle.borrow().state == LifecycleState::MapLoaded
+                {
+                    self.dispatch(chat_session::ChatEvents::CancelUnnotifiedTurn);
+                }
                 if is_new_fortress {
                     {
                         let mut session = self.session.lock().unwrap();
@@ -646,6 +652,7 @@ impl CompanionApp {
     ) {
         if generation != self.lifecycle_generation.load(Ordering::Relaxed)
             || self.lifecycle.borrow().site_id != Some(site_id)
+            || self.lifecycle.borrow().state != LifecycleState::MapLoaded
         {
             debug!(
                 "Ignoring stale chat restore completion for site {site_id}, generation {generation}."
@@ -697,7 +704,9 @@ impl CompanionApp {
     }
 
     fn orient(self: &Arc<Self>) {
-        if self.has_active_configuration() {
+        if self.has_active_configuration()
+            && self.lifecycle.borrow().state == LifecycleState::MapLoaded
+        {
             // The orientation prompt is not shown to the player, so it has no
             // notification.
             self.dispatch(chat_session::ChatEvents::UserRequest {

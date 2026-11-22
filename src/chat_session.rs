@@ -97,6 +97,9 @@ pub enum ChatEvents {
     },
     /// Cancel the turn in flight, if there is one. Its inputs go back to pending.
     CancelTurn,
+    /// Cancel an in-flight turn made only of hidden inputs, such as the fortress
+    /// orientation prompt. Its inputs are discarded instead of retried.
+    CancelUnnotifiedTurn,
     /// The player asked to resume after processing was blocked.
     Resume,
     /// Roll the conversation back to just before the turn containing `target`.
@@ -166,6 +169,7 @@ struct InFlight {
     /// the queue; they stay there until the turn succeeds.
     prompt: Prompt,
     cancel: CancellationToken,
+    discard_on_cancel: bool,
 }
 
 /// A history-compaction job in flight. At most one of this and [`InFlight`]
@@ -421,6 +425,20 @@ impl ChatSession {
                     in_flight.cancel.cancel();
                 }
             }
+            ChatEvents::CancelUnnotifiedTurn => {
+                let Some(in_flight) = &mut self.in_flight else {
+                    return;
+                };
+                let all_unnotified = self
+                    .queue
+                    .iter()
+                    .take(in_flight.prompt.included_inputs)
+                    .all(|input| input.notification_id().is_none());
+                if all_unnotified {
+                    in_flight.discard_on_cancel = true;
+                    in_flight.cancel.cancel();
+                }
+            }
             ChatEvents::Resume => {
                 self.blocked = false;
             }
@@ -494,6 +512,7 @@ impl ChatSession {
             turn_id,
             prompt: prompt.clone(),
             cancel: cancel.clone(),
+            discard_on_cancel: false,
         });
         effects.push(Effect::StartTurn {
             turn_id,
@@ -529,7 +548,12 @@ impl ChatSession {
         result: Result<TurnOutput, TurnError>,
         effects: &mut Vec<Effect>,
     ) {
-        let Some(InFlight { prompt, .. }) = self.in_flight.take_if(|f| f.turn_id == turn_id) else {
+        let Some(InFlight {
+            prompt,
+            discard_on_cancel,
+            ..
+        }) = self.in_flight.take_if(|f| f.turn_id == turn_id)
+        else {
             return; // Not the turn in flight: a stale report.
         };
         let finish_inputs = |to: InputState| {
@@ -584,7 +608,11 @@ impl ChatSession {
                 self.block(failure_message(&error), effects);
             }
             Err(TurnError::Cancelled) => {
-                effects.extend(finish_inputs(InputState::Pending));
+                if discard_on_cancel {
+                    self.queue.drain(..prompt.included_inputs);
+                } else {
+                    effects.extend(finish_inputs(InputState::Pending));
+                }
             }
         }
     }

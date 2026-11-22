@@ -202,6 +202,33 @@ fn a_stale_chat_restore_cannot_replace_the_current_sites_history() {
     assert!(app.session.lock().unwrap().history().is_empty());
 }
 
+#[test]
+fn an_unloaded_site_restore_does_not_start_an_orientation_turn() {
+    let (app, _queue_rx) = CompanionApp::new();
+    let configuration = app
+        .ai
+        .configurations
+        .create(
+            "test config",
+            genai::adapter::AdapterKind::OpenAI,
+            "test-model",
+            "http://localhost/",
+            crate::ai::DEFAULT_SYSTEM_TEXT,
+        )
+        .unwrap();
+    app.ai
+        .configurations
+        .set_active(Some(&configuration.id))
+        .unwrap();
+    app.update_lifecycle(false, false, Some("Bridgedmine".to_owned()), Some(41));
+    app.lifecycle_generation.store(3, Ordering::Relaxed);
+
+    app.finish_chat_restore(3, 41, Err("RPC error: Failure".to_owned()));
+
+    assert_eq!(app.pending_user_message_count(), 0);
+    assert_eq!(app.chat_state(), ChatState::Idle);
+}
+
 #[tokio::test]
 async fn notification_history_replays_then_streams_live() {
     let (app, _queue_rx) = CompanionApp::new();
