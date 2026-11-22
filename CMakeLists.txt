@@ -41,7 +41,6 @@ add_custom_target(install-dfhack-script
     COMMAND
         "${CMAKE_COMMAND}"
         "-DDFHACK_INSTALL_DIR=${DFHACK_INSTALL_DIR}"
-        "-DSCRIPT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/scripts"
         "-DLUA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/lua"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/InstallDfhackScript.cmake"
     DEPENDS dfcompanion

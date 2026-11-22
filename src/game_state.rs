@@ -671,6 +671,11 @@ impl GameState {
             .zip(view.view_pos_z)
             .map(|((x, y), z)| json!({"x": x, "y": y, "z": i64::from(z) + z_offset}))
             .unwrap_or(Value::Null);
+        result["view_size"] = view
+            .view_size_x
+            .zip(view.view_size_y)
+            .map(|(x, y)| json!({"x": x, "y": y}))
+            .unwrap_or(Value::Null);
         if result["levels"]
             .as_object()
             .is_some_and(|levels| levels.is_empty())
@@ -719,10 +724,18 @@ impl GameState {
                 |client| client.remote_fortress_reader().get_view_info(),
             )?
             .reply;
-        let center_x = x.or(view.view_pos_x).ok_or_else(|| {
+        let default_center_x = view
+            .view_pos_x
+            .zip(view.view_size_x)
+            .map(|(position, size)| position + size / 2);
+        let default_center_y = view
+            .view_pos_y
+            .zip(view.view_size_y)
+            .map(|(position, size)| position + size / 2);
+        let center_x = x.or(default_center_x).ok_or_else(|| {
             "DFHack did not report an x coordinate for the current view.".to_owned()
         })?;
-        let center_y = y.or(view.view_pos_y).ok_or_else(|| {
+        let center_y = y.or(default_center_y).ok_or_else(|| {
             "DFHack did not report a y coordinate for the current view.".to_owned()
         })?;
         if x.is_some_and(|x| !(0..map_width).contains(&x)) {

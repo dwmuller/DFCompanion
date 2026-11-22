@@ -48,11 +48,19 @@ Build the service and install/update the Lua script in DFHack:
 cmake --build build --config Debug --target install-dfhack-script
 ```
 
-The install target builds DFCompanion and copies `scripts/*.lua` to `${DFHACK_INSTALL_DIR}/hack/scripts` and `lua/**/*.lua` to `${DFHACK_INSTALL_DIR}/hack/lua`, only when the contents differ. The latter holds `rpc.dfcompanion`, the module the service calls through DFHack's `RunLua` RPC (DFHack only permits modules named `rpc.*`). The target fails with a configuration hint if the setting is empty or the expected scripts directory does not exist. A running game caches modules it has already loaded, so after changing a `lua/` file, restart the game or run `lua package.loaded['rpc.dfcompanion']=nil` in the DFHack console.
+The install target builds DFCompanion and copies `lua/plugin/*.lua` to `${DFHACK_INSTALL_DIR}/hack/scripts` and the remaining `lua/**/*.lua` files to `${DFHACK_INSTALL_DIR}/hack/lua`, only when the contents differ. The latter holds `rpc.dfcompanion`, the module the service calls through DFHack's `RunLua` RPC (DFHack only permits modules named `rpc.*`), plus private `dfcompanion.internal.*` domain modules. The target fails with a configuration hint if the setting is empty or the expected scripts directory does not exist. A running game caches modules it has already loaded, so after changing a `lua/` file, restart the game or clear the facade and all its internal modules in the DFHack console:
+
+```lua
+for name in pairs(package.loaded) do
+    if name == 'rpc.dfcompanion' or name:match('^dfcompanion%.internal%.') then
+        package.loaded[name] = nil
+    end
+end
+```
 
 ### Game-state reporting
 
-The service tracks how far the game has loaded—DFHack reachable, world loaded, fortress loaded, and the fortress name—so its AI game tools stay inert until a fortress is ready; this avoids querying fort data while a fortress is loading, which can crash the game. The state is kept current two ways. `scripts/dfcompanion.lua` pushes it to the service on DFHack's world/map load and unload events, and the service also polls DFHack for it (about every 20 seconds), so the state converges even if no push arrives, such as when the service starts while a fortress is already loaded.
+The service tracks how far the game has loaded—DFHack reachable, world loaded, fortress loaded, and the fortress name—so its AI game tools stay inert until a fortress is ready; this avoids querying fort data while a fortress is loading, which can crash the game. The state is kept current two ways. `lua/plugin/dfcompanion.lua` pushes it to the service on DFHack's world/map load and unload events, and the service also polls DFHack for it (about every 20 seconds), so the state converges even if no push arrives, such as when the service starts while a fortress is already loaded.
 
 The push is registered when the script runs, independently of the `enable dfcompanion` event-forwarding toggle. Run `enable dfcompanion` to forward events and report state. Once enabled, a delivery failure retains the failed report and pauses the game without disabling forwarding; restarting the service and unpausing retries that report. To report state without forwarding events, add `dfcompanion status` to a `dfhack-config/init/dfhack*.init` file (it works with no fortress loaded). If the script never runs, the service still learns the state from its own periodic check.
 

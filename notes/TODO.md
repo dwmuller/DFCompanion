@@ -15,17 +15,10 @@ prepare underlying infrastructure.
   string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as
   plain strings. The current `YYYY-MM-DD[:T]` string has variable-width parts.
 - ? Refactor AI tools as an MCP service.
-- Split `lua/rpc/dfcompanion.lua` into smaller cohesive modules as it grows
-  (currently over 2,000 lines, spanning unrelated domains). Keep
-  `rpc.dfcompanion` as the narrow RunLua-facing facade, with wrappers that
-  delegate to internal modules. Suggested organization: shared formatting,
-  coordinate and paging helpers; lifecycle/persistent chat state; creatures and
-  candidate search; labor/work details and work orders; items, stockpiles and
-  production summaries; reports/events; places, geometry and buildings; squads
-  and equipment; strange moods and automation status. Preserve the intentional
-  mutation boundary and avoid circular dependencies. The smaller
-  `scripts/dfcompanion.lua` can remain as the event/lifecycle HTTP bridge for
-  now.
+- Keep the split `rpc.dfcompanion` domain modules cohesive and dependencies
+  acyclic as game tools grow; prefer one domain module over expanding the
+  facade. The event/lifecycle HTTP bridge remains in
+  `lua/plugin/dfcompanion.lua`.
 
 ## AI interaction
 

@@ -182,7 +182,10 @@ fn reload_lua_module() {
         .core()
         .run_command(dfhack_remote::CoreRunCommandRequest {
             command: "lua".to_owned(),
-            arguments: vec!["package.loaded['rpc.dfcompanion']=nil".to_owned()],
+            arguments: vec![
+                "for name in pairs(package.loaded) do if name == 'rpc.dfcompanion' or name:match('^dfcompanion%.internal%.') then package.loaded[name] = nil end end"
+                    .to_owned(),
+            ],
         })
         .expect("Could not remotely reload the DFCompanion Lua module");
 }
@@ -213,12 +216,28 @@ async fn ai_tools_end_to_end() {
     assert!(overview.get("error").is_none(), "{overview}");
     let geometry = call("get_fortress_geometry", serde_json::json!({})).await;
     assert!(geometry.get("error").is_none(), "{geometry}");
-    let z = geometry["view_position"]["z"]
+    let viewport_z = geometry["view_position"]["z"]
         .as_i64()
-        .expect("geometry overview should report the viewed UI z");
+        .expect("geometry overview should report the viewport UI z");
+    let viewport_plan = call(
+        "get_floor_plan",
+        serde_json::json!({"z": viewport_z, "width": 32, "height": 32}),
+    )
+    .await;
+    assert!(
+        viewport_plan["symbol_counts"]["?"].as_u64().unwrap() < 32 * 32,
+        "the default plan should center on the visible viewport, not its top-left: {viewport_plan}"
+    );
+    let pile_page = call("list_stockpiles", serde_json::json!({"limit": 1})).await;
+    let pile = &pile_page["stockpiles"][0];
+    let z = pile["z"]
+        .as_i64()
+        .expect("stockpile should report its UI z");
+    let x = (pile["x1"].as_i64().unwrap() + pile["x2"].as_i64().unwrap()) / 2;
+    let y = (pile["y1"].as_i64().unwrap() + pile["y2"].as_i64().unwrap()) / 2;
     let plan = call(
         "get_floor_plan",
-        serde_json::json!({"z": z, "width": 32, "height": 32}),
+        serde_json::json!({"z": z, "x": x, "y": y, "width": 32, "height": 32}),
     )
     .await;
     assert!(plan.get("error").is_none(), "{plan}");
@@ -229,10 +248,6 @@ async fn ai_tools_end_to_end() {
         "{plan}"
     );
     assert!(plan["places"].is_array(), "{plan}");
-    assert!(
-        plan["symbol_counts"]["?"].as_u64().unwrap() < 32 * 32,
-        "the plan should contain visible tiles around the current view: {plan}"
-    );
     let mut first_id = None;
     let mut first_pet_id = None;
     for tool in [
@@ -769,6 +784,23 @@ async fn ai_tools_end_to_end() {
     assert!(moods["moods"].is_array(), "{moods}");
     let automation = call("get_dfhack_automation", serde_json::json!({})).await;
     assert!(automation["enabled"].is_array(), "{automation}");
+}
+
+#[test]
+#[ignore = "requires a running game"]
+fn internal_lua_modules_are_not_rpc_visible() {
+    let mut client = connect();
+    for module in ["dfcompanion.internal.common", "rpc.dfcompanion.common"] {
+        let result = client.core().run_lua(dfhack_remote::CoreRunLuaRequest {
+            module: module.to_owned(),
+            function: "reply".to_owned(),
+            arguments: vec!["{}".to_owned()],
+        });
+        assert!(
+            result.is_err(),
+            "internal module {module} must not be a valid RunLua target"
+        );
+    }
 }
 
 fn whole_map_request() -> BlockRequest {

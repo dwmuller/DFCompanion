@@ -70,6 +70,15 @@ use both DFHack RemoteFortressReader queries and the companion's `rpc.dfcompanio
 Lua module. The latter is distinct from the event-forwarding
 `dfcompanion` plugin.
 
+The `rpc.dfcompanion` file is a narrow RunLua-facing facade over private
+`dfcompanion.internal.*` modules. Keeping implementation modules outside the
+`rpc.*` namespace prevents DFHack's remote RunLua service from calling them
+directly. Domain code is separated into lifecycle/state persistence, creatures,
+work and orders, reports, items, places/geometry, squads, moods, and automation,
+with shared formatting/coordinate/paging helpers in a leaf module. The facade
+explicitly lists its stable exports, so internal helpers remain internal and
+cross-domain dependencies stay visible.
+
 User-visible diagnostic events use a dedicated tracing layer. `ChatSession`
 emits typed `UserEvent` effects without doing I/O; the application emits those
 through allowlisted `user-*` tracing targets, and the subscriber converts them

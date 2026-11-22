@@ -1,6 +1,29 @@
 --@ enable = true
 --@ module = true
 
+--[====[
+dfcompanion
+===========
+
+Tags: fort | interface
+
+Command: "dfcompanion"
+
+    Connects Dwarf Fortress to the local DFCompanion service.
+
+Forwards announced game reports and lifecycle changes over localhost, while the
+service uses a separate read-only RPC module to inspect fortress state. If event
+delivery fails, DFCompanion pauses the game and retains the failed event for
+retry.
+
+Usage
+-----
+
+    enable dfcompanion
+    disable dfcompanion
+    dfcompanion status
+]====]
+
 local json = require('json')
 local luasocket = require('plugins.luasocket')
 local eventful = require('plugins.eventful')

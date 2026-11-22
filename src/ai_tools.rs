@@ -282,13 +282,13 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_fortress_geometry",
-                "Get a compact fortress geometry overview: map size in tiles, the current viewed position (z matches the game's UI), and place counts by z level for housing, zones, workshops and stockpiles. Use get_floor_plan to inspect the visible layout of one bounded level. This is read-only.",
+                "Get a compact fortress geometry overview: map size in tiles, the top-left position and size of the current in-game viewport (z matches the game's UI), and place counts by z level for housing, zones, workshops and stockpiles. Use get_floor_plan to inspect the visible layout of one bounded level. This is read-only.",
                 json!({}),
                 |game, _: NoArgs| game.geometry_overview(),
             ),
             tool(
                 "get_floor_plan",
-                "Get a bounded, player-visible ASCII plan of one fortress z level. Rows use local x/y coordinates, z matches the game's UI, hidden and unavailable tiles are '?', and the result includes a symbol legend. It also lists visible building and zone footprints intersecting the area. Omit x/y to center on the current view. Keep regions as small as needed: output is limited to 96 by 64 tiles. This is read-only.",
+                "Get a bounded, player-visible ASCII plan of one fortress z level. Rows use local x/y coordinates, z matches the game's UI, hidden and unavailable tiles are '?', and the result includes a symbol legend. It also lists visible building and zone footprints intersecting the area. Omit x/y to center on the middle of the current viewport. Keep regions as small as needed: output is limited to 96 by 64 tiles. This is read-only.",
                 json!({
                     "z": {
                         "type": "integer",

@@ -39,8 +39,15 @@ What feature or bug we're actively working on.
   force complete DFHack block snapshots rather than depending on incremental
   RemoteFortressReader change tracking. The loaded-fortress end-to-end tool test
   passes.
+- The DFCompanion Lua RPC implementation has been split from one 2,000-line
+  file into a narrow `rpc.dfcompanion` facade and cohesive
+  `dfcompanion.internal.*` modules for common helpers, lifecycle/persistence,
+  creatures, work/orders, reports, items, places/geometry, squads, moods, and
+  automation. Internal modules sit outside DFHack's remotely callable `rpc.*`
+  namespace. The facade preserves the original exported function contract, and
+  the full live-game AI tool acceptance test passes with the split modules.
 - Implemented across `src/game_state.rs`, `src/app.rs`, `src/ai_tools.rs`,
-  `src/web.rs`, `src/main.rs`, `scripts/dfcompanion.lua`, and
+  `src/web.rs`, `src/main.rs`, `lua/plugin/dfcompanion.lua`, and
   `lua/rpc/dfcompanion.lua`; the unit suite passes and clippy is clean.
 - Removed the unused gRPC server and its build support. The `Companion`
   service in `proto/companion.proto` was never called by any client (the Lua
@@ -62,7 +69,13 @@ Immediate next 1 to 3 tasks to work on.
   compact representation if the model misreads directions, levels, or place
   relationships. Revisit third-party MCP only if it provides materially better
   geometry behind the same filtering contract.
+- Interactively verify the DFCompanion outage popup with the service stopped:
+  after enabling the script and then triggering or submitting an event,
+  confirm the popup can be dismissed and the game can be unpaused, disabled, or
+  saved normally. A `dfhack-run`-initiated enable probe exposed a popup that
+  could not be dismissed and required terminating the game.
 
 ## Known Issues / Blockers
 
-- None.
+- The service-outage popup needs the interactive acceptance check above before
+  this behavior can be considered safe for normal use.
