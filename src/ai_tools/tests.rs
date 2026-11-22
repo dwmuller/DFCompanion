@@ -91,6 +91,12 @@ async fn bad_arguments_are_rejected_before_touching_the_game() {
         ("get_floor_plan", json!({})),
         ("get_floor_plan", json!({"z": 0, "width": 97})),
         ("get_floor_plan", json!({"z": 0, "height": 0})),
+        ("inspect_tile", json!({"x": 1, "y": 1})),
+        ("inspect_tile", json!({"x": -1, "y": 1, "z": 1})),
+        (
+            "inspect_tile",
+            json!({"x": 1, "y": 1, "z": 1, "unknown": true}),
+        ),
         ("find_candidates", json!({"limit": 26})),
         ("find_candidates", json!({"skill_class": "combat"})),
         ("find_candidates", json!({"unknown": true})),
@@ -159,6 +165,9 @@ fn tool_descriptions_list_arguments() {
     let text = describe_tool("get_floor_plan").unwrap();
     assert!(text.contains("z (integer, required)"));
     assert!(text.contains("hidden and unavailable tiles are '?'"));
+    let text = describe_tool("inspect_tile").unwrap();
+    assert!(text.contains("x (integer, required)"));
+    assert!(text.contains("Hidden tiles return only a redaction note"));
     assert!(describe_tool("nope").is_err());
 }
 

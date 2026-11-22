@@ -90,6 +90,14 @@ struct FloorPlanArgs {
     height: Option<i32>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InspectTileArgs {
+    x: i32,
+    y: i32,
+    z: i64,
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct ListCreaturesArgs {
@@ -320,6 +328,30 @@ fn registry() -> &'static [ToolSpec] {
                 },
             )
             .required(&["z"]),
+            tool(
+                "inspect_tile",
+                "Inspect one player-visible map tile by x, y and UI z coordinates. Returns terrain shape/material and sky exposure; the building covering the tile; object-specific door, hatch, bridge, grate, bars, or floodgate state; intersecting zones; visible creatures; and non-carried items. Hidden tiles return only a redaction note and do not disclose terrain or contents. This is read-only.",
+                json!({
+                    "x": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000,
+                        "description": "Local map x coordinate."
+                    },
+                    "y": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000,
+                        "description": "Local map y coordinate."
+                    },
+                    "z": {
+                        "type": "integer",
+                        "description": "UI z level shown by the game."
+                    }
+                }),
+                |game, args: InspectTileArgs| game.inspect_tile(args.x, args.y, args.z),
+            )
+            .required(&["x", "y", "z"]),
             list_tool(
                 "list_residents",
                 "List the fortress's residents, like the Residents tab of the game's Creatures screen: citizens and other long-term residents with name, profession, status (what they are doing right now: current job, else an activity such as prayer or play, else \"idle\"), job, activity, sleeping and idle flags (present only when true for sleeping/idle), mood, squad, noble positions, age, and position. The result includes idle_count, the number of idle residents among those matching. Use a unit ID with get_unit_details. Request another page with the returned next_offset when needed. Only creatures the player knows of are included. This is read-only.",

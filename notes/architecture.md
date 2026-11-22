@@ -79,6 +79,13 @@ with shared formatting/coordinate/paging helpers in a leaf module. The facade
 explicitly lists its stable exports, so internal helpers remain internal and
 cross-domain dependencies stay visible.
 
+Single-tile inspection is implemented as an internal read-only module exposed
+through the facade. It checks visibility before reading or serializing terrain
+or occupants; hidden tiles disclose only their requested coordinates and a
+redaction note. Visible results are bounded and include terrain, building,
+zone, creature, and non-carried item information, with object-specific
+door/hatch/bridge state.
+
 User-visible diagnostic events use a dedicated tracing layer. `ChatSession`
 emits typed `UserEvent` effects without doing I/O; the application emits those
 through allowlisted `user-*` tracing targets, and the subscriber converts them

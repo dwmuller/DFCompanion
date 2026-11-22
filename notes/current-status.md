@@ -46,6 +46,10 @@ What feature or bug we're actively working on.
   automation. Internal modules sit outside DFHack's remotely callable `rpc.*`
   namespace. The facade preserves the original exported function contract, and
   the full live-game AI tool acceptance test passes with the split modules.
+- `inspect_tile(x, y, z)` is available for bounded, player-visible single-tile
+  inspection. It reports terrain and sky-exposure flags, intersecting buildings
+  and zones, visible creatures, non-carried items, and door/hatch/bridge state.
+  Hidden tiles are redacted before any terrain or occupant data is collected.
 - Implemented across `src/game_state.rs`, `src/app.rs`, `src/ai_tools.rs`,
   `src/web.rs`, `src/main.rs`, `lua/plugin/dfcompanion.lua`, and
   `lua/rpc/dfcompanion.lua`; the unit suite passes and clippy is clean.

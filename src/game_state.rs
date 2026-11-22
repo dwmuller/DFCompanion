@@ -822,6 +822,19 @@ impl GameState {
         Ok(result)
     }
 
+    /// Describes the player-visible terrain and objects at one UI-coordinate
+    /// tile. Hidden tiles return only the requested position and a redaction note.
+    pub fn inspect_tile(&self, x: i32, y: i32, z: i64) -> Result<Value, String> {
+        if x < 0 || y < 0 {
+            return Err("x and y must be non-negative map coordinates.".to_owned());
+        }
+        self.call_lua_json(
+            "inspect tile",
+            "inspect_tile",
+            vec![x.to_string(), y.to_string(), z.to_string()],
+        )
+    }
+
     /// Returns information about up to `MAX_DETAIL_UNITS` creatures the player
     /// knows of: everything the lists show plus the requested `include` parts.
     /// Creatures the player does not know of are listed in `not_found`.

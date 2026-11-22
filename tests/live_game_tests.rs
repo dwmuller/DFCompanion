@@ -228,6 +228,28 @@ async fn ai_tools_end_to_end() {
         viewport_plan["symbol_counts"]["?"].as_u64().unwrap() < 32 * 32,
         "the default plan should center on the visible viewport, not its top-left: {viewport_plan}"
     );
+    let visible_door = call(
+        "inspect_tile",
+        serde_json::json!({"x": 129, "y": 34, "z": -99}),
+    )
+    .await;
+    assert_eq!(visible_door["hidden"], false, "{visible_door}");
+    assert_eq!(
+        visible_door["buildings"][0]["type"], "door",
+        "{visible_door}"
+    );
+    assert!(
+        visible_door["buildings"][0]["state"]["closed"].is_boolean(),
+        "{visible_door}"
+    );
+    let hidden_tile = call(
+        "inspect_tile",
+        serde_json::json!({"x": 0, "y": 0, "z": -99}),
+    )
+    .await;
+    assert_eq!(hidden_tile["hidden"], true, "{hidden_tile}");
+    assert!(hidden_tile.get("tile").is_none(), "{hidden_tile}");
+    assert!(hidden_tile.get("buildings").is_none(), "{hidden_tile}");
     let pile_page = call("list_stockpiles", serde_json::json!({"limit": 1})).await;
     let pile = &pile_page["stockpiles"][0];
     let z = pile["z"]

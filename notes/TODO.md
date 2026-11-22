@@ -62,13 +62,6 @@ fortress-management questions.
   items. Results should identify holder/container, exact position, material,
   quality, wear, forbidden/reserved state and, where relevant, squad
   assignment.
-- Add a coordinate-addressed tile inspection tool (for example
-  `inspect_tile(x, y, z)`) that reports the player-visible tile type plus
-  intersecting buildings/zones, items and creatures, with object-specific
-  state. Start with door/hatch and bridge state such as closed, forbidden,
-  mechanism-operated, raised/raising/lowering. This is a useful compact
-  follow-up to `get_floor_plan` and should avoid a separate bespoke tool for
-  every kind of map object.
 - Improve report/event fidelity: preserve unknown types instead of mapping them
   to unrelated categories, add structured departure events for fortress
   members, and support unit/position-based report queries without relying only
@@ -94,6 +87,8 @@ fortress-management questions.
 - Distinguish natural floor, constructed floor, and objective sky exposure in
   floor plans; include sky exposure for creatures when available. Avoid
   treating "inside the fortress" as an objective state for disconnected sites.
+- Extend `inspect_tile` with additional construction/object details not covered
+  by the first implementation.
 - Allow creature lists to be filtered by z/area/zone and, where supported,
   sky-exposed status. This is especially useful for locating residents or
   livestock near an entrance.

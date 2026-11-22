@@ -12,6 +12,7 @@ local modules = {
     squads = require('dfcompanion.internal.squads'),
     moods = require('dfcompanion.internal.moods'),
     automation = require('dfcompanion.internal.automation'),
+    tile = require('dfcompanion.internal.tile'),
 }
 
 local exports = {
@@ -44,6 +45,7 @@ local exports = {
     list_squads = modules.squads,
     strange_moods = modules.moods,
     dfhack_automation = modules.automation,
+    inspect_tile = modules.tile,
 }
 
 for name, module in pairs(exports) do
