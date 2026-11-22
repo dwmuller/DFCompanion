@@ -28,6 +28,13 @@ What feature or bug we're actively working on.
   itself is never paused. This fixes a crash where querying fort data during a
   fortress load could crash the game. The lifecycle flags themselves are safe to
   read at any screen, so the poller carries no such risk.
+- Fort geometry is available through `get_fortress_geometry` and
+  `get_floor_plan`. The overview reports per-level counts for known housing,
+  zones, workshops, and stockpiles. Floor plans are bounded ASCII maps that
+  replace hidden tiles with `?`, include nearby visible place footprints, and
+  force complete DFHack block snapshots rather than depending on incremental
+  RemoteFortressReader change tracking. The loaded-fortress end-to-end tool test
+  passes.
 - Implemented across `src/game_state.rs`, `src/app.rs`, `src/ai_tools.rs`,
   `src/web.rs`, `src/main.rs`, `scripts/dfcompanion.lua`, and
   `lua/rpc/dfcompanion.lua`; the unit suite passes and clippy is clean.
@@ -47,6 +54,10 @@ Immediate next 1 to 3 tasks to work on.
   user turn, save and reload, verify restored context and dates, repeat after a
   rollback, and switch between two fortress saves. Then review the trace output
   for save overhead.
+- Exercise geometry questions with one or more AI providers and refine the
+  compact representation if the model misreads directions, levels, or place
+  relationships. Revisit third-party MCP only if it provides materially better
+  geometry behind the same filtering contract.
 
 ## Known Issues / Blockers
 

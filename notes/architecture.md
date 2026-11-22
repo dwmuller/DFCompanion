@@ -70,6 +70,22 @@ use both DFHack RemoteFortressReader queries and the companion's `rpc.dfcompanio
 Lua module. The latter is distinct from the event-forwarding
 `dfcompanion` plugin.
 
+Geometry is exposed as bounded, read-only observations rather than raw map
+dumps. A geometry overview summarizes the existing player-visible place
+inventory by UI z level. Floor plans request a limited rectangle from DFHack's
+RemoteFortressReader, replace hidden tiles before classification, render a
+compact ASCII plan, and attach intersecting place footprints from
+`rpc.dfcompanion`. DFHack's block cache is explicitly bypassed for each plan so
+unchanged blocks return complete tile and designation arrays. Map sizes, plan
+dimensions, place counts, and reply bytes are capped before results reach an AI
+provider.
+
+Fortress geometry currently comes directly from DFHack rather than a third-party
+MCP server. A future MCP source must sit behind the same visibility, schema,
+coordinate, timeout, output, and locality controls; discovered MCP tools are not
+forwarded directly to the model. Optional MCP availability must not replace
+the Companion's own lifecycle gate.
+
 The current lifecycle state is maintained by pushes from the DFHack plugin and
 by a 20-second polling fallback. Both paths enter through the worker. Lifecycle
 snapshots carry the stable site ID as well as the name and loaded flags. States

@@ -12,7 +12,7 @@
 //! Creatures screen. Queries fail rather than fall back to the unfiltered unit
 //! list when that module is unavailable.
 
-use dfhack_remote::{Client, CoreRunLuaRequest};
+use dfhack_remote::{BlockRequest, Client, CoreRunLuaRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -21,6 +21,9 @@ use std::{
 };
 use tokio::sync::watch;
 
+use crate::geometry::{
+    self, block_bounds, validate_plan_size, Bounds, DEFAULT_PLAN_HEIGHT, DEFAULT_PLAN_WIDTH,
+};
 use crate::notifications::{DisplayMessage, DisplayMessageKind, Notifier};
 
 const TESTED_DWARF_FORTRESS_VERSION: &str = "53.16";
@@ -35,6 +38,7 @@ pub const MAX_CANDIDATES: usize = 25;
 const MAX_WORK_DETAIL_OFFSET: usize = 5_000;
 const MAX_WORK_ORDER_OFFSET: usize = 5_000;
 const MAX_CHAT_STATE_BYTES: usize = 1024 * 1024;
+const MAX_GEOMETRY_REPLY_BYTES: usize = 24 * 1024;
 
 /// Filters for `find_candidates`; all are optional and combined with AND.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -633,6 +637,176 @@ impl GameState {
             "known_creature_counts": counts,
             "pets_and_livestock_by_race": count_by_race(creatures.rows(CreatureGroup::PetsAndLivestock)),
         }))
+    }
+
+    /// Summarizes where the fortress's known places are distributed by UI z
+    /// level, without returning a raw tile map.
+    pub fn geometry_overview(&self) -> Result<Value, String> {
+        let mut result = self.call_lua_json(
+            "summarize fortress geometry",
+            "geometry_overview",
+            Vec::new(),
+        )?;
+        let map = self
+            .with_client("Could not retrieve map dimensions for geometry", |client| {
+                client.remote_fortress_reader().get_map_info()
+            })?
+            .reply;
+        let view = self
+            .with_client(
+                "Could not retrieve the current view for geometry",
+                |client| client.remote_fortress_reader().get_view_info(),
+            )?
+            .reply;
+        let z_offset = self.z_offset()?;
+        result["map_size_in_tiles"] = map
+            .block_size_x
+            .zip(map.block_size_y)
+            .zip(map.block_size_z)
+            .map(|((x, y), z)| json!({"x": x * 16, "y": y * 16, "z": z}))
+            .unwrap_or(Value::Null);
+        result["view_position"] = view
+            .view_pos_x
+            .zip(view.view_pos_y)
+            .zip(view.view_pos_z)
+            .map(|((x, y), z)| json!({"x": x, "y": y, "z": i64::from(z) + z_offset}))
+            .unwrap_or(Value::Null);
+        if result["levels"]
+            .as_object()
+            .is_some_and(|levels| levels.is_empty())
+        {
+            result["levels"] = json!([]);
+        }
+        Ok(result)
+    }
+
+    /// Returns a bounded player-visible ASCII floor plan and nearby places.
+    /// Coordinates and z levels in the result use the game's UI coordinate
+    /// convention; omitted x/y centers the plan on the current game view.
+    pub fn floor_plan(
+        &self,
+        z: i64,
+        x: Option<i32>,
+        y: Option<i32>,
+        width: Option<i32>,
+        height: Option<i32>,
+    ) -> Result<Value, String> {
+        let width = width.unwrap_or(DEFAULT_PLAN_WIDTH);
+        let height = height.unwrap_or(DEFAULT_PLAN_HEIGHT);
+        validate_plan_size(width, height)?;
+
+        let map = self
+            .with_client("Could not retrieve map dimensions for geometry", |client| {
+                client.remote_fortress_reader().get_map_info()
+            })?
+            .reply;
+        let map_width = map
+            .block_size_x
+            .ok_or_else(|| "DFHack did not report the map width.".to_owned())?
+            .checked_mul(16)
+            .ok_or_else(|| "The map width is too large.".to_owned())?;
+        let map_height = map
+            .block_size_y
+            .ok_or_else(|| "DFHack did not report the map height.".to_owned())?
+            .checked_mul(16)
+            .ok_or_else(|| "The map height is too large.".to_owned())?;
+        let map_z = map
+            .block_size_z
+            .ok_or_else(|| "DFHack did not report the map depth.".to_owned())?;
+        let view = self
+            .with_client(
+                "Could not retrieve the current view for geometry",
+                |client| client.remote_fortress_reader().get_view_info(),
+            )?
+            .reply;
+        let center_x = x.or(view.view_pos_x).ok_or_else(|| {
+            "DFHack did not report an x coordinate for the current view.".to_owned()
+        })?;
+        let center_y = y.or(view.view_pos_y).ok_or_else(|| {
+            "DFHack did not report a y coordinate for the current view.".to_owned()
+        })?;
+        if x.is_some_and(|x| !(0..map_width).contains(&x)) {
+            return Err(format!(
+                "x must be between 0 and {} for this map.",
+                map_width - 1
+            ));
+        }
+        if y.is_some_and(|y| !(0..map_height).contains(&y)) {
+            return Err(format!(
+                "y must be between 0 and {} for this map.",
+                map_height - 1
+            ));
+        }
+
+        let z_offset = self.z_offset()?;
+        let internal_z = z
+            .checked_sub(z_offset)
+            .ok_or_else(|| "The z coordinate is outside the supported range.".to_owned())?;
+        let internal_z = i32::try_from(internal_z)
+            .map_err(|_| "The z coordinate is outside the supported range.".to_owned())?;
+        if !(0..map_z).contains(&internal_z) {
+            return Err(format!(
+                "z must be between {z_offset} and {} for this map.",
+                i64::from(map_z - 1) + z_offset
+            ));
+        }
+
+        let requested = Bounds::from_center(center_x, center_y, width, height);
+        let bounds = requested.clamp(map_width, map_height);
+        let (min_block_x, min_block_y, max_block_x, max_block_y) = block_bounds(bounds);
+        let blocks_needed = (max_block_x - min_block_x) * (max_block_y - min_block_y);
+        let blocks = self
+            .with_client("Could not retrieve fortress map blocks", |client| {
+                client
+                    .remote_fortress_reader()
+                    .get_block_list(BlockRequest {
+                        blocks_needed: Some(blocks_needed),
+                        min_x: Some(min_block_x),
+                        max_x: Some(max_block_x),
+                        min_y: Some(min_block_y),
+                        max_y: Some(max_block_y),
+                        min_z: Some(internal_z),
+                        max_z: Some(internal_z + 1),
+                        force_reload: Some(true),
+                    })
+            })?
+            .reply;
+        let tiletypes = self
+            .with_client("Could not retrieve fortress tile types", |client| {
+                client.remote_fortress_reader().get_tiletype_list()
+            })?
+            .reply
+            .tiletype_list;
+        let mut result = geometry::floor_plan(&blocks, &tiletypes, bounds, z)?;
+
+        let mut places = self.call_lua_json(
+            "list places in the geometry area",
+            "geometry_places",
+            vec![
+                bounds.x1.to_string(),
+                bounds.y1.to_string(),
+                bounds.x2.to_string(),
+                bounds.y2.to_string(),
+                z.to_string(),
+            ],
+        )?;
+        if places["places"]
+            .as_object()
+            .is_some_and(|map| map.is_empty())
+        {
+            places["places"] = json!([]);
+        }
+        result["places"] = places["places"].take();
+        result["more_places"] = places["more_places"].take();
+        result["centered_at"] = json!({"x": center_x, "y": center_y});
+        result["clipped_to_map"] = json!(bounds != requested);
+        let encoded_bytes = result.to_string().len();
+        if encoded_bytes > MAX_GEOMETRY_REPLY_BYTES {
+            return Err(format!(
+                "The floor plan reply exceeded the {MAX_GEOMETRY_REPLY_BYTES}-byte limit. Request a smaller area."
+            ));
+        }
+        Ok(result)
     }
 
     /// Returns information about up to `MAX_DETAIL_UNITS` creatures the player

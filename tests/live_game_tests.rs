@@ -211,6 +211,28 @@ async fn ai_tools_end_to_end() {
     };
     let overview = call("get_fortress_overview", serde_json::json!({})).await;
     assert!(overview.get("error").is_none(), "{overview}");
+    let geometry = call("get_fortress_geometry", serde_json::json!({})).await;
+    assert!(geometry.get("error").is_none(), "{geometry}");
+    let z = geometry["view_position"]["z"]
+        .as_i64()
+        .expect("geometry overview should report the viewed UI z");
+    let plan = call(
+        "get_floor_plan",
+        serde_json::json!({"z": z, "width": 32, "height": 32}),
+    )
+    .await;
+    assert!(plan.get("error").is_none(), "{plan}");
+    assert_eq!(plan["rows"].as_array().unwrap().len(), 32, "{plan}");
+    assert_eq!(
+        plan["rows"][0].as_str().unwrap().chars().count(),
+        32,
+        "{plan}"
+    );
+    assert!(plan["places"].is_array(), "{plan}");
+    assert!(
+        plan["symbol_counts"]["?"].as_u64().unwrap() < 32 * 32,
+        "the plan should contain visible tiles around the current view: {plan}"
+    );
     let mut first_id = None;
     let mut first_pet_id = None;
     for tool in [

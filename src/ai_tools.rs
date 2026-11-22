@@ -15,6 +15,7 @@ use crate::game_state::{
     CandidateQuery, CreatureGroup, GameState, MAX_CREATURE_PAGE_SIZE, MAX_ITEM_PAGE_SIZE,
     MAX_REPORTS,
 };
+use crate::geometry::{DEFAULT_PLAN_HEIGHT, DEFAULT_PLAN_WIDTH, MAX_PLAN_HEIGHT, MAX_PLAN_WIDTH};
 
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 20;
 
@@ -78,6 +79,16 @@ impl ToolSpec {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoArgs {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FloorPlanArgs {
+    z: i64,
+    x: Option<i32>,
+    y: Option<i32>,
+    width: Option<i32>,
+    height: Option<i32>,
+}
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -269,6 +280,46 @@ fn registry() -> &'static [ToolSpec] {
                 json!({}),
                 |game, _: NoArgs| game.fortress_overview(),
             ),
+            tool(
+                "get_fortress_geometry",
+                "Get a compact fortress geometry overview: map size in tiles, the current viewed position (z matches the game's UI), and place counts by z level for housing, zones, workshops and stockpiles. Use get_floor_plan to inspect the visible layout of one bounded level. This is read-only.",
+                json!({}),
+                |game, _: NoArgs| game.geometry_overview(),
+            ),
+            tool(
+                "get_floor_plan",
+                "Get a bounded, player-visible ASCII plan of one fortress z level. Rows use local x/y coordinates, z matches the game's UI, hidden and unavailable tiles are '?', and the result includes a symbol legend. It also lists visible building and zone footprints intersecting the area. Omit x/y to center on the current view. Keep regions as small as needed: output is limited to 96 by 64 tiles. This is read-only.",
+                json!({
+                    "z": {
+                        "type": "integer",
+                        "description": "UI z level to inspect."
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "Approximate centre tile x. Defaults to the current view."
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Approximate centre tile y. Defaults to the current view."
+                    },
+                    "width": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PLAN_WIDTH,
+                        "description": format!("Plan width in tiles. Defaults to {DEFAULT_PLAN_WIDTH}.")
+                    },
+                    "height": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PLAN_HEIGHT,
+                        "description": format!("Plan height in tiles. Defaults to {DEFAULT_PLAN_HEIGHT}.")
+                    }
+                }),
+                |game, args: FloorPlanArgs| {
+                    game.floor_plan(args.z, args.x, args.y, args.width, args.height)
+                },
+            )
+            .required(&["z"]),
             list_tool(
                 "list_residents",
                 "List the fortress's residents, like the Residents tab of the game's Creatures screen: citizens and other long-term residents with name, profession, status (what they are doing right now: current job, else an activity such as prayer or play, else \"idle\"), job, activity, sleeping and idle flags (present only when true for sleeping/idle), mood, squad, noble positions, age, and position. The result includes idle_count, the number of idle residents among those matching. Use a unit ID with get_unit_details. Request another page with the returned next_offset when needed. Only creatures the player knows of are included. This is read-only.",

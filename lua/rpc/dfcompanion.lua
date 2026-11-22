@@ -1763,6 +1763,107 @@ function building_counts()
         notes = 'Workshops and furnaces are in list_workshops; zones in list_zones and list_locations.'})
 end
 
+local MAX_GEOMETRY_PLACES = 50
+
+-- Compact per-level counts assembled from the same player-visible place
+-- inventory used by the housing, zone, workshop and stockpile tools.
+function geometry_overview()
+    local data = collect_places()
+    local levels = {}
+    local function level_of(z)
+        local level = levels[z]
+        if not level then
+            level = {
+                z = z,
+                zones = 0,
+                zone_tiles = 0,
+                workshops = 0,
+                stockpiles = 0,
+                stockpile_tiles = 0,
+            }
+            levels[z] = level
+        end
+        return level
+    end
+    for _, floor in ipairs(data.housing.by_floor) do
+        local level = level_of(floor.z)
+        level.beds = floor.beds
+        level.free_beds = floor.free_beds
+        level.bedroom_zones = floor.bedroom_zones
+    end
+    for _, zone in ipairs(data.zones) do
+        local level = level_of(zone.position.z)
+        level.zones = level.zones + 1
+        level.zone_tiles = level.zone_tiles + zone.area
+    end
+    for _, workshop in ipairs(data.workshops) do
+        level_of(workshop.position.z).workshops = level_of(workshop.position.z).workshops + 1
+    end
+    for _, pile in ipairs(df.global.world.buildings.other.STOCKPILE) do
+        local level = level_of(ui_z(pile.z))
+        level.stockpiles = level.stockpiles + 1
+        level.stockpile_tiles = level.stockpile_tiles + zone_area(pile)
+    end
+    local rows = {}
+    for _, level in pairs(levels) do table.insert(rows, level) end
+    table.sort(rows, function(a, b) return a.z > b.z end)
+    return reply({
+        population = data.population,
+        levels = rows,
+        notes = 'Counts cover zones, workshops, stockpiles and housing places already visible through the companion tools. '
+            .. 'Use get_floor_plan on an individual z level for bounded visible tile geometry.',
+    })
+end
+
+local function place_category(building)
+    local kind = building:getType()
+    if kind == df.building_type.Civzone then
+        return 'zone', words(df.civzone_type[building.type] or 'unknown')
+    elseif kind == df.building_type.Stockpile then
+        return 'stockpile', 'stockpile'
+    elseif kind == df.building_type.Workshop or kind == df.building_type.Furnace then
+        return 'workshop', 'workshop'
+    end
+    return 'building', words(df.building_type[kind] or 'unknown')
+end
+
+-- Player-visible buildings and zones that intersect a bounded area on one
+-- UI z level. The compact fixed cap protects the AI turn from dense workshop
+-- floors while reporting how many additional rows were omitted.
+function geometry_places(min_x, min_y, max_x, max_y, z)
+    min_x, min_y, max_x, max_y, z = tonumber(min_x), tonumber(min_y), tonumber(max_x),
+        tonumber(max_y), tonumber(z)
+    if not min_x or not min_y or not max_x or not max_y or not z then
+        return reply({error = 'Geometry bounds and z must be numbers.'})
+    end
+    local rows = {}
+    for _, building in ipairs(df.global.world.buildings.all) do
+        if ui_z(building.z) == z and building.x2 >= min_x and building.x1 <= max_x
+                and building.y2 >= min_y and building.y1 <= max_y then
+            local category, kind = place_category(building)
+            table.insert(rows, {
+                id = building.id,
+                category = category,
+                type = kind,
+                name = text(dfhack.buildings.getName(building)),
+                finished = is_finished(building),
+                bounds = {
+                    x1 = building.x1, y1 = building.y1,
+                    x2 = building.x2, y2 = building.y2, z = z,
+                },
+            })
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.category ~= b.category then return a.category < b.category end
+        if a.type ~= b.type then return a.type < b.type end
+        return a.id < b.id
+    end)
+    local more = math.max(0, #rows - MAX_GEOMETRY_PLACES)
+    while #rows > MAX_GEOMETRY_PLACES do table.remove(rows) end
+    return reply({places = rows, more_places = more})
+end
+
 local MAX_STOCKPILE_CONTENT_GROUPS = 5
 
 -- Stockpiles: where they are, what they accept, and how full they are, with

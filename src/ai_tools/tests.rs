@@ -88,6 +88,9 @@ async fn bad_arguments_are_rejected_before_touching_the_game() {
         ("list_work_orders", json!({"limit": 0})),
         ("list_work_orders", json!({"search": 1})),
         ("list_work_orders", json!({"unrecognized": true})),
+        ("get_floor_plan", json!({})),
+        ("get_floor_plan", json!({"z": 0, "width": 97})),
+        ("get_floor_plan", json!({"z": 0, "height": 0})),
         ("find_candidates", json!({"limit": 26})),
         ("find_candidates", json!({"skill_class": "combat"})),
         ("find_candidates", json!({"unknown": true})),
@@ -117,6 +120,8 @@ fn tool_descriptions_list_arguments() {
     );
     assert!(list.contains("list_residents([offset], [limit], [search])"));
     assert!(list.contains("get_fortress_overview()"));
+    assert!(list.contains("get_fortress_geometry()"));
+    assert!(list.contains("get_floor_plan(z, [x], [y], [width], [height])"));
     assert!(list.contains("list_work_details"));
     assert!(list.contains("list_work_orders"));
 
@@ -151,6 +156,9 @@ fn tool_descriptions_list_arguments() {
     assert!(describe_tool("get_fortress_overview")
         .unwrap()
         .contains("Arguments: none"));
+    let text = describe_tool("get_floor_plan").unwrap();
+    assert!(text.contains("z (integer, required)"));
+    assert!(text.contains("hidden and unavailable tiles are '?'"));
     assert!(describe_tool("nope").is_err());
 }
 

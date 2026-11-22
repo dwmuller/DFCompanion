@@ -9,5 +9,6 @@ pub mod chat_session;
 pub mod diagnostics;
 pub mod events;
 pub mod game_state;
+mod geometry;
 pub mod notifications;
 pub mod web;
