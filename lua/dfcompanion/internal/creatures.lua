@@ -14,6 +14,8 @@ local enum_key = common.enum_key
 local format_date = common.format_date
 local inventory_item_type = common.inventory_item_type
 local inventory_item_wear = common.inventory_item_wear
+local labor_name = common.labor_name
+local automation = require('dfcompanion.internal.automation')
 
 local function base_row(unit)
     return {
@@ -241,11 +243,7 @@ local function work_detail_labors(detail)
     local labors = {}
     for id = math.max(0, df.unit_labor._first_item), df.unit_labor._last_item do
         if detail.allowed_labors[id] then
-            local attr = df.unit_labor.attrs[id]
-            local name = attr and attr.caption or df.unit_labor[id] or tostring(id)
-            name = name:gsub('(%l)(%u)', '%1_%2')
-                :gsub('[^%w]+', '_'):gsub('^_+', ''):gsub('_+$', ''):lower()
-            table.insert(labors, name)
+            table.insert(labors, labor_name(id))
         end
     end
     table.sort(labors)
@@ -268,7 +266,43 @@ local function is_specialized(unit)
     return unit.flags4.only_do_assigned_jobs
 end
 
-local function unit_work(unit)
+local function work_detail_membership(detail, unit)
+    local explicit_member = false
+    for _, assigned_id in ipairs(detail.assigned_units) do
+        if assigned_id == unit.id then
+            explicit_member = true
+            break
+        end
+    end
+    local assignment_mode = WORK_DETAIL_MODES[detail.flags.mode] or 'unknown'
+    return explicit_member, assignment_mode == 'everybody'
+        or (assignment_mode ~= 'nobody' and explicit_member)
+end
+
+local function enabled_labors(unit, work_details)
+    local result = {}
+    for id = math.max(0, df.unit_labor._first_item), df.unit_labor._last_item do
+        if unit.status.labors[id] then
+            local name = labor_name(id)
+            local details = {}
+            for index, detail in ipairs(work_details) do
+                if detail.allowed_labors[id] then
+                    local explicit_member, applies = work_detail_membership(detail, unit)
+                    local row = work_detail_summary(detail, index)
+                    row.explicit_member = explicit_member
+                    row.applies_to_unit = applies
+                    table.insert(details, row)
+                end
+            end
+            table.sort(details, function(a, b) return a.index < b.index end)
+            table.insert(result, {name = name, details = details})
+        end
+    end
+    table.sort(result, function(a, b) return a.name < b.name end)
+    return result
+end
+
+local function unit_work(unit, active_automation, automation_error)
     if U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
         return {applicable = false, work_details = {}}
     end
@@ -279,14 +313,8 @@ local function unit_work(unit)
     local rows = {}
     for index, detail in ipairs(work_details) do
         local row = work_detail_summary(detail, index)
-        local explicit_member = false
-        for _, assigned_id in ipairs(detail.assigned_units) do
-            if assigned_id == unit.id then
-                explicit_member = true
-                break
-            end
-        end
-        if explicit_member or row.assignment_mode == 'everybody' then
+        local explicit_member, applies = work_detail_membership(detail, unit)
+        if applies then
             row.explicit_member = explicit_member
             table.insert(rows, row)
         end
@@ -300,6 +328,11 @@ local function unit_work(unit)
         applicable = true,
         specialized = is_specialized(unit),
         work_details = rows,
+        enabled_labor_count = 0,
+        enabled_labors = enabled_labors(unit, work_details),
+        active_automation = active_automation,
+        automation_error = automation_error,
+        notes = 'enabled_labors reflects current native unit toggles. Work-detail detail rows explain which policies cover each labor; exact toggle provenance is not stored by Dwarf Fortress. active_automation is contextual and does not prove which system last changed a toggle.',
     }
 end
 
@@ -353,7 +386,7 @@ end
 -- Adds the detail parts the caller asked for (options.parts is a set of
 -- skills, attributes, health, mind, inventory, and work). Skills can be
 -- limited to one class and a minimum level.
-local function add_details(row, unit, options)
+local function add_details(row, unit, options, active_automation, automation_error)
     local parts = options.parts
     if parts.skills then
         local skills = {}
@@ -378,7 +411,10 @@ local function add_details(row, unit, options)
         row.inventory = inventory_of(unit)
     end
     if parts.work then
-        row.work = unit_work(unit)
+        row.work = unit_work(unit, active_automation, automation_error)
+        if row.work.applicable then
+            row.work.enabled_labor_count = #row.work.enabled_labors
+        end
     end
     row.carried_item_count = #unit.inventory
     local rider = unit.relationship_ids[df.unit_relationship_type.RiderMount]
@@ -399,6 +435,10 @@ local function known_creatures_data(options)
         active[unit.id] = true
     end
     local result = {residents = {}, pets = {}, other = {}, dead = {}}
+    local active_automation, automation_error
+    if detail_ids and next(detail_ids) and options.parts and options.parts.work then
+        active_automation, automation_error = automation.active_automation()
+    end
     for _, unit in ipairs(df.global.world.units.all) do
         local group, row
         if U.isDead(unit) then
@@ -418,7 +458,7 @@ local function known_creatures_data(options)
         end
         if row then
             if detail_ids[unit.id] then
-                add_details(row, unit, options)
+                add_details(row, unit, options, active_automation or {}, automation_error)
             end
             table.insert(group, row)
         end

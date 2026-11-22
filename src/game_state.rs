@@ -189,6 +189,15 @@ fn restore_empty_lists(details: &mut Value) {
             }
         }
     }
+    if let Some(work) = details.get_mut("work") {
+        restore_empty_list(&mut work["enabled_labors"]);
+        restore_empty_list(&mut work["active_automation"]);
+        if let Some(enabled_labors) = work["enabled_labors"].as_array_mut() {
+            for labor in enabled_labors {
+                restore_empty_list(&mut labor["details"]);
+            }
+        }
+    }
     if let Some(work_details) = details
         .get_mut("work")
         .and_then(|work| work.get_mut("work_details"))

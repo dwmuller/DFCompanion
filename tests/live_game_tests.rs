@@ -499,6 +499,21 @@ async fn ai_tools_end_to_end() {
         assert_eq!(work["applicable"], true, "{work}");
         assert!(work["specialized"].is_boolean(), "{work}");
         assert!(work["work_details"].is_array(), "{work}");
+        assert!(work["enabled_labors"].is_array(), "{work}");
+        assert!(work["active_automation"].is_array(), "{work}");
+        assert_eq!(
+            work["enabled_labor_count"].as_u64().unwrap() as usize,
+            work["enabled_labors"].as_array().unwrap().len(),
+            "{work}"
+        );
+        for labor in work["enabled_labors"].as_array().unwrap() {
+            assert!(labor["name"].is_string(), "{labor}");
+            assert!(labor["details"].is_array(), "{labor}");
+            for detail in labor["details"].as_array().unwrap() {
+                assert!(detail["index"].is_u64(), "{detail}");
+                assert!(detail["applies_to_unit"].is_boolean(), "{detail}");
+            }
+        }
         for detail in work["work_details"].as_array().unwrap() {
             assert!(detail["index"].is_u64(), "{detail}");
             assert!(detail["name"].is_string(), "{detail}");

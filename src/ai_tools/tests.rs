@@ -137,6 +137,8 @@ fn tool_descriptions_list_arguments() {
     assert!(text.contains("inventory"));
     assert!(text.contains("work"));
     assert!(text.contains("specialized"));
+    assert!(text.contains("native labor toggles"));
+    assert!(text.contains("historical provenance"));
     let text = describe_tool("list_work_details").unwrap();
     assert!(text.contains("search"));
     assert!(text.contains("unit_id"));

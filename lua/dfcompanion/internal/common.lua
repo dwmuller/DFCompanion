@@ -51,6 +51,13 @@ local function enum_key(name)
     return name:gsub('(%l)(%u)', '%1_%2'):lower()
 end
 
+local function labor_name(id)
+    local attr = df.unit_labor.attrs[id]
+    local name = attr and attr.caption or df.unit_labor[id] or tostring(id)
+    return name:gsub('(%l)(%u)', '%1_%2')
+        :gsub('[^%w]+', '_'):gsub('^_+', ''):gsub('_+$', ''):lower()
+end
+
 local function unit_name_by_id(id)
     local unit = id and id >= 0 and df.unit.find(id)
     return unit and name_of(unit) or nil
@@ -140,6 +147,7 @@ return {
     words = words,
     snake = snake,
     enum_key = enum_key,
+    labor_name = labor_name,
     unit_name_by_id = unit_name_by_id,
     format_date = format_date,
     is_finished = is_finished,

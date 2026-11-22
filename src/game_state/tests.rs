@@ -80,6 +80,23 @@ fn work_is_a_supported_detail_part_and_unknown_parts_are_rejected() {
 }
 
 #[test]
+fn empty_labor_relationship_lists_are_restored() {
+    let mut details = json!({
+        "work": {
+            "enabled_labors": [
+                {"name": "mine", "details": {}}
+            ],
+            "active_automation": {}
+        }
+    });
+
+    restore_empty_lists(&mut details);
+
+    assert_eq!(details["work"]["active_automation"], json!([]));
+    assert_eq!(details["work"]["enabled_labors"][0]["details"], json!([]));
+}
+
+#[test]
 fn empty_work_detail_lists_are_restored() {
     let mut result = json!({"work_details": {}, "notes": "unchanged"});
     restore_work_detail_lists(&mut result);
