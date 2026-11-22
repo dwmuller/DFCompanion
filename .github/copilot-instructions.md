@@ -14,24 +14,25 @@ Lua RPC and plugin scripts.
 - DFHack CLI and Lua scripting for interacting with the game.
 - HTTP client tools for testing the web interface.
 - Git for version control and collaboration.
-- Strongly prefer LSP tools over string searches for finding usages and
-  references in the code.
-
-
+- Strongly prefer Language Server Protocol (LSP) tools over string searches for
+  finding usages and references in the code. Minimize shell-based file searches.
 
 ### Key files and directories
 
 - `src/` contains the main application code, written in Rust. It is a single
   binary crate.
-- Lua code runs in a context provided by DFHack.
+- Lua code runs in a context provided by DFHack. All lua code is under `lua/`
   - `lua/plugin/dfcompanion.lua` is a DFHack plugin. It notifies DFCompanion of
     game events, and reports the game's loading state (DFHack reachable, world
     loaded, fortress loaded, and the fortress name) so the AI's game tools stay
     inert until a fortress is ready. The service also polls DFHack for that
     state on its own.
   - Scripts in `lua/rpc/` provide other supporting functions.
-  - The Lua scripts have to be copied to a specific directory in the DFHack
-    installation for testing.
+  - The Lua scripts have to be copied to the DFHack installation for live
+    testing. See the "Lua script installation" section under Core Engineering &
+    Privacy Rules for details.
+- `tests/` contains test code for the application that is not associated with a
+  specific Rust module, written in Rust using the standard testing framework.
 - The web UI is implemented by `src/web.rs` and files in `src/web/` using HTMX
   and askama templates.
 - Consult `BUILDING.md` for build and setup steps.
@@ -44,7 +45,7 @@ Lua RPC and plugin scripts.
     Keep this up to date with the latest developments.
   - `notes/TODO.md` contains a list of tasks and planned improvements for the
     project. Remove items from here when they've been completed.
-  - `notes/architecturemd` contains notes on the overarching design
+  - `notes/architecture.md` contains notes on the overarching design
     decisions and principles guiding the project.
 - The Git project's origin is a public GitHub project at
   `https://github.com/dwmuller/dfcompanion`.
@@ -81,10 +82,14 @@ external resources, these resources may be useful.
   than vendor-specific SDKs. Do not add Google Gemini presets or integrations
   (prohibited by project terms).
 - **Non-blocking gameplay:** Event forwarding and AI calls must respect bounded
-  queues and fail gracefully without hanging Dwarf Fortress or losing pending
-  user context.
+  queues and fail without hanging Dwarf Fortress or losing pending user context.
+- **Lua script installation:** After editing Lua scripts, use the PowerShell
+  command `cmake --build build --config Debug --target install-dfhack-script` to
+  copy them to the DFHack installation for live testing.
 - **Rust verification:** After editing Rust files in `src/` or `tests/`, run
   `cargo fmt`, `cargo check`, `cargo clippy`, and `cargo test` to verify
-  changes.
+  changes. If any of these commands fails, fix the reported issues and rerun
+  the failed command until it passes. If a fix is unclear, ask the user for
+  direction before continuing. Report the final result of each command.
 
 
