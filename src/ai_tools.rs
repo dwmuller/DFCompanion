@@ -571,7 +571,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_locations",
-                "List the fortress's named locations (temples, hospitals, guildhalls, taverns, libraries) with their type, name, and the number and total area of the zones that make them up. A location with no zones cannot function yet, so this answers \"is there a working hospital or temple?\". This is read-only.",
+                "List the fortress's named locations that have at least one assigned zone (temples, hospitals, guildhalls, taverns, libraries), with their type, name, and the number and total area of those zones. Phantom locations with no zones are omitted, matching the Locations UI. This is read-only.",
                 json!({}),
                 |game, _: NoArgs| game.list_locations(),
             ),

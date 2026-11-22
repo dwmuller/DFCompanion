@@ -774,6 +774,14 @@ async fn ai_tools_end_to_end() {
     );
     let locations = call("list_locations", serde_json::json!({})).await;
     assert!(locations["locations"].is_array(), "{locations}");
+    assert!(
+        locations["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|location| location["zone_count"].as_i64().unwrap() > 0),
+        "phantom locations must not be returned: {locations}"
+    );
     let workshops = call("list_workshops", serde_json::json!({"limit": 50})).await;
     assert!(
         workshops["workshops"]

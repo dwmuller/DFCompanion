@@ -264,8 +264,14 @@ end
 
 -- Named locations (temples, hospitals, guildhalls...) with zone counts and area.
 local function list_locations()
-    return reply({locations = collect_places().locations,
-        notes = 'A location with zone_count 0 has no zone assigned, so it cannot function yet.'})
+    local locations = {}
+    for _, location in ipairs(collect_places().locations) do
+        if location.zone_count > 0 then
+            table.insert(locations, location)
+        end
+    end
+    return reply({locations = locations,
+        notes = 'Only locations with at least one assigned zone are included.'})
 end
 
 -- Workshops and furnaces, optionally only those with `name_filter` in their
