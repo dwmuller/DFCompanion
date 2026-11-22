@@ -864,6 +864,9 @@ async fn main_page_prevents_caching_and_offers_the_event_toggle() {
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("enable dfcompanion"));
     assert!(html.contains("show-game-events"));
+    assert!(html.contains("show-ai-usage"));
+    assert!(html.contains("show-status"));
+    assert!(html.contains("show-diagnostic"));
     assert!(html.contains("hx-sse:connect=\"/events\""));
     assert!(html.contains("/assets/hx-sse.min.js"));
     assert!(!html.contains("marked") && !html.contains("purify"));

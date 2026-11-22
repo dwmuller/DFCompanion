@@ -16,8 +16,8 @@ notifications.addEventListener("htmx:sse:after:message", (event) => {
 });
 
 // Hidden notification kinds are filtered by CSS from these checkboxes; the
-// choices are remembered. Both kinds are hidden by default.
-for (const id of ["show-game-events", "show-ai-usage"]) {
+// choices are remembered. These kinds are hidden by default.
+for (const id of ["show-game-events", "show-ai-usage", "show-status", "show-diagnostic"]) {
   const checkbox = document.getElementById(id);
   checkbox.checked = localStorage.getItem(id) === "true";
   checkbox.addEventListener("change", () => {

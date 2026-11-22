@@ -152,7 +152,9 @@ body {
 }
 
 [data-kind="game-event"],
-[data-kind="ai-usage"] {
+[data-kind="ai-usage"],
+[data-kind="status"],
+[data-kind="diagnostic"] {
   color: #666;
 }
 
@@ -163,7 +165,9 @@ body {
 
 /* The filter checkboxes live in a popup; the list follows their state. */
 body:has(#show-game-events:not(:checked)) [data-kind="game-event"],
-body:has(#show-ai-usage:not(:checked)) [data-kind="ai-usage"] {
+body:has(#show-ai-usage:not(:checked)) [data-kind="ai-usage"],
+body:has(#show-status:not(:checked)) [data-kind="status"],
+body:has(#show-diagnostic:not(:checked)) [data-kind="diagnostic"] {
   display: none;
 }
 
