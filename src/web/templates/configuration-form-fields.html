@@ -101,6 +101,24 @@
   at least 4096 tokens must remain for input.
 </p>
 
+<label for="{{ values.id }}-reasoning-mode">Reasoning effort</label>
+<select
+  id="{{ values.id }}-reasoning-mode"
+  name="reasoning_mode"
+  required>
+  {% for mode in values.reasoning_modes %}
+    <option
+      value="{{ mode.value }}"
+      {% if values.reasoning_mode == mode.value %}selected{% endif %}>
+      {{ mode.label }}
+    </option>
+  {% endfor %}
+</select>
+<p>
+  Provider default leaves reasoning unchanged. Compaction uses Low when this is
+  set to Provider default.
+</p>
+
 <label for="{{ values.id }}-configuration-system-text">System text</label>
 <textarea
   id="{{ values.id }}-configuration-system-text"

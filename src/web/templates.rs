@@ -6,8 +6,7 @@ use std::fmt;
 use askama::Template;
 
 use crate::{
-    ai_config::TokenBudget,
-    ai_config::{supported_interaction_methods, AiConfiguration},
+    ai_config::{supported_interaction_methods, AiConfiguration, ReasoningMode, TokenBudget},
     ai_providers::Provider,
     app::ChatState,
     game_state::{LifecycleState, LifecycleStatus},
@@ -78,8 +77,26 @@ struct FormFieldValues {
     system_text: String,
     context_window_tokens: u32,
     max_output_tokens: u32,
+    reasoning_mode: String,
+    reasoning_modes: Vec<ReasoningModeOption>,
     interaction_method: String,
     interaction_methods: Vec<InteractionMethodOption>,
+}
+
+struct ModelOptions<'a> {
+    id: &'a str,
+    name: &'a str,
+    interaction_method: &'a str,
+    url: &'a str,
+    model_id: &'a str,
+    system_text: &'a str,
+    token_budget: TokenBudget,
+    reasoning_mode: ReasoningMode,
+}
+
+struct ReasoningModeOption {
+    value: &'static str,
+    label: &'static str,
 }
 
 #[derive(Template)]
@@ -92,24 +109,24 @@ struct ModelDiscoveryResultTemplate<'a> {
 }
 
 impl FormFieldValues {
-    fn new(
-        id: &str,
-        name: &str,
-        interaction_method: &str,
-        url: &str,
-        model_id: &str,
-        system_text: &str,
-        token_budget: TokenBudget,
-    ) -> Self {
+    fn new(options: ModelOptions<'_>) -> Self {
         Self {
-            id: id.to_owned(),
-            name: name.to_owned(),
-            interaction_method: interaction_method.to_owned(),
-            url: url.to_owned(),
-            model_id: model_id.to_owned(),
-            system_text: system_text.to_owned(),
-            context_window_tokens: token_budget.context_window_tokens,
-            max_output_tokens: token_budget.max_output_tokens,
+            id: options.id.to_owned(),
+            name: options.name.to_owned(),
+            interaction_method: options.interaction_method.to_owned(),
+            url: options.url.to_owned(),
+            model_id: options.model_id.to_owned(),
+            system_text: options.system_text.to_owned(),
+            context_window_tokens: options.token_budget.context_window_tokens,
+            max_output_tokens: options.token_budget.max_output_tokens,
+            reasoning_mode: options.reasoning_mode.name().to_owned(),
+            reasoning_modes: ReasoningMode::ALL
+                .into_iter()
+                .map(|mode| ReasoningModeOption {
+                    value: mode.name(),
+                    label: mode.label(),
+                })
+                .collect(),
             interaction_methods: supported_interaction_methods()
                 .map(|method| InteractionMethodOption {
                     value: method.name.to_owned(),
@@ -522,18 +539,19 @@ pub fn render_empty_create_form(
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationCreateFormTemplate {
-        values: FormFieldValues::new(
-            "new",
-            "",
-            "",
-            "",
-            "",
-            "",
-            TokenBudget {
+        values: FormFieldValues::new(ModelOptions {
+            id: "new",
+            name: "",
+            interaction_method: "",
+            url: "",
+            model_id: "",
+            system_text: "",
+            token_budget: TokenBudget {
                 context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
                 max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
             },
-        ),
+            reasoning_mode: ReasoningMode::Default,
+        }),
         providers: providers
             .iter()
             .map(|provider| ProviderOption {
@@ -561,15 +579,16 @@ pub fn render_edit_form(
         crate::ai_config::supported_interaction_method_name(configuration.interaction_method)
             .unwrap_or_default();
     Ok(ConfigurationEditFormTemplate {
-        values: FormFieldValues::new(
-            &configuration.id,
-            &configuration.name,
+        values: FormFieldValues::new(ModelOptions {
+            id: &configuration.id,
+            name: &configuration.name,
             interaction_method,
-            &configuration.url,
-            &configuration.model_id,
-            &configuration.system_text,
-            configuration.token_budget(),
-        ),
+            url: &configuration.url,
+            model_id: &configuration.model_id,
+            system_text: &configuration.system_text,
+            token_budget: configuration.token_budget(),
+            reasoning_mode: configuration.reasoning_mode,
+        }),
         error,
     }
     .render()?)
@@ -612,6 +631,7 @@ mod test {
             system_text: "System".to_owned(),
             context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
             max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+            reasoning_mode: crate::ai_config::ReasoningMode::Default,
         }
     }
 
@@ -689,6 +709,7 @@ mod test {
                 system_text: "s".to_owned(),
                 context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
                 max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+                reasoning_mode: ReasoningMode::Default,
             },
             true,
         )];
@@ -883,6 +904,9 @@ mod test {
         let rendered = render_empty_create_form(&[], "").expect("form should render");
 
         assert!(!rendered.contains("name=\"api_key\""));
+        assert!(rendered.contains("name=\"reasoning_mode\""));
+        assert!(rendered.contains("value=\"default\""));
+        assert!(rendered.contains("selected"));
     }
 
     #[test]

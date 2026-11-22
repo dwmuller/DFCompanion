@@ -500,7 +500,7 @@ async fn configuration_routes_reject_cross_origin_requests() {
                 .header(header::ORIGIN, "https://attacker.example")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "name=Profile&interaction_method=Anthropic&model_id=model&url=https%3A%2F%2Fapi.anthropic.com%2F&system_text=text&context_window_tokens=32768&max_output_tokens=8192",
+                    "name=Profile&interaction_method=Anthropic&model_id=model&url=https%3A%2F%2Fapi.anthropic.com%2F&system_text=text&context_window_tokens=32768&max_output_tokens=8192&reasoning_mode=default",
                 ))
                 .unwrap(),
         )
@@ -562,7 +562,7 @@ async fn configuration_api_supports_rename_and_delete() {
     let configurations = &app.ai.configurations;
     let create_body = |name: &str| {
         format!(
-            "name={name}&interaction_method=OpenAI&model_id=gpt-test&url=https%3A%2F%2Fapi.openai.com%2Fv1%2F&system_text=Use+the+provided+evidence.&context_window_tokens=32768&max_output_tokens=8192"
+            "name={name}&interaction_method=OpenAI&model_id=gpt-test&url=https%3A%2F%2Fapi.openai.com%2Fv1%2F&system_text=Use+the+provided+evidence.&context_window_tokens=32768&max_output_tokens=8192&reasoning_mode=default"
         )
     };
     let create = |name: &str| {

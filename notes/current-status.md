@@ -33,6 +33,9 @@ What feature or bug we're actively working on.
   failures leave manual entry and existing suggestions intact. Pasted operation
   URLs ending in `/responses`, `/chat/completions`, `/messages`, or
   `/embeddings` are normalized back to the shared provider base URL.
+- Model profiles include a backward-compatible reasoning mode (provider
+  default, off, low, medium, high). Normal turns use the configured effort,
+  while compaction falls back to low when provider default is selected.
 - History compaction uses the active model's derived input budget, caps summary
   output separately, keeps four recent messages, and gives a newly compacted
   summary two growing turns before the soft threshold applies again. Hard

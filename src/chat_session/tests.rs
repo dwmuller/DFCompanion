@@ -12,6 +12,7 @@ fn configuration() -> AiConfiguration {
         system_text: DEFAULT_SYSTEM_TEXT.to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     }
 }
 

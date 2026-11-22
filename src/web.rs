@@ -20,7 +20,10 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::ai_config::{ModelProfileInput, TokenBudget};
 use crate::{
-    ai_config::{supported_interaction_method_from_name, AiConfiguration, ConfigurationRepository},
+    ai_config::{
+        supported_interaction_method_from_name, AiConfiguration, ConfigurationRepository,
+        ReasoningMode,
+    },
     ai_providers::{self, built_in_providers},
     app::CompanionApp,
     events::{ExternalEvent, GameEvent},
@@ -51,6 +54,12 @@ struct ConfigurationForm {
     system_text: String,
     context_window_tokens: u32,
     max_output_tokens: u32,
+    #[serde(default = "default_reasoning_mode_form")]
+    reasoning_mode: String,
+}
+
+fn default_reasoning_mode_form() -> String {
+    ReasoningMode::Default.name().to_owned()
 }
 
 #[derive(Deserialize)]
@@ -428,6 +437,16 @@ async fn create_configuration_fragment(
             );
         }
     };
+    let reasoning_mode = match ReasoningMode::from_name(&form.reasoning_mode) {
+        Some(mode) => mode,
+        None => {
+            return configuration_form_error_response(
+                StatusCode::BAD_REQUEST,
+                "new",
+                "Invalid reasoning mode",
+            );
+        }
+    };
     let configuration = match app.ai.configurations.create_with_limits(ModelProfileInput {
         name: &form.name,
         interaction_method: method,
@@ -438,6 +457,7 @@ async fn create_configuration_fragment(
             context_window_tokens: form.context_window_tokens,
             max_output_tokens: form.max_output_tokens,
         },
+        reasoning_mode,
     }) {
         Ok(configuration) => configuration,
         Err(error) => {
@@ -584,6 +604,16 @@ async fn update_configuration_fragment(
             );
         }
     };
+    let reasoning_mode = match ReasoningMode::from_name(&form.reasoning_mode) {
+        Some(mode) => mode,
+        None => {
+            return configuration_form_error_response(
+                StatusCode::BAD_REQUEST,
+                &id,
+                "Invalid reasoning mode",
+            );
+        }
+    };
     let configuration = match app.ai.configurations.update_with_limits(
         &id,
         ModelProfileInput {
@@ -596,6 +626,7 @@ async fn update_configuration_fragment(
                 context_window_tokens: form.context_window_tokens,
                 max_output_tokens: form.max_output_tokens,
             },
+            reasoning_mode,
         },
     ) {
         Ok(configuration) => configuration,

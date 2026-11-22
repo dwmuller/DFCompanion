@@ -5,7 +5,7 @@ use std::{
 };
 
 use directories::ProjectDirs;
-use genai::adapter::AdapterKind;
+use genai::{adapter::AdapterKind, chat::ReasoningEffort};
 use keyring::Entry;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,65 @@ pub struct TokenBudget {
     pub max_output_tokens: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningMode {
+    #[default]
+    Default,
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningMode {
+    pub const ALL: [Self; 5] = [
+        Self::Default,
+        Self::Off,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Provider default",
+            Self::Off => "Off",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
+    }
+
+    pub fn effort(self) -> Option<ReasoningEffort> {
+        match self {
+            Self::Default => None,
+            Self::Off => Some(ReasoningEffort::Zero),
+            Self::Low => Some(ReasoningEffort::Low),
+            Self::Medium => Some(ReasoningEffort::Medium),
+            Self::High => Some(ReasoningEffort::High),
+        }
+    }
+
+    pub fn compaction_effort(self) -> ReasoningEffort {
+        self.effort().unwrap_or(ReasoningEffort::Low)
+    }
+}
+
 pub struct ModelProfileInput<'a> {
     pub name: &'a str,
     pub interaction_method: AdapterKind,
@@ -47,6 +106,7 @@ pub struct ModelProfileInput<'a> {
     pub url: &'a str,
     pub system_text: &'a str,
     pub token_budget: TokenBudget,
+    pub reasoning_mode: ReasoningMode,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -116,6 +176,8 @@ pub struct AiConfiguration {
     pub context_window_tokens: u32,
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
+    #[serde(default)]
+    pub reasoning_mode: ReasoningMode,
 }
 
 impl AiConfiguration {
@@ -237,6 +299,7 @@ impl ConfigurationRepository {
                 context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
                 max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             },
+            reasoning_mode: ReasoningMode::Default,
         })
     }
 
@@ -264,6 +327,7 @@ impl ConfigurationRepository {
             system_text: input.system_text.trim().to_owned(),
             context_window_tokens: input.token_budget.context_window_tokens,
             max_output_tokens: input.token_budget.max_output_tokens,
+            reasoning_mode: input.reasoning_mode,
         };
         let mut next = current.clone();
         next.configurations.push(configuration.clone());
@@ -281,10 +345,9 @@ impl ConfigurationRepository {
         url: &str,
         system_text: &str,
     ) -> Result<AiConfiguration, String> {
-        let token_budget = self
+        let existing = self
             .try_get(id)?
-            .ok_or_else(|| "AI configuration was not found.".to_owned())?
-            .token_budget();
+            .ok_or_else(|| "AI configuration was not found.".to_owned())?;
         self.update_with_limits(
             id,
             ModelProfileInput {
@@ -293,7 +356,8 @@ impl ConfigurationRepository {
                 model_id,
                 url,
                 system_text,
-                token_budget,
+                token_budget: existing.token_budget(),
+                reasoning_mode: existing.reasoning_mode,
             },
         )
     }
@@ -326,6 +390,7 @@ impl ConfigurationRepository {
         configuration.system_text = input.system_text.trim().to_owned();
         configuration.context_window_tokens = input.token_budget.context_window_tokens;
         configuration.max_output_tokens = input.token_budget.max_output_tokens;
+        configuration.reasoning_mode = input.reasoning_mode;
         let updated = configuration.clone();
         self.persist(&next)?;
         *current = next;
@@ -740,9 +805,30 @@ mod tests {
                 context_window_tokens: 11_999,
                 max_output_tokens: 8_000,
             },
+            reasoning_mode: ReasoningMode::Default,
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn reasoning_modes_should_round_trip_and_map_to_genai_effort() {
+        assert!(ReasoningMode::from_name("default")
+            .unwrap()
+            .effort()
+            .is_none());
+        assert!(matches!(
+            ReasoningMode::from_name("off").unwrap().effort(),
+            Some(ReasoningEffort::Zero)
+        ));
+        assert!(matches!(
+            ReasoningMode::from_name("high").unwrap().effort(),
+            Some(ReasoningEffort::High)
+        ));
+        assert!(matches!(
+            ReasoningMode::Default.compaction_effort(),
+            ReasoningEffort::Low
+        ));
     }
 
     #[test]

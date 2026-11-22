@@ -106,6 +106,7 @@ fn prompt_configuration() -> AiConfiguration {
         system_text: DEFAULT_SYSTEM_TEXT.to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     }
 }
 
@@ -369,6 +370,7 @@ async fn a_cancelled_turn_sends_nothing_and_reports_cancellation() {
         system_text: "Custom system instructions.".to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     };
     let prompt = test_prompt(PromptKind::UserRequest, "Hello.");
     let cancel = CancellationToken::new();
@@ -415,6 +417,7 @@ async fn cancelling_while_waiting_for_the_provider_ends_the_turn() {
         system_text: "Custom system instructions.".to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     };
     let prompt = test_prompt(PromptKind::UserRequest, "Hello.");
     let cancel = CancellationToken::new();
@@ -531,6 +534,7 @@ async fn genai_dispatches_to_each_configured_protocol_and_url() {
             system_text: "Custom system instructions.".to_owned(),
             context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
             max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+            reasoning_mode: crate::ai_config::ReasoningMode::Default,
         };
         let result = runtime
             .run_turn_with_key(
@@ -597,6 +601,7 @@ async fn anthropic_tool_results_share_one_message() {
         system_text: "Custom system instructions.".to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     };
     let prompt = Prompt {
         kind: PromptKind::Automated,
@@ -684,6 +689,7 @@ async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
         system_text: "Custom system instructions.".to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     };
     let prompt = Prompt {
         kind: PromptKind::UserRequest,
@@ -802,6 +808,7 @@ fn compaction_configuration(url: String) -> AiConfiguration {
         system_text: "Custom system instructions.".to_owned(),
         context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+        reasoning_mode: crate::ai_config::ReasoningMode::Default,
     }
 }
 
@@ -853,7 +860,43 @@ async fn compaction_summarizes_older_messages_and_keeps_recent_ones() {
     assert!(body.contains("handoff for a future continuation"));
     assert!(!body.contains("Custom system instructions."));
     assert!(body.contains("Player turn:"));
+    assert_eq!(request_body["reasoning_effort"], "low");
     assert!(request_body["max_tokens"].as_u64().unwrap() <= COMPACTION_MAX_OUTPUT_TOKENS as u64);
+}
+
+#[tokio::test]
+async fn normal_turn_should_send_configured_reasoning_effort() {
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }]
+    })])
+    .await;
+    let mut configuration = compaction_configuration(url);
+    configuration.reasoning_mode = crate::ai_config::ReasoningMode::Medium;
+    let prompt = test_prompt(PromptKind::UserRequest, "hello");
+
+    let _ = runtime
+        .run_turn_with_key(
+            &configuration,
+            "test-secret",
+            &History::default(),
+            &prompt,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let (_, _, _, request_body) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert_eq!(request_body["reasoning_effort"], "medium");
 }
 
 #[test]

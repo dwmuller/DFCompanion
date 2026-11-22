@@ -717,7 +717,10 @@ impl AiRuntime {
             .with_system(configuration.system_text.clone())
             .with_tools(crate::ai_tools::definitions())
             .with_store(false);
-        let options = ChatOptions::default().with_max_tokens(configuration.max_output_tokens);
+        let mut options = ChatOptions::default().with_max_tokens(configuration.max_output_tokens);
+        if let Some(effort) = configuration.reasoning_mode.effort() {
+            options = options.with_reasoning_effort(effort);
+        }
         let mut budget = crate::ai_tools::ToolBudget::new();
         let mut usage: Vec<AiTurnUsage> = Vec::new();
         let mut purpose = "initial request".to_owned();
@@ -862,6 +865,7 @@ impl AiRuntime {
             .with_system(COMPACTION_SYSTEM_TEXT.to_owned())
             .with_store(false);
         let options = ChatOptions::default()
+            .with_reasoning_effort(configuration.reasoning_mode.compaction_effort())
             .with_max_tokens(COMPACTION_MAX_OUTPUT_TOKENS.min(configuration.max_output_tokens));
         if cancel.is_cancelled() {
             return Err(TurnError::Cancelled);

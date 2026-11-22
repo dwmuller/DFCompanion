@@ -38,6 +38,11 @@ manual model entry remains available, and discovery failures do not remove
 current suggestions. The refresh uses the profile's saved credential and never
 returns it to the browser.
 
+Each model profile also has a reasoning-effort setting. **Provider default**
+preserves the model's normal behavior; Off, Low, Medium, and High are mapped
+through `genai` to the selected adapter. Compaction uses Low when the profile is
+set to Provider default.
+
 The provider-neutral [`genai` Rust library](https://github.com/jeremychone/rust-genai) supplies the adapters for the three interaction methods. API keys are stored in the operating system credential vault (Windows Credential Manager on Windows), under a configuration-specific account; they are never returned to the browser or written to the configuration file or a game save. Leave the key field blank when editing to keep the saved key. Use **Forget API key** to remove it.
 
 DFCompanion does not make AI calls just because reports arrive. It keeps reports in local memory until you ask a question, then sends the accumulated reports and chat context to the selected provider. Review the linked policy and data-use terms before using AI features. Provider policy pages are maintained by the providers and can change.
