@@ -853,6 +853,32 @@ async fn ai_tools_end_to_end() {
             .all(|w| w["position"]["x"].is_i64() && w["job_count"].is_u64()),
         "{workshops}"
     );
+    let smelters = call(
+        "list_workshops",
+        serde_json::json!({"name": "Magma Smelter", "limit": 50}),
+    )
+    .await;
+    assert!(
+        smelters["workshops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |workshop| !workshop["stockpile_links"]["take_from_stockpiles"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            ),
+        "{smelters}"
+    );
+    assert!(
+        workshops["workshops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|workshop| workshop["stockpile_links"].is_object()),
+        "{workshops}"
+    );
     let busy = call(
         "list_workshops",
         serde_json::json!({"only_with_jobs": true, "limit": 50}),
@@ -873,6 +899,33 @@ async fn ai_tools_end_to_end() {
     assert!(squads["squads"].is_array(), "{squads}");
     let piles = call("list_stockpiles", serde_json::json!({"limit": 5})).await;
     assert!(piles["stockpiles"].is_array(), "{piles}");
+    assert!(
+        piles["stockpiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|pile| pile["links_only"].is_boolean()
+                && pile["stockpile_links"].is_object()
+                && pile["subfilters"].is_object()),
+        "{piles}"
+    );
+    let coke = call(
+        "list_stockpiles",
+        serde_json::json!({"name": "Coke bars", "limit": 5}),
+    )
+    .await;
+    assert!(
+        coke["stockpiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pile| !pile["stockpile_links"]["take_from_workshops"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+                && pile["subfilters"].get("bars_blocks").is_some()),
+        "{coke}"
+    );
     assert!(moods["moods"].is_array(), "{moods}");
     let automation = call("get_dfhack_automation", serde_json::json!({})).await;
     assert!(automation["enabled"].is_array(), "{automation}");

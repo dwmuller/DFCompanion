@@ -56,6 +56,11 @@ What feature or bug we're actively working on.
   filter, and `get_labor_coverage` returns a paged roster of residents with a
   given labor enabled, including status, position, specialization, and
   applicable details.
+- Workshop and stockpile tools now expose bidirectional routing links. Stockpile
+  output additionally includes links-only mode and compact enabled/total
+  sub-filter counts for accepted categories, enabling the AI to identify
+  which workshops take from or give to a pile without reverse-engineering
+  coordinates or job reports.
 - Implemented across `src/game_state.rs`, `src/app.rs`, `src/ai_tools.rs`,
   `src/web.rs`, `src/main.rs`, `lua/plugin/dfcompanion.lua`, and
   `lua/rpc/dfcompanion.lua`; the unit suite passes and clippy is clean.

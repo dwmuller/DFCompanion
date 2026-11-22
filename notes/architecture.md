@@ -93,6 +93,13 @@ It does not infer historical toggle provenance. `list_work_details` supports an
 exact normalized labor filter, and `get_labor_coverage` provides a bounded
 resident roster for one labor with status and applicable detail summaries.
 
+Stockpile routing is read from the game's bidirectional link structures.
+Workshop tools expose give/take stockpile targets; stockpile tools expose
+give/take links to both stockpiles and workshops, links-only mode, and compact
+enabled/total sub-filter counts for accepted categories. These are observations
+of routing configuration, not a diagnosis of whether a specific job is
+currently satisfiable.
+
 User-visible diagnostic events use a dedicated tracing layer. `ChatSession`
 emits typed `UserEvent` effects without doing I/O; the application emits those
 through allowlisted `user-*` tracing targets, and the subscriber converts them

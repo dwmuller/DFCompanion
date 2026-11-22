@@ -154,6 +154,12 @@ fn tool_descriptions_list_arguments() {
     assert!(text.contains("assignment_mode"));
     assert!(text.contains("selected_workers"));
     assert!(text.contains("specialized"));
+    assert!(describe_tool("list_stockpiles")
+        .unwrap()
+        .contains("links-only mode"));
+    assert!(describe_tool("list_workshops")
+        .unwrap()
+        .contains("stockpile/workshop links"));
     let text = describe_tool("get_labor_coverage").unwrap();
     assert!(text.contains("labor (string, required)"));
     assert!(text.contains("idle_only"));

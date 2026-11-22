@@ -32,6 +32,62 @@ local function zone_row(zone, location_names)
     return row
 end
 
+local function link_row(building)
+    return {
+        id = building.id,
+        name = text(dfhack.buildings.getName(building)),
+        type = words(df.building_type[building:getType()] or 'unknown'),
+    }
+end
+
+local function linked_buildings(link_list)
+    local rows = {}
+    for _, building in ipairs(link_list) do
+        table.insert(rows, link_row(building))
+    end
+    table.sort(rows, function(a, b) return a.id < b.id end)
+    return rows
+end
+
+local function stockpile_links(building)
+    local links = building:getStockpileLinks()
+    if not links then
+        return nil
+    end
+    return {
+        give_to_stockpiles = linked_buildings(links.give_to_pile),
+        take_from_stockpiles = linked_buildings(links.take_from_pile),
+        give_to_workshops = linked_buildings(links.give_to_workshop),
+        take_from_workshops = linked_buildings(links.take_from_workshop),
+    }
+end
+
+local function subfilter_summary(settings, accepts)
+    local result = {}
+    for category, group in pairs(settings) do
+        if category ~= 'flags' and accepts[category] then
+            local filters = {}
+            for name, value in pairs(group) do
+                if type(value) == 'boolean' then
+                    filters[name] = value
+                else
+                    local enabled = 0
+                    for _, selected in ipairs(value) do
+                        if selected then enabled = enabled + 1 end
+                    end
+                    if #value > 0 then
+                        filters[name] = {enabled = enabled, total = #value}
+                    end
+                end
+            end
+            if next(filters) then
+                result[category] = filters
+            end
+        end
+    end
+    return result
+end
+
 -- Scans the fortress's buildings, zones and locations once and returns them as
 -- Lua tables, uncapped. The exported functions below each return one slice.
 local function collect_places()
@@ -113,6 +169,7 @@ local function collect_places()
                     size = (b.x2 - b.x1 + 1) .. 'x' .. (b.y2 - b.y1 + 1),
                     finished = is_finished(b),
                     job_count = #b.jobs,
+                    stockpile_links = stockpile_links(b),
                 }
                 if #b.jobs > 0 then
                     row.jobs = {}
@@ -415,6 +472,10 @@ local function list_stockpiles(category, name, offset, limit)
         end
         table.sort(accepts)
         local pile_name = dfhack.buildings.getName(pile)
+        local accepted_categories = {}
+        for _, key in ipairs(accepts) do
+            accepted_categories[key] = true
+        end
         local accepted = not category
         for _, key in ipairs(accepts) do
             if key == category then
@@ -457,6 +518,9 @@ local function list_stockpiles(category, name, offset, limit)
                 stacks = stacks,
                 total_quantity = quantity,
                 accepts = accepts,
+                links_only = pile.stockpile_flag.use_links_only == true,
+                stockpile_links = stockpile_links(pile),
+                subfilters = subfilter_summary(pile.settings, accepted_categories),
                 largest_contents = contents,
                 more_item_kinds = math.max(0, #order - MAX_STOCKPILE_CONTENT_GROUPS),
             })

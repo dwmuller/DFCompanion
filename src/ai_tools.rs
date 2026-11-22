@@ -601,7 +601,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_stockpiles",
-                "List the fortress's stockpiles, each with id, name, corner positions (z matches the game's UI), size in tiles, how many tiles are in use (percent_tiles_in_use), number of item stacks and total quantity, the categories it accepts (food, wood, stone, bars_blocks, furniture, finished_goods, ...), and its largest groups of contents. Use it to see whether food, wood or other supplies are stored where they are needed, and which piles are full or empty. Use `category` to see only piles that accept one category and `name` to match a pile's name. Request another page with the returned next_offset when needed. This is read-only.",
+                "List the fortress's stockpiles, each with id, name, position and contents, accepted categories, compact enabled/total sub-filter counts for those accepted categories, links-only mode, and directional links to stockpiles/workshops. Link names and IDs let you determine which workshops take from or give to a pile. Use it to diagnose reagent and haul routing problems. Use `category` to see only piles that accept one category and `name` to match a pile's name. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "category": {
                         "type": "string",
@@ -624,7 +624,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_workshops",
-                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, whether construction is finished, the number of queued jobs, and the names of the first few jobs (e.g. a strange mood's creation job). Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
+                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "name": {
                         "type": "string",
