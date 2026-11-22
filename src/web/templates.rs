@@ -82,6 +82,15 @@ struct FormFieldValues {
     interaction_methods: Vec<InteractionMethodOption>,
 }
 
+#[derive(Template)]
+#[template(path = "model-discovery-result.html")]
+struct ModelDiscoveryResultTemplate<'a> {
+    id: &'a str,
+    models: &'a [String],
+    status: &'a str,
+    has_models: bool,
+}
+
 impl FormFieldValues {
     fn new(
         id: &str,
@@ -481,6 +490,31 @@ pub fn render_api_key_form(
 
 pub fn render_create_closed() -> Result<String, RenderError> {
     Ok(ConfigurationCreateClosedTemplate.render()?)
+}
+
+pub fn render_model_discovery_result(
+    id: &str,
+    models: &[String],
+    error: &str,
+) -> Result<String, RenderError> {
+    let status = if !error.is_empty() {
+        error.to_owned()
+    } else if models.is_empty() {
+        "The provider returned no model IDs. Manual entry is still available.".to_owned()
+    } else {
+        format!(
+            "Refreshed {} model suggestion{}.",
+            models.len(),
+            if models.len() == 1 { "" } else { "s" }
+        )
+    };
+    Ok(ModelDiscoveryResultTemplate {
+        id,
+        models,
+        status: &status,
+        has_models: !models.is_empty(),
+    }
+    .render()?)
 }
 
 pub fn render_empty_create_form(
@@ -891,6 +925,28 @@ mod test {
 
         assert!(rendered.contains("value=\"My config\""));
         assert!(rendered.contains("Bad key"));
+    }
+
+    #[test]
+    fn model_discovery_result_should_replace_datalist_out_of_band() {
+        let models = vec!["alpha".to_owned(), "beta".to_owned()];
+
+        let rendered =
+            render_model_discovery_result("profile", &models, "").expect("result should render");
+
+        assert!(rendered.contains("Refreshed 2 model suggestions."));
+        assert!(rendered.contains("id=\"profile-configuration-models\""));
+        assert!(rendered.contains("hx-swap-oob=\"outerHTML\""));
+        assert!(rendered.contains("value=\"alpha\""));
+    }
+
+    #[test]
+    fn model_discovery_error_should_keep_existing_datalist() {
+        let rendered = render_model_discovery_result("profile", &[], "Discovery failed.")
+            .expect("result should render");
+
+        assert!(rendered.contains("Discovery failed."));
+        assert!(!rendered.contains("hx-swap-oob"));
     }
 
     #[test]

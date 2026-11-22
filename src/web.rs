@@ -21,7 +21,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::ai_config::{ModelProfileInput, TokenBudget};
 use crate::{
     ai_config::{supported_interaction_method_from_name, AiConfiguration, ConfigurationRepository},
-    ai_providers::built_in_providers,
+    ai_providers::{self, built_in_providers},
     app::CompanionApp,
     events::{ExternalEvent, GameEvent},
     notifications::{DisplayMessage, DisplayMessageKind, HistoryEvent, InputState, NotificationId},
@@ -51,6 +51,12 @@ struct ConfigurationForm {
     system_text: String,
     context_window_tokens: u32,
     max_output_tokens: u32,
+}
+
+#[derive(Deserialize)]
+struct ModelDiscoveryForm {
+    interaction_method: String,
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -152,6 +158,10 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
                 .layer(DefaultBodyLimit::max(8_192)),
         )
         .route("/api/ai-providers", get(list_providers))
+        .route(
+            "/fragments/ai-configurations/:id/models",
+            post(discover_configuration_models),
+        )
         .route(
             "/api/plugin/events",
             post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
@@ -458,6 +468,88 @@ async fn list_providers() -> Response {
                 .into_response()
         }
     }
+}
+
+async fn discover_configuration_models(
+    State(app): State<Arc<CompanionApp>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<ModelDiscoveryForm>,
+) -> Response {
+    if let Err(status) = validate_local_origin(&headers) {
+        return (status, "Request origin not allowed.").into_response();
+    }
+    if id != "new" && !matches!(app.ai.configurations.try_get(&id), Ok(Some(_))) {
+        return fragment_response(
+            StatusCode::OK,
+            templates::render_model_discovery_result(
+                &id,
+                &[],
+                "This model profile no longer exists. Close and reload the form.",
+            ),
+            "model discovery",
+        );
+    }
+    let method = match supported_interaction_method_from_name(&form.interaction_method) {
+        Some(method) => method,
+        None => {
+            return fragment_response(
+                StatusCode::OK,
+                templates::render_model_discovery_result(
+                    &id,
+                    &[],
+                    "Choose a valid interaction method before discovering models.",
+                ),
+                "model discovery",
+            );
+        }
+    };
+    let url = match crate::ai_config::normalize_url(&form.url) {
+        Ok(url) => url,
+        Err(error) => {
+            return fragment_response(
+                StatusCode::OK,
+                templates::render_model_discovery_result(&id, &[], &error),
+                "model discovery",
+            );
+        }
+    };
+    let key = if id == "new" {
+        None
+    } else {
+        match app.ai.configurations.has_api_key(&id) {
+            Ok(true) => match app.ai.configurations.get_api_key(&id) {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    return fragment_response(
+                        StatusCode::OK,
+                        templates::render_model_discovery_result(&id, &[], &error),
+                        "model discovery",
+                    );
+                }
+            },
+            Ok(false) => None,
+            Err(error) => {
+                return fragment_response(
+                    StatusCode::OK,
+                    templates::render_model_discovery_result(&id, &[], &error),
+                    "model discovery",
+                );
+            }
+        }
+    };
+    let result = ai_providers::discover_models(method, url, key).await;
+    let (models, message) = match result.and_then(|models| {
+        ai_providers::merge_model_suggestions(method, models).map(|models| (models, String::new()))
+    }) {
+        Ok(result) => result,
+        Err(error) => (Vec::new(), error),
+    };
+    fragment_response(
+        StatusCode::OK,
+        templates::render_model_discovery_result(&id, &models, &message),
+        "model discovery",
+    )
 }
 
 fn configuration_form_error_response(

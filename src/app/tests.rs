@@ -668,6 +668,48 @@ async fn provider_catalog_route_returns_setup_presets_without_configuration_ids(
 }
 
 #[tokio::test]
+async fn model_discovery_should_merge_live_models_into_form_suggestions() {
+    use axum::{routing::get, Json, Router};
+    use tokio::net::TcpListener;
+
+    async fn models() -> Json<serde_json::Value> {
+        Json(serde_json::json!({"data": [{"id": "live-local-model"}]}))
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/v1/models", get(models)))
+            .await
+            .unwrap();
+    });
+    let (app, _) = CompanionApp::new();
+
+    let response = crate::web::router(app)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/fragments/ai-configurations/new/models")
+                .header(header::HOST, "127.0.0.1:3000")
+                .header(header::ORIGIN, "http://127.0.0.1:3000")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "name=Local&interaction_method=OpenAI&model_id=&url={}&system_text=text&context_window_tokens=32768&max_output_tokens=8192",
+                    url::form_urlencoded::byte_serialize(url.as_bytes()).collect::<String>()
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    server.abort();
+
+    assert!(String::from_utf8_lossy(&body).contains("value=\"live-local-model\""));
+}
+
+#[tokio::test]
 async fn chat_without_api_key_retains_pending_context_after_failure() {
     let (app, queue_rx) = CompanionApp::new();
     let config = app

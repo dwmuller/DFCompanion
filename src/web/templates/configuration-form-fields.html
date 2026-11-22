@@ -35,7 +35,9 @@
 
 <p>
   Use HTTPS. HTTP is allowed only for localhost. The URL is the service base
-  URL, not a complete request URL.
+  URL, not a complete request URL. Operation suffixes such as
+  <code>/responses</code> or <code>/chat/completions</code> are normalized to
+  the provider base.
 </p>
 
 <label for="{{ values.id }}-configuration-model">Model ID</label>
@@ -54,6 +56,23 @@
 </datalist>
 
 <p>Suggested models are editable and may vary by account or region.</p>
+<button
+  type="button"
+  hx-post="/fragments/ai-configurations/{{ values.id }}/models"
+  hx-include="closest form"
+  hx-target="#{{ values.id }}-model-discovery-status"
+  hx-swap="outerHTML"
+  hx-disable="this">
+  Refresh models
+</button>
+<span
+  id="{{ values.id }}-model-discovery-status"
+  role="status"
+  aria-live="polite"></span>
+<p>
+  Refresh uses the saved API key for an existing profile. New profiles can
+  discover models from unauthenticated local endpoints, then be saved.
+</p>
 
 <label for="{{ values.id }}-context-window">Context window tokens</label>
 <input

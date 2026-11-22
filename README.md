@@ -32,6 +32,12 @@ The enabled state is not saved; it resets when the map unloads or DFHack exits. 
 
 Create, rename, select, and delete AI model profiles on the **AI Models** page. Each has an interaction method (OpenAI Chat Completions, OpenAI Responses, or Anthropic), API URL, model ID, editable system text, total context-window size, and reserved output-token limit. Built-in provider presets suggest a URL, interaction method, and model choices; these are editable hints, and the provider choice itself is not saved. A **Custom** choice makes no changes to the fields. The main page selector leads with the model ID and shows its provider route second. Use an HTTPS API base URL and the exact model ID accepted by the selected service. HTTP is allowed only for localhost. Profile metadata is stored in `ai-configurations.json` in per-user local application data; older profiles receive backward-compatible token-budget defaults. New installations begin with an empty profile list, and existing credential-vault entries are left untouched.
 
+Existing profiles can use **Refresh models** to query the configured provider
+route and merge discovered IDs with built-in suggestions. Refresh is optional;
+manual model entry remains available, and discovery failures do not remove
+current suggestions. The refresh uses the profile's saved credential and never
+returns it to the browser.
+
 The provider-neutral [`genai` Rust library](https://github.com/jeremychone/rust-genai) supplies the adapters for the three interaction methods. API keys are stored in the operating system credential vault (Windows Credential Manager on Windows), under a configuration-specific account; they are never returned to the browser or written to the configuration file or a game save. Leave the key field blank when editing to keep the saved key. Use **Forget API key** to remove it.
 
 DFCompanion does not make AI calls just because reports arrive. It keeps reports in local memory until you ask a question, then sends the accumulated reports and chat context to the selected provider. Review the linked policy and data-use terms before using AI features. Provider policy pages are maintained by the providers and can change.

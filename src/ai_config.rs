@@ -528,9 +528,22 @@ pub(crate) fn normalize_url(url: &str) -> Result<String, String> {
     if parsed.query().is_some() || parsed.fragment().is_some() {
         return Err("API URL must not contain a query or fragment.".to_owned());
     }
-    if !parsed.path().ends_with('/') {
-        parsed.set_path(&format!("{}/", parsed.path()));
+    let mut path = parsed.path().trim_end_matches('/').to_owned();
+    for operation_path in [
+        "/chat/completions",
+        "/responses",
+        "/messages",
+        "/embeddings",
+    ] {
+        if path.ends_with(operation_path) {
+            path.truncate(path.len() - operation_path.len());
+            break;
+        }
     }
+    if !path.ends_with('/') {
+        path.push('/');
+    }
+    parsed.set_path(&path);
     Ok(parsed.to_string())
 }
 
@@ -643,6 +656,14 @@ mod tests {
         assert!(normalize_url("https://user:pass@example.com/v1").is_err());
         assert_eq!(
             normalize_url("https://example.com/v1").unwrap(),
+            "https://example.com/v1/"
+        );
+        assert_eq!(
+            normalize_url("https://openrouter.ai/api/v1/responses").unwrap(),
+            "https://openrouter.ai/api/v1/"
+        );
+        assert_eq!(
+            normalize_url("https://example.com/v1/chat/completions").unwrap(),
             "https://example.com/v1/"
         );
     }

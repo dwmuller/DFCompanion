@@ -165,6 +165,11 @@ library, using its adapters. The library also handles normalized tool-call excha
 application-owned tool implementations live separately from request
 orchestration.
 
+Model profiles can optionally query the selected route's model-list endpoint
+through `genai`. Discovery is an explicit editor action, merges provider
+suggestions with returned IDs, uses only a saved credential-vault key, and
+falls back to manual entry without replacing existing suggestions on failure.
+
 Google Gemini is intentionally unsupported because the limitations on age and
 application purpose in its [terms](https://aistudio.google.com/docs/terms) do
 not permit the project's intended use.

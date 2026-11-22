@@ -27,6 +27,12 @@ What feature or bug we're actively working on.
   and output-token budgets. Older saved profiles load with 32,768 total and
   8,192 output tokens, while the model selector presents the model and route
   ahead of the profile nickname.
+- Model editors can explicitly refresh suggestions through `genai` model
+  discovery. Discovered IDs are sorted/deduplicated and merged with shipped
+  suggestions; a saved vault key is used for authenticated profiles, while
+  failures leave manual entry and existing suggestions intact. Pasted operation
+  URLs ending in `/responses`, `/chat/completions`, `/messages`, or
+  `/embeddings` are normalized back to the shared provider base URL.
 - History compaction uses the active model's derived input budget, caps summary
   output separately, keeps four recent messages, and gives a newly compacted
   summary two growing turns before the soft threshold applies again. Hard

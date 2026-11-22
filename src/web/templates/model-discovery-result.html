@@ -1,0 +1,11 @@
+<span id="{{ id }}-model-discovery-status">{{ status }}</span>
+{% if has_models %}
+  <datalist
+    id="{{ id }}-configuration-models"
+    data-configuration-models
+    hx-swap-oob="outerHTML">
+    {% for model in models %}
+      <option value="{{ model }}"></option>
+    {% endfor %}
+  </datalist>
+{% endif %}

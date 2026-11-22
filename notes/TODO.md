@@ -58,6 +58,16 @@ Items that are primarily about the mechanics of AI interactions.
   behind a `tool_help` call. Split registry metadata into short and detailed
   descriptions, and compare tool-call retries, help invocations, provider
   rounds, and prompt tokens before accepting the change.
+- Add a per-model reasoning-effort setting using `genai::chat::ReasoningEffort`.
+  Start with `default` (omit the option), `off` (`Zero`), `low`, `medium`, and
+  `high`; defer provider-specific `minimal`, `xhigh`, `max`, and numeric budget
+  controls. Apply it to normal turns and to compaction, with compaction using a
+  lower fallback when the profile leaves reasoning at provider default. Preserve
+  backward compatibility by defaulting older profiles to provider default.
+  Provider/model support is uneven, so do not pretend this is universally
+  available; surface provider errors and consider capability hints from model
+  discovery later. This matters because models such as DeepSeek V4.1 Flash may
+  default to high reasoning even for inexpensive tool-selection turns.
 
 ## Game-state tool improvements
 
