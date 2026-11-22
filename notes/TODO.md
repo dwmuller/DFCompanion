@@ -9,7 +9,11 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- Move AiUsage output items to debug! events.
+- Add a tracing subscriber that can turn selected events into DisplayMessage
+  objects and enqueue them.
+  - ? Affects targets with pattern "user-<category>". Add UI to select what
+    categories are displayed.
+  - Move AiUsage output items to events and use this mechanism for display.
 - Add info, trace, and debug events to instrument critical program activity.
 - ? Implement an optional tracing subscriber that enqueues OutputItems.
 - Revisit the game time representation. Consider a machine-readable form of year
@@ -141,8 +145,10 @@ fortress-management questions.
 
 ## Main page UI improvements
 
-- Arrange various options as a top-of-page menu?
-  - Sort of did this, but it's not beautiful yet.
+- Arrange the current drop-down options as a top-of-page menu bar.
+  - Sort of did this with layout, but it doesn't really act or look quite like a
+    typical menu bar yet.
+  - Drop-down menus should close when focus changes.
 - Do some styling to get away from the drear black and white.
 - Elide repetitive headers in Conversation transcript.
   - Especially for game events, but possibly others as well.
