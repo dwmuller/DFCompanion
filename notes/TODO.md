@@ -15,7 +15,6 @@ prepare underlying infrastructure.
     categories are displayed.
   - Move AiUsage output items to events and use this mechanism for display.
 - Add info, trace, and debug events to instrument critical program activity.
-- ? Implement an optional tracing subscriber that enqueues OutputItems.
 - Revisit the game time representation. Consider a machine-readable form of year
   plus ticks since the start of that year, and/or a fixed-width, zero-padded
   string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as
