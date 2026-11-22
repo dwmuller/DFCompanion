@@ -18,11 +18,9 @@ use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::ai_config::{ModelProfileInput, TokenBudget};
 use crate::{
-    ai_config::{
-        supported_interaction_method_from_name, supported_interaction_method_name, AiConfiguration,
-        ConfigurationRepository,
-    },
+    ai_config::{supported_interaction_method_from_name, AiConfiguration, ConfigurationRepository},
     ai_providers::built_in_providers,
     app::CompanionApp,
     events::{ExternalEvent, GameEvent},
@@ -51,6 +49,8 @@ struct ConfigurationForm {
     model_id: String,
     url: String,
     system_text: String,
+    context_window_tokens: u32,
+    max_output_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -197,9 +197,24 @@ async fn plugin_event(
         return plugin_event_response(status_code, "rejected", &message);
     }
 
+    let event_date = event.date.clone();
+    let event_category = event.category.clone();
     match app.event_queue().try_send(ExternalEvent::GameEvent(event)) {
-        Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Event accepted."),
+        Ok(()) => {
+            tracing::debug!(
+                date = event_date,
+                category = event_category,
+                remaining = app.event_queue().capacity_remaining(),
+                "accepted DFHack report"
+            );
+            plugin_event_response(StatusCode::OK, "accepted", "Event accepted.")
+        }
         Err(message) => {
+            tracing::warn!(
+                date = event_date,
+                category = event_category,
+                "DFHack report queue rejected event: {message}"
+            );
             app.notifier().notify(DisplayMessage::new(
                 DisplayMessageKind::Warning,
                 message.clone(),
@@ -366,27 +381,9 @@ async fn edit_configuration_form_fragment(
         }
         Err(response) => return (StatusCode::INTERNAL_SERVER_ERROR, response).into_response(),
     };
-    let method_name = match supported_interaction_method_name(config.interaction_method) {
-        Some(name) => name.to_owned(),
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Unsupported interaction method stored",
-            )
-                .into_response()
-        }
-    };
     fragment_response(
         StatusCode::OK,
-        templates::render_edit_form(
-            &id,
-            &config.name,
-            &method_name,
-            &config.url,
-            &config.model_id,
-            &config.system_text,
-            "",
-        ),
+        templates::render_edit_form(&config, ""),
         "edit configuration form",
     )
 }
@@ -421,13 +418,17 @@ async fn create_configuration_fragment(
             );
         }
     };
-    let configuration = match app.ai.configurations.create(
-        &form.name,
-        method,
-        &form.model_id,
-        &form.url,
-        &form.system_text,
-    ) {
+    let configuration = match app.ai.configurations.create_with_limits(ModelProfileInput {
+        name: &form.name,
+        interaction_method: method,
+        model_id: &form.model_id,
+        url: &form.url,
+        system_text: &form.system_text,
+        token_budget: TokenBudget {
+            context_window_tokens: form.context_window_tokens,
+            max_output_tokens: form.max_output_tokens,
+        },
+    }) {
         Ok(configuration) => configuration,
         Err(error) => {
             return configuration_form_error_response(StatusCode::BAD_REQUEST, "new", &error)
@@ -491,13 +492,19 @@ async fn update_configuration_fragment(
             );
         }
     };
-    let configuration = match app.ai.configurations.update(
+    let configuration = match app.ai.configurations.update_with_limits(
         &id,
-        &form.name,
-        method,
-        &form.model_id,
-        &form.url,
-        &form.system_text,
+        ModelProfileInput {
+            name: &form.name,
+            interaction_method: method,
+            model_id: &form.model_id,
+            url: &form.url,
+            system_text: &form.system_text,
+            token_budget: TokenBudget {
+                context_window_tokens: form.context_window_tokens,
+                max_output_tokens: form.max_output_tokens,
+            },
+        },
     ) {
         Ok(configuration) => configuration,
         Err(error) => {

@@ -14,6 +14,8 @@ fn list_items_maps_summaries_and_marks_the_active_configuration() {
             model_id: String::new(),
             url: String::new(),
             system_text: String::new(),
+            context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+            max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
         },
         AiConfiguration {
             id: "test-id-2".to_owned(),
@@ -22,6 +24,8 @@ fn list_items_maps_summaries_and_marks_the_active_configuration() {
             model_id: String::new(),
             url: String::new(),
             system_text: String::new(),
+            context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+            max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
         },
     ]
     .into_iter()

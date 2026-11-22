@@ -19,8 +19,8 @@ use tracing::instrument;
 
 use crate::{
     ai::{
-        build_prompt, is_no_comment, should_compact, AiInput, CompactionOutput, History, Prompt,
-        TurnError, TurnOutput,
+        build_prompt, history_exceeds_hard_limit, is_no_comment, should_compact, AiInput,
+        CompactionOutput, History, Prompt, TurnError, TurnOutput,
     },
     ai_config::AiConfiguration,
     events::GameEvent,
@@ -34,6 +34,9 @@ pub const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 pub const EVENT_FLUSH_DELAY: Duration = Duration::from_secs(5);
 /// How many completed turns are kept as rollback checkpoints.
 const MAX_TURN_RECORDS: usize = 50;
+/// How many history-growing turns may follow compaction before the soft
+/// threshold is considered again. Hard context exhaustion still overrides it.
+const COMPACTION_COOLDOWN_TURNS: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChatState {
@@ -219,6 +222,9 @@ pub struct ChatSession {
     in_flight: Option<InFlight>,
     /// A compaction job in flight, if any.
     in_flight_compaction: Option<InFlightCompaction>,
+    /// History-growing turns allowed after compaction before applying the soft
+    /// threshold again. Hard exhaustion overrides this.
+    compaction_cooldown_turns: usize,
     blocked: bool,
     /// Whether the next turn should carry the "the conversation was rolled
     /// back" note. Cleared once a turn that included it succeeds.
@@ -251,6 +257,7 @@ impl ChatSession {
             records: VecDeque::new(),
             in_flight: None,
             in_flight_compaction: None,
+            compaction_cooldown_turns: 0,
             blocked: false,
             rolled_back_note_due: false,
             restoration_note_dates: None,
@@ -482,14 +489,16 @@ impl ChatSession {
                 return;
             }
         };
-        if should_compact(&self.history) {
+        let compact = should_compact(&self.history, &configuration);
+        let hard_limit_reached = history_exceeds_hard_limit(&self.history, &configuration);
+        if compact && (self.compaction_cooldown_turns == 0 || hard_limit_reached) {
             self.start_compaction(configuration, effects);
             return;
         }
         let Some(prompt) = build_prompt(
             &self.history,
             &self.queue,
-            &configuration.system_text,
+            &configuration,
             self.rolled_back_note_due,
             self.restoration_note_dates
                 .as_ref()
@@ -574,7 +583,11 @@ impl ChatSession {
             }) => {
                 let is_user_interaction = prompt.kind.is_user_interaction();
                 let inputs = self.queue.drain(..prompt.included_inputs).collect();
+                let history_changed = history != self.history;
                 let history_before = std::mem::replace(&mut self.history, history);
+                if history_changed && self.compaction_cooldown_turns > 0 {
+                    self.compaction_cooldown_turns -= 1;
+                }
                 self.records.push_back(TurnRecord {
                     inputs,
                     history_before,
@@ -638,6 +651,7 @@ impl ChatSession {
         match result {
             Ok(output) => {
                 self.history = output.history;
+                self.compaction_cooldown_turns = COMPACTION_COOLDOWN_TURNS;
                 if !output.usage.is_empty() {
                     effects.push(Effect::UserEvent(UserEvent::new(
                         UserEventKind::AiUsage,

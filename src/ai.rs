@@ -18,19 +18,24 @@ use crate::{
     notifications::NotificationId,
 };
 
-pub const MAX_INPUT_TOKENS: usize = 16_000;
-pub const MAX_OUTPUT_TOKENS: u32 = 8_192;
+pub const MAX_INPUT_TOKENS: usize = (crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS
+    - crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS) as usize;
 pub const MAX_HISTORY_MESSAGES: usize = 20;
 
 /// Number of most-recent messages kept verbatim outside the summary when
 /// compaction replaces older turns.
-pub const COMPACTION_KEEP_RECENT_MESSAGES: usize = 6;
+pub const COMPACTION_KEEP_RECENT_MESSAGES: usize = 4;
 /// Target size of the rolling summary, in estimated tokens. Sent to the model
 /// as guidance; the summary is not truncated to fit it.
-pub const COMPACTION_SUMMARY_TOKEN_TARGET: usize = 2_048;
+pub const COMPACTION_SUMMARY_TOKEN_TARGET: usize = 1_536;
 /// A summarization result larger than this is rejected as a failure, leaving
 /// the previous history unchanged.
-pub const COMPACTION_SUMMARY_TOKEN_HARD_LIMIT: usize = 4_096;
+pub const COMPACTION_SUMMARY_TOKEN_HARD_LIMIT: usize = 2_560;
+const COMPACTION_MAX_OUTPUT_TOKENS: u32 = 2_560;
+const MIN_CURRENT_PROMPT_TOKENS: usize = 1_024;
+const COMPACTION_HISTORY_FRACTION_NUMERATOR: usize = 2;
+const COMPACTION_HISTORY_FRACTION_DENOMINATOR: usize = 3;
+const TOOL_RESULT_OVERHEAD_TOKENS: usize = 128;
 pub const CHAT_HISTORY_SNAPSHOT_VERSION: u32 = 1;
 const MAX_SNAPSHOT_MESSAGES: usize = MAX_HISTORY_MESSAGES + 2;
 const MAX_SNAPSHOT_SUMMARY_BYTES: usize = 64 * 1024;
@@ -381,7 +386,7 @@ pub struct Prompt {
 pub fn build_prompt(
     history: &History,
     pending_input: &VecDeque<AiInput>,
-    system_text: &str,
+    configuration: &AiConfiguration,
     rollback_note_due: bool,
     restoration_note_due: Option<(&str, &str)>,
 ) -> Option<Prompt> {
@@ -396,11 +401,12 @@ pub fn build_prompt(
             &restored_history_note(saved_game_date, current_game_date),
         );
     }
-    let system_text_tokens = estimate_token_count(system_text);
+    let system_text_tokens = estimate_token_count(&configuration.system_text);
     let tools_tokens = tools_tokens_estimate();
     let history_tokens = history_tokens_estimate(history);
-    let content_tokens_limit =
-        MAX_INPUT_TOKENS - system_text_tokens - history_tokens - tools_tokens;
+    let content_tokens_limit = configuration
+        .input_token_budget()
+        .saturating_sub(system_text_tokens + history_tokens + tools_tokens);
     let mut content_tokens: usize = estimate_token_count(&content);
 
     let requests = pending_input
@@ -471,7 +477,7 @@ pub fn build_prompt(
         return None;
     }
     let total_tokens = system_text_tokens + content_tokens + history_tokens + tools_tokens;
-    assert!(total_tokens <= MAX_INPUT_TOKENS);
+    assert!(total_tokens <= configuration.input_token_budget());
     let token_estimates = AiPromptTokenEstimates {
         system_text_tokens,
         content_tokens,
@@ -518,10 +524,29 @@ fn history_tokens_estimate(history: &History) -> usize {
 /// Whether `history` should be compacted before the next turn: it holds more
 /// messages than are kept verbatim, and either exceeds the message limit or
 /// has grown to a large share of the input budget.
-pub fn should_compact(history: &History) -> bool {
-    history.messages().len() > COMPACTION_KEEP_RECENT_MESSAGES
-        && (history.messages().len() > MAX_HISTORY_MESSAGES
-            || history_tokens_estimate(history) > MAX_INPUT_TOKENS / 2)
+pub fn should_compact(history: &History, configuration: &AiConfiguration) -> bool {
+    if history_exceeds_hard_limit(history, configuration) {
+        return true;
+    }
+    if history.messages().len() <= COMPACTION_KEEP_RECENT_MESSAGES {
+        return false;
+    }
+    let fixed_tokens = estimate_token_count(&configuration.system_text) + tools_tokens_estimate();
+    let history_budget = configuration
+        .input_token_budget()
+        .saturating_sub(fixed_tokens + MIN_CURRENT_PROMPT_TOKENS);
+    let soft_history_limit = history_budget * COMPACTION_HISTORY_FRACTION_NUMERATOR
+        / COMPACTION_HISTORY_FRACTION_DENOMINATOR;
+    history.messages().len() > MAX_HISTORY_MESSAGES
+        || history_tokens_estimate(history) > soft_history_limit
+}
+
+pub fn history_exceeds_hard_limit(history: &History, configuration: &AiConfiguration) -> bool {
+    let fixed_tokens = estimate_token_count(&configuration.system_text) + tools_tokens_estimate();
+    history_tokens_estimate(history)
+        > configuration
+            .input_token_budget()
+            .saturating_sub(fixed_tokens + MIN_CURRENT_PROMPT_TOKENS)
 }
 
 /// Splits a history into the older messages to summarize and the recent ones
@@ -639,7 +664,13 @@ impl AiRuntime {
         history: &History,
         cancel: &CancellationToken,
     ) -> Result<CompactionOutput, TurnError> {
-        let Some((older, recent)) = split_for_compaction(history) else {
+        let (older, recent) = if let Some(parts) = split_for_compaction(history) {
+            parts
+        } else if history_exceeds_hard_limit(history, configuration)
+            && !history.summary().is_empty()
+        {
+            (&[][..], history.messages())
+        } else {
             return Ok(CompactionOutput {
                 history: history.clone(),
                 usage: Vec::new(),
@@ -686,10 +717,11 @@ impl AiRuntime {
             .with_system(configuration.system_text.clone())
             .with_tools(crate::ai_tools::definitions())
             .with_store(false);
-        let options = ChatOptions::default().with_max_tokens(MAX_OUTPUT_TOKENS);
+        let options = ChatOptions::default().with_max_tokens(configuration.max_output_tokens);
         let mut budget = crate::ai_tools::ToolBudget::new();
         let mut usage: Vec<AiTurnUsage> = Vec::new();
         let mut purpose = "initial request".to_owned();
+        let mut estimated_request_tokens = prompt.token_estimates.total_tokens;
         loop {
             if cancel.is_cancelled() {
                 return Err(TurnError::Cancelled);
@@ -709,6 +741,14 @@ impl AiRuntime {
                     configuration.interaction_method
                 )
             })?;
+            let prompt_tokens = response
+                .usage
+                .prompt_tokens
+                .map_or(estimated_request_tokens, |tokens| tokens as usize);
+            let completion_tokens = response
+                .usage
+                .completion_tokens
+                .map_or(0, |tokens| tokens as usize);
             usage.push(AiTurnUsage::from_genai_usage(&response.usage, &purpose));
 
             let tool_calls = response
@@ -759,17 +799,42 @@ impl AiRuntime {
             // All results must travel in one message: Anthropic-style APIs require every
             // tool_result for a turn in the single message after the tool_use turn.
             let mut responses = Vec::with_capacity(tool_calls.len());
+            let fixed_next_request_tokens = prompt_tokens.saturating_add(completion_tokens);
+            let mut tool_round_tokens =
+                tool_calls.len().saturating_mul(TOOL_RESULT_OVERHEAD_TOKENS);
             purpose = format!(
                 "tool call(s) {}",
                 tool_calls.iter().map(|call| &call.fn_name).join(", ")
             );
             for call in &tool_calls {
-                let result = match budget.take() {
-                    Ok(()) => crate::ai_tools::execute(&self.game_state, call).await,
-                    Err(message) => serde_json::json!({"error": message}).to_string(),
+                let remaining = configuration
+                    .input_token_budget()
+                    .saturating_sub(fixed_next_request_tokens.saturating_add(tool_round_tokens));
+                let call_count_error = budget.take().err();
+                let result = if let Some(message) = call_count_error {
+                    serde_json::json!({"error": message}).to_string()
+                } else {
+                    let result = crate::ai_tools::execute(&self.game_state, call).await;
+                    let result_tokens = estimate_token_count(&result);
+                    if result_tokens <= remaining {
+                        tool_round_tokens = tool_round_tokens.saturating_add(result_tokens);
+                        result
+                    } else {
+                        serde_json::json!({
+                            "error": "Tool result omitted because this round would exceed the configured input token budget.",
+                            "tool": call.fn_name,
+                            "result_tokens": result_tokens,
+                            "remaining_tokens": remaining,
+                            "input_budget": configuration.input_token_budget()
+                        })
+                        .to_string()
+                    }
                 };
                 responses.push(ToolResponse::from_tool_call(call, result));
             }
+            estimated_request_tokens = prompt_tokens
+                .saturating_add(completion_tokens)
+                .saturating_add(tool_round_tokens);
             request = request.append_message(GenaiMessage::from(responses));
         }
     }
@@ -784,12 +849,20 @@ impl AiRuntime {
         cancel: &CancellationToken,
     ) -> Result<CompactionOutput, TurnError> {
         let client = build_client(configuration, key)?;
-        let request = ChatRequest::new(vec![GenaiMessage::user(compaction_request_text(
-            summary, older,
-        ))])
-        .with_system(COMPACTION_SYSTEM_TEXT.to_owned())
-        .with_store(false);
-        let options = ChatOptions::default().with_max_tokens(MAX_OUTPUT_TOKENS);
+        let request_text = compaction_request_text(summary, older);
+        let estimated_input_tokens =
+            estimate_token_count(COMPACTION_SYSTEM_TEXT) + estimate_token_count(&request_text);
+        if estimated_input_tokens > configuration.input_token_budget() {
+            return Err(TurnError::Failed(format!(
+                "Compaction input would exceed the configured input budget (estimated {estimated_input_tokens} of {} tokens).",
+                configuration.input_token_budget()
+            )));
+        }
+        let request = ChatRequest::new(vec![GenaiMessage::user(request_text)])
+            .with_system(COMPACTION_SYSTEM_TEXT.to_owned())
+            .with_store(false);
+        let options = ChatOptions::default()
+            .with_max_tokens(COMPACTION_MAX_OUTPUT_TOKENS.min(configuration.max_output_tokens));
         if cancel.is_cancelled() {
             return Err(TurnError::Cancelled);
         }

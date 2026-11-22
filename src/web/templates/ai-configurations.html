@@ -4,23 +4,23 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {% include "htmx-config.html" %}
-    <title>AI Configurations — DFCompanion</title>
+    <title>AI Models — DFCompanion</title>
     <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/ai-configurations.js" defer></script>
     <link rel="stylesheet" href="/assets/style.css">
   </head>
   <body>
-    <h1>AI Configurations</h1>
-    <p>Configuration metadata is saved locally. API keys are stored separately in the operating system credential vault and are never returned to this page.</p>
+    <h1>AI Model Profiles</h1>
+    <p>Model and connection metadata is saved locally. API keys are stored separately in the operating system credential vault and are never returned to this page.</p>
     <p><a href="/">Back to chat</a></p>
 
     <section aria-labelledby="active-configuration-heading">
-      <h2 id="active-configuration-heading">Active configuration</h2>
+      <h2 id="active-configuration-heading">Active model</h2>
       {% include "active-configuration.html" %}
     </section>
 
     <section aria-labelledby="config-list-heading">
-      <h2 id="config-list-heading">Saved configurations</h2>
+      <h2 id="config-list-heading">Saved model profiles</h2>
       {% include "configuration-list.html" %}
     </section>
   </body>

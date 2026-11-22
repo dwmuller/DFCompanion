@@ -96,6 +96,19 @@ fn test_prompt(kind: PromptKind, content: &str) -> Prompt {
     }
 }
 
+fn prompt_configuration() -> AiConfiguration {
+    AiConfiguration {
+        id: "test".to_owned(),
+        name: "Test".to_owned(),
+        interaction_method: genai::adapter::AdapterKind::OpenAI,
+        model_id: "model".to_owned(),
+        url: "https://api.openai.com/v1/".to_owned(),
+        system_text: DEFAULT_SYSTEM_TEXT.to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+    }
+}
+
 #[test]
 fn should_mark_restored_history_and_include_both_game_dates_in_prompt() {
     let prompt = build_prompt(
@@ -104,7 +117,7 @@ fn should_mark_restored_history_and_include_both_game_dates_in_prompt() {
             text: "What changed?".to_owned(),
             id: None,
         }]),
-        DEFAULT_SYSTEM_TEXT,
+        &prompt_configuration(),
         false,
         Some(("250-01-01:0", "250-02-03:400")),
     )
@@ -293,11 +306,11 @@ fn should_compact_triggers_on_message_count() {
     for _ in 0..(MAX_HISTORY_MESSAGES / 2) {
         history = history_after_turn(&history, &prompt, "a");
     }
-    assert!(!should_compact(&history));
+    assert!(!should_compact(&history, &prompt_configuration()));
 
     // Past the message limit: compact.
     history = history_after_turn(&history, &prompt, "b");
-    assert!(should_compact(&history));
+    assert!(should_compact(&history, &prompt_configuration()));
 }
 
 #[test]
@@ -309,7 +322,7 @@ fn should_compact_triggers_on_token_estimate() {
     for _ in 0..(COMPACTION_KEEP_RECENT_MESSAGES / 2 + 1) {
         history = history_after_turn(&history, &prompt, &big);
     }
-    assert!(should_compact(&history));
+    assert!(should_compact(&history, &prompt_configuration()));
 }
 
 #[test]
@@ -354,6 +367,8 @@ async fn a_cancelled_turn_sends_nothing_and_reports_cancellation() {
         model_id: "test-model".to_owned(),
         url,
         system_text: "Custom system instructions.".to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
     };
     let prompt = test_prompt(PromptKind::UserRequest, "Hello.");
     let cancel = CancellationToken::new();
@@ -398,6 +413,8 @@ async fn cancelling_while_waiting_for_the_provider_ends_the_turn() {
         model_id: "test-model".to_owned(),
         url,
         system_text: "Custom system instructions.".to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
     };
     let prompt = test_prompt(PromptKind::UserRequest, "Hello.");
     let cancel = CancellationToken::new();
@@ -512,6 +529,8 @@ async fn genai_dispatches_to_each_configured_protocol_and_url() {
             model_id: "test-model".to_owned(),
             url,
             system_text: "Custom system instructions.".to_owned(),
+            context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+            max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
         };
         let result = runtime
             .run_turn_with_key(
@@ -576,6 +595,8 @@ async fn anthropic_tool_results_share_one_message() {
         model_id: "test-model".to_owned(),
         url,
         system_text: "Custom system instructions.".to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
     };
     let prompt = Prompt {
         kind: PromptKind::Automated,
@@ -661,6 +682,8 @@ async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
         model_id: "test-model".to_owned(),
         url,
         system_text: "Custom system instructions.".to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
     };
     let prompt = Prompt {
         kind: PromptKind::UserRequest,
@@ -696,6 +719,68 @@ async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
         .contains("Unknown tool: unknown_test_tool"));
 }
 
+#[tokio::test]
+async fn oversized_tool_results_should_be_reported_without_blocking_the_turn() {
+    use genai::adapter::AdapterKind;
+
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![
+        json!({
+            "id": "chatcmpl-tool",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "test-model",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-test",
+                        "type": "function",
+                        "function": {"name": "unknown_test_tool", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 8190, "completion_tokens": 100, "total_tokens": 8290}
+        }),
+        json!({
+            "id": "chatcmpl-final",
+            "object": "chat.completion",
+            "created": 2,
+            "model": "test-model",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Answered with available context."},
+                "finish_reason": "stop"
+            }]
+        }),
+    ])
+    .await;
+    let mut configuration = compaction_configuration(url);
+    configuration.interaction_method = AdapterKind::OpenAI;
+    configuration.context_window_tokens = 8_193;
+    configuration.max_output_tokens = 1;
+    let prompt = test_prompt(PromptKind::UserRequest, "Use a tool.");
+
+    let result = runtime
+        .run_turn_with_key(
+            &configuration,
+            "test-secret",
+            &History::default(),
+            &prompt,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let _ = requests.recv().await.unwrap();
+    let (_, _, _, second_request) = requests.recv().await.unwrap();
+    assert_eq!(result.answer, "Answered with available context.");
+    assert!(second_request.to_string().contains("Tool result omitted"));
+    server.abort();
+}
+
 /// A history with more messages than the compaction threshold allows.
 fn long_history() -> History {
     let prompt = test_prompt(PromptKind::UserRequest, "q");
@@ -715,6 +800,8 @@ fn compaction_configuration(url: String) -> AiConfiguration {
         model_id: "test-model".to_owned(),
         url,
         system_text: "Custom system instructions.".to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
     }
 }
 
@@ -766,6 +853,23 @@ async fn compaction_summarizes_older_messages_and_keeps_recent_ones() {
     assert!(body.contains("handoff for a future continuation"));
     assert!(!body.contains("Custom system instructions."));
     assert!(body.contains("Player turn:"));
+    assert!(request_body["max_tokens"].as_u64().unwrap() <= COMPACTION_MAX_OUTPUT_TOKENS as u64);
+}
+
+#[test]
+fn should_compact_sooner_when_model_input_budget_is_small() {
+    let mut history = History::default();
+    let prompt = test_prompt(PromptKind::UserRequest, "q");
+    for _ in 0..(COMPACTION_KEEP_RECENT_MESSAGES / 2 + 1) {
+        history = history_after_turn(&history, &prompt, &"word ".repeat(1_800));
+    }
+    let mut small = prompt_configuration();
+    small.context_window_tokens = 16_384;
+    small.max_output_tokens = 8_192;
+    let large = prompt_configuration();
+
+    assert!(should_compact(&history, &small));
+    assert!(!should_compact(&history, &large));
 }
 
 #[tokio::test]

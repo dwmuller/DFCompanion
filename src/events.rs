@@ -173,6 +173,10 @@ impl EventQueue {
         }
     }
 
+    pub fn capacity_remaining(&self) -> usize {
+        self.queue_tx.capacity()
+    }
+
     /// Enqueues a lifecycle observation without sharing the capacity of the
     /// bounded user/report queue.
     pub fn try_send_lifecycle(&self, event: LifecycleEvent) -> Result<(), String> {

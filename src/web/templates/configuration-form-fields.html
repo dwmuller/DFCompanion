@@ -55,6 +55,33 @@
 
 <p>Suggested models are editable and may vary by account or region.</p>
 
+<label for="{{ values.id }}-context-window">Context window tokens</label>
+<input
+  id="{{ values.id }}-context-window"
+  name="context_window_tokens"
+  type="number"
+  min="4097"
+  max="4294967295"
+  step="1"
+  value="{{ values.context_window_tokens }}"
+  required>
+<p>The model's total input-plus-output context window.</p>
+
+<label for="{{ values.id }}-max-output">Maximum output tokens</label>
+<input
+  id="{{ values.id }}-max-output"
+  name="max_output_tokens"
+  type="number"
+  min="1"
+  max="4294967295"
+  step="1"
+  value="{{ values.max_output_tokens }}"
+  required>
+<p>
+  Reserved response budget. DFCompanion subtracts this from the context window;
+  at least 4096 tokens must remain for input.
+</p>
+
 <label for="{{ values.id }}-configuration-system-text">System text</label>
 <textarea
   id="{{ values.id }}-configuration-system-text"

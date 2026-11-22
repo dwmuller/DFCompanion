@@ -12,7 +12,7 @@ The current Lua event prototype has been tested with Dwarf Fortress 53.16 and DF
 1. Start DFCompanion. The local web app is at <http://127.0.0.1:3000/>.
 2. Copy the `dfcompanion <token>` command shown on the web page.
 3. With a fortress loaded in Dwarf Fortress, paste that command into the DFHack console. This enables the script and sends a connection-test event.
-4. Open **Manage AI configurations**, create a configuration, and save its API key (see [Getting AI API access](#getting-ai-api-access)).
+4. Open **Manage AI models**, create a model profile, and save its API key (see [Getting AI API access](#getting-ai-api-access)).
 5. Select the configuration on the main page. Review the selected service's privacy policy and data-use terms before chatting.
 6. Ask a question in the web app's Chat box. Reports received since the previous AI answer are sent along with your question.
 
@@ -20,7 +20,7 @@ DFCompanion and DFHack accept connections from localhost only; there is no share
 
 ## Using the DFHack script
 
-When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Only announcements are forwarded, in the same format as the `get_recent_reports` tool (game date, type, category, text). Forwarding is synchronous. If sending fails, the script retains the undelivered report, stays enabled, pauses the game, and raises an alert badge and a dismissible popup. Fix or restart DFCompanion and unpause; the plugin retries that report and resumes forwarding, or pauses again if the service is still unavailable. Run `disable dfcompanion` to stop forwarding. If AI processing becomes blocked while the game is running, DFCompanion pauses it and the script displays a popup with the reason.
+When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Only announcements are forwarded, in the same format as the `get_recent_reports` tool (game date, type, category, text). Forwarding is synchronous. If sending fails, the script retains the undelivered report, stays enabled, pauses the game, and writes the reason to the DFHack log. Fix or restart DFCompanion and unpause; the plugin retries that report and resumes forwarding, or pauses again if the service is still unavailable. Run `disable dfcompanion` to stop forwarding. If AI processing becomes blocked while the game is running, DFCompanion pauses it and the script logs the reason without opening a dialog.
 
 - `disable dfcompanion` stops forwarding reports.
 - `enable dfcompanion` re-enables it during the current DFHack session.
@@ -30,7 +30,7 @@ The enabled state is not saved; it resets when the map unloads or DFHack exits. 
 
 ## AI providers and privacy
 
-Create, rename, select, and delete named AI configurations on the **AI Configurations** page. Each has an interaction method (OpenAI Chat Completions, OpenAI Responses, or Anthropic), API URL, model ID, and editable system text. Built-in provider presets suggest a URL, interaction method, and model choices; these are editable hints, and the provider choice itself is not saved. A **Custom** choice makes no changes to the fields. The main page's dropdown selects which configuration will be used for chat. Use an HTTPS API base URL and the exact model ID accepted by the selected service. HTTP is allowed only for localhost. Configuration metadata is stored in `ai-configurations.json` in per-user local application data. New installations begin with an empty configuration list; existing settings and credential-vault entries are left untouched and are not migrated.
+Create, rename, select, and delete AI model profiles on the **AI Models** page. Each has an interaction method (OpenAI Chat Completions, OpenAI Responses, or Anthropic), API URL, model ID, editable system text, total context-window size, and reserved output-token limit. Built-in provider presets suggest a URL, interaction method, and model choices; these are editable hints, and the provider choice itself is not saved. A **Custom** choice makes no changes to the fields. The main page selector leads with the model ID and shows its provider route second. Use an HTTPS API base URL and the exact model ID accepted by the selected service. HTTP is allowed only for localhost. Profile metadata is stored in `ai-configurations.json` in per-user local application data; older profiles receive backward-compatible token-budget defaults. New installations begin with an empty profile list, and existing credential-vault entries are left untouched.
 
 The provider-neutral [`genai` Rust library](https://github.com/jeremychone/rust-genai) supplies the adapters for the three interaction methods. API keys are stored in the operating system credential vault (Windows Credential Manager on Windows), under a configuration-specific account; they are never returned to the browser or written to the configuration file or a game save. Leave the key field blank when editing to keep the saved key. Use **Forget API key** to remove it.
 

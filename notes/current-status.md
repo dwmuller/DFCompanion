@@ -23,6 +23,17 @@ What feature or bug we're actively working on.
 - The main page shows a discreet live DFHack/world/fortress indicator beside the
   chat state. It renders immediately and updates through an HTMX SSE stream;
   the last fortress name remains visible after unload.
+- AI configurations now behave as model profiles with per-model context-window
+  and output-token budgets. Older saved profiles load with 32,768 total and
+  8,192 output tokens, while the model selector presents the model and route
+  ahead of the profile nickname.
+- History compaction uses the active model's derived input budget, caps summary
+  output separately, keeps four recent messages, and gives a newly compacted
+  summary two growing turns before the soft threshold applies again. Hard
+  context exhaustion still forces immediate compaction.
+- Tool rounds are checked against the active model's input budget. Results that
+  would exceed it are replaced with explicit per-tool errors, allowing the model
+  to finish from partial evidence rather than blocking AI processing.
 - The AI's game tools are gated on a loaded fortress: a tool call with no
   fortress loaded returns an error the model can relay, while the conversation
   itself is never paused. This fixes a crash where querying fort data during a

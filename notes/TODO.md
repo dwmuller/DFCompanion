@@ -41,6 +41,23 @@ Items that are primarily about the mechanics of AI interactions.
 - Support for intermediate "reasoning" output.
 - Investigate the use of foreign Dwarf Fortress MCP services.
   - See `notes/foreign_mcp_planning.md`
+- Add compact response modes for detail-heavy list tools:
+  - `list_work_orders` and `list_stockpiles` should offer `index`, `summary`,
+    and `full` detail levels, with compact output as the default.
+  - Stockpile index/summary output should separate identity, contents, and link
+    summaries from the full `subfilters` payload.
+  - Work-order index/summary output should separate basic identity/state from
+    full condition and reagent arrays.
+  - Lower default page sizes for these tools while retaining explicit paging.
+  - When a result is omitted for the configured token budget, preserve
+    structured metadata such as row count, result size, remaining budget, and
+    suggested filters instead of returning only a generic truncation error.
+- Reduce the permanent tool-definition context cost with a hybrid help design.
+  Keep short tool descriptions, schemas, and argument constraints in every
+  request, but move detailed semantics, caveats, examples, and workflow guidance
+  behind a `tool_help` call. Split registry metadata into short and detailed
+  descriptions, and compare tool-call retries, help invocations, provider
+  rounds, and prompt tokens before accepting the change.
 
 ## Game-state tool improvements
 

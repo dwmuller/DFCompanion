@@ -10,6 +10,8 @@ fn configuration() -> AiConfiguration {
         model_id: "model".to_owned(),
         url: "http://localhost/".to_owned(),
         system_text: DEFAULT_SYSTEM_TEXT.to_owned(),
+        context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
     }
 }
 
@@ -920,7 +922,7 @@ fn drive_past_compaction_threshold(session: &mut ChatSession, now: Instant) {
             finished(turn_id, answer(&history, &prompt, "ok")),
         );
     }
-    assert!(should_compact(session.history()));
+    assert!(should_compact(session.history(), &configuration()));
 }
 
 /// Completes whatever work the effects start — a turn or a compaction — until
@@ -960,7 +962,7 @@ fn a_large_history_triggers_compaction_before_the_next_turn() {
         );
     }
     assert_eq!(session.history().len(), MAX_HISTORY_MESSAGES);
-    assert!(!should_compact(session.history()));
+    assert!(!should_compact(session.history(), &configuration()));
 
     // One more turn pushes the history past the limit.
     let effects = session.handle(&context(now), user("extra", 900));
@@ -969,7 +971,7 @@ fn a_large_history_triggers_compaction_before_the_next_turn() {
         &context(now),
         finished(turn_id, answer(&history, &prompt, "ok")),
     );
-    assert!(should_compact(session.history()));
+    assert!(should_compact(session.history(), &configuration()));
 
     // The next input compacts first; its turn waits for the result.
     let effects = session.handle(&context(now), user("next", 901));
@@ -1008,6 +1010,78 @@ fn a_successful_compaction_replaces_history_and_resumes_the_turn() {
     assert!(started_turn(&effects).is_some());
     assert_eq!(notified(&effects, DisplayMessageKind::Status).len(), 1);
     assert_eq!(persisted(&effects), vec![session.history()]);
+}
+
+#[test]
+fn a_successful_compaction_should_allow_two_growing_turns_before_soft_compaction_again() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let mut context = context(now);
+    let mut configuration = configuration();
+    configuration.context_window_tokens = 16_384;
+    configuration.max_output_tokens = 8_192;
+    context.configuration = Ok(Some(configuration.clone()));
+    drive_past_compaction_threshold(&mut session, now);
+    let before = session.history().clone();
+    let summary = (0..1_168).map(|i| format!("item{i} ")).collect::<String>();
+    let candidate = History::with_test_summary(&summary, &before);
+    let first_queue = VecDeque::from([AiInput::UserRequest {
+        text: "next".to_owned(),
+        id: None,
+    }]);
+    let first_prompt = build_prompt(&candidate, &first_queue, &configuration, false, None).unwrap();
+    let after_first = crate::ai::history_after_turn(&candidate, &first_prompt, "answer");
+    assert!(should_compact(&after_first, &configuration));
+
+    let effects = session.handle(&context, user("next", 500));
+    let (compaction_id, _, _) = started_compaction(&effects).expect("compaction starts");
+    let effects = session.handle(
+        &context,
+        compaction_finished(compaction_id, compacted(&summary, &before)),
+    );
+    let (turn_id, prompt, history, _) =
+        started_turn(&effects).expect("the first normal turn is allowed after compaction");
+    session.handle(
+        &context,
+        finished(turn_id, answer(&history, &prompt, "answer")),
+    );
+    assert!(should_compact(session.history(), &configuration));
+
+    let effects = session.handle(&context, user("after cooldown", 501));
+    let (turn_id, prompt, history, _) =
+        started_turn(&effects).expect("the second growing turn is still allowed");
+    session.handle(
+        &context,
+        finished(turn_id, answer(&history, &prompt, "second answer")),
+    );
+
+    let effects = session.handle(&context, user("compaction due", 502));
+    assert!(started_compaction(&effects).is_some());
+    assert!(started_turn(&effects).is_none());
+}
+
+#[test]
+fn hard_limit_should_override_cooldown_even_without_older_messages() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let mut context = context(now);
+    let mut configuration = configuration();
+    configuration.context_window_tokens = 16_384;
+    configuration.max_output_tokens = 8_192;
+    context.configuration = Ok(Some(configuration));
+    session.restore_history(
+        History::with_test_summary(
+            &(0..4_000).map(|i| format!("item{i} ")).collect::<String>(),
+            &History::default(),
+        ),
+        "250-01-01:0".to_owned(),
+        "250-01-02:0".to_owned(),
+    );
+
+    let effects = session.handle(&context, user("summarize again", 500));
+
+    assert!(started_compaction(&effects).is_some());
+    assert!(started_turn(&effects).is_none());
 }
 
 #[test]

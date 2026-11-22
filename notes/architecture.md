@@ -175,14 +175,18 @@ game event and every 30 seconds while the game runs, and may abstain by replying
 `NO_COMMENT`. Automatic event turns and periodic turns are independently
 enabled and are off by default.
 
-Prompts have an estimated 16,000-token input budget and a hard 8,192-token output
-cap. Prompt construction accounts for the configured system text, tool
+Each model profile configures its total context window and reserved output
+budget. Prompt construction subtracts the output reservation and accounts for
+the configured system text, tool
 definitions, history, and pending content, then includes a fitting contiguous
 prefix of user requests or reports; content that does not fit remains queued.
 Large completed histories are compacted before another turn by replacing older
-messages with an AI-written rolling summary while retaining the six most recent
-messages verbatim. The summary is carried into subsequent requests and is
-treated as untrusted conversation data, not as instructions.
+messages with an AI-written rolling summary while retaining four recent
+messages verbatim. Compaction uses a smaller output cap and permits two
+history-growing turns after compaction before applying the soft threshold again;
+hard exhaustion can override that cooldown. The summary is carried into
+subsequent requests and is treated as untrusted conversation data, not as
+instructions.
 
 Within a turn, `AiRuntime` repeatedly sends the growing `ChatRequest` until the
 provider returns a final text response. Each tool-use round appends the
@@ -191,10 +195,12 @@ from that batch. The combined result message is required for Anthropic-style
 tool-use APIs. Tool messages remain only in the current request; they do not
 become conversation-history messages after the turn.
 
-The 16,000-token estimate covers the initial prompt, not the tool messages
-accumulated during subsequent request rounds. Tool calls are therefore bounded
-in number by an application budget, and tools should return compact data rather
-than relying on the initial prompt limit to constrain their replies.
+The configured input budget is estimated initially and re-estimated after every
+tool batch using reported prompt/output usage plus the next tool results. Results
+that do not fit are omitted explicitly and the model receives a structured error
+for that tool, so it can answer from the remaining evidence without blocking the
+conversation. Tool calls are also bounded in number; tools should still return
+compact data to preserve useful evidence within the available budget.
 
 Turns run sequentially. A failed turn or compaction blocks further AI
 processing, pauses the game when possible, and retains pending inputs plus the

@@ -356,6 +356,7 @@ impl CompanionApp {
                 });
             }
             Effect::Block { reason } => {
+                tracing::warn!(%reason, "AI processing blocked; pausing fortress");
                 let this = self.clone();
                 tokio::spawn(async move {
                     let pause_result = this.pause_for_ai_block(&reason).await;

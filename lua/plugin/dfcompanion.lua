@@ -140,9 +140,10 @@ local function disable()
     print('DFCompanion Lua script disabled.')
 end
 
--- Pauses the game and notifies the player with a one-line alert badge plus a
--- dismissible popup. Unpausing is enough to carry on. Forwarding stays
--- enabled: if the problem persists, the next report pauses the game again.
+-- Pauses the game and notifies the player with a one-line alert badge.
+-- Unpausing is enough to retry. Forwarding stays enabled: if the problem
+-- persists, the next unpause pauses the game again. Modal popups are avoided
+-- because opening one from a DF state/report callback can block game input.
 local function report_failure(err, event)
     if event then
         pending_event = event
@@ -152,15 +153,8 @@ local function report_failure(err, event)
     local detail = tostring(err):gsub('^Could not submit an event to DFCompanion:%s*', '')
         :gsub('[^%s]*%.lua:%d+:%s*', ''):gsub('^.-C%+%+ exception:%s*', '')
     dfhack.world.SetPauseState(true)
-    dfhack.gui.showAnnouncement(MESSAGE_PREFIX .. ' problem sending events; game paused.',
-        COLOR_LIGHTRED, true)
-    -- Popup text is parsed for [tokens]; double brackets to show them literally.
-    local popup_detail = detail:gsub('%[', '[['):gsub('%]', ']]')
-    dfhack.gui.showPopupAnnouncement(
-        'DFCompanion could not send an event, so the game is paused.[B]' ..
-        popup_detail .. '[B]Start or fix the DFCompanion service and unpause, ' ..
-        'or run "disable dfcompanion" to stop forwarding events.')
-    dfhack.printerr(MESSAGE_PREFIX .. ' ' .. tostring(err))
+    dfhack.printerr(MESSAGE_PREFIX .. ' could not send an event; game paused. ' ..
+        detail .. ' Start or fix the service and unpause, or run "disable dfcompanion".')
 end
 
 -- Retries the report that caused the service-outage pause once the player
@@ -181,11 +175,8 @@ end
 
 local function report_ai_block_pause(reason)
     local detail = tostring(reason):gsub('%[', '[['):gsub('%]', ']]')
-    dfhack.gui.showAnnouncement(MESSAGE_PREFIX .. ' paused the game because AI processing is blocked.',
-        COLOR_LIGHTRED, true)
-    dfhack.gui.showPopupAnnouncement(
-        'DFCompanion paused Dwarf Fortress because AI processing is blocked.[B]' ..
-        detail .. '[B]Review the DFCompanion warning, then resume AI processing when ready.')
+    dfhack.printerr(MESSAGE_PREFIX .. ' paused the game because AI processing is blocked. ' ..
+        detail .. ' Review the DFCompanion warning, then resume AI processing when ready.')
 end
 
 -- Reports the game's loading state to DFCompanion so it can gate fort queries.

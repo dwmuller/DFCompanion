@@ -6,6 +6,7 @@ use std::fmt;
 use askama::Template;
 
 use crate::{
+    ai_config::TokenBudget,
     ai_config::{supported_interaction_methods, AiConfiguration},
     ai_providers::Provider,
     app::ChatState,
@@ -75,6 +76,8 @@ struct FormFieldValues {
     url: String,
     model_id: String,
     system_text: String,
+    context_window_tokens: u32,
+    max_output_tokens: u32,
     interaction_method: String,
     interaction_methods: Vec<InteractionMethodOption>,
 }
@@ -87,6 +90,7 @@ impl FormFieldValues {
         url: &str,
         model_id: &str,
         system_text: &str,
+        token_budget: TokenBudget,
     ) -> Self {
         Self {
             id: id.to_owned(),
@@ -95,6 +99,8 @@ impl FormFieldValues {
             url: url.to_owned(),
             model_id: model_id.to_owned(),
             system_text: system_text.to_owned(),
+            context_window_tokens: token_budget.context_window_tokens,
+            max_output_tokens: token_budget.max_output_tokens,
             interaction_methods: supported_interaction_methods()
                 .map(|method| InteractionMethodOption {
                     value: method.name.to_owned(),
@@ -482,7 +488,18 @@ pub fn render_empty_create_form(
     error: &str,
 ) -> Result<String, RenderError> {
     Ok(ConfigurationCreateFormTemplate {
-        values: FormFieldValues::new("new", "", "", "", "", ""),
+        values: FormFieldValues::new(
+            "new",
+            "",
+            "",
+            "",
+            "",
+            "",
+            TokenBudget {
+                context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+                max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
+            },
+        ),
         providers: providers
             .iter()
             .map(|provider| ProviderOption {
@@ -495,7 +512,7 @@ pub fn render_empty_create_form(
 }
 
 /// Renders a newly created configuration's list item followed by the closed
-/// "Create new configuration" row.
+/// "Create new model profile" row.
 pub fn render_created_configuration(
     configuration: &ConfigurationListItem,
 ) -> Result<String, RenderError> {
@@ -503,16 +520,22 @@ pub fn render_created_configuration(
 }
 
 pub fn render_edit_form(
-    id: &str,
-    name: &str,
-    interaction_method: &str,
-    url: &str,
-    model_id: &str,
-    system_text: &str,
+    configuration: &AiConfiguration,
     error: &str,
 ) -> Result<String, RenderError> {
+    let interaction_method =
+        crate::ai_config::supported_interaction_method_name(configuration.interaction_method)
+            .unwrap_or_default();
     Ok(ConfigurationEditFormTemplate {
-        values: FormFieldValues::new(id, name, interaction_method, url, model_id, system_text),
+        values: FormFieldValues::new(
+            &configuration.id,
+            &configuration.name,
+            interaction_method,
+            &configuration.url,
+            &configuration.model_id,
+            &configuration.system_text,
+            configuration.token_budget(),
+        ),
         error,
     }
     .render()?)
@@ -542,6 +565,19 @@ mod test {
             interaction_method: "Anthropic".to_owned(),
             model_id: "test-model".to_owned(),
             api_key_saved: key_saved,
+        }
+    }
+
+    fn editable_configuration() -> AiConfiguration {
+        AiConfiguration {
+            id: "edit-id".to_owned(),
+            name: "My config".to_owned(),
+            interaction_method: genai::adapter::AdapterKind::OpenAI,
+            model_id: "model".to_owned(),
+            url: "https://api.openai.com/v1/".to_owned(),
+            system_text: "System".to_owned(),
+            context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+            max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
         }
     }
 
@@ -617,6 +653,8 @@ mod test {
                 model_id: "m".to_owned(),
                 url: "https://api.openai.com/v1/".to_owned(),
                 system_text: "s".to_owned(),
+                context_window_tokens: crate::ai_config::DEFAULT_CONTEXT_WINDOW_TOKENS,
+                max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
             },
             true,
         )];
@@ -751,7 +789,7 @@ mod test {
         let rendered = render_configuration_list(&[]).expect("list should render");
 
         assert!(rendered.contains("id=\"new-configuration\""));
-        assert!(rendered.contains("Create new configuration"));
+        assert!(rendered.contains("Create new model profile"));
         assert!(!rendered.contains("No configurations yet."));
     }
 
@@ -815,8 +853,7 @@ mod test {
 
     #[test]
     fn edit_form_has_no_api_key_field() {
-        let rendered = render_edit_form("edit-id", "My config", "", "", "", "", "")
-            .expect("form should render");
+        let rendered = render_edit_form(&editable_configuration(), "").expect("form should render");
 
         assert!(!rendered.contains("name=\"api_key\""));
     }
@@ -849,8 +886,8 @@ mod test {
 
     #[test]
     fn edit_form_prefills_values_and_shows_error() {
-        let rendered = render_edit_form("edit-id", "My config", "", "", "", "", "Bad key")
-            .expect("form should render");
+        let rendered =
+            render_edit_form(&editable_configuration(), "Bad key").expect("form should render");
 
         assert!(rendered.contains("value=\"My config\""));
         assert!(rendered.contains("Bad key"));
@@ -862,6 +899,6 @@ mod test {
             .expect("success should render");
 
         assert!(rendered.contains("id=\"configuration-new-id\""));
-        assert!(rendered.contains("Create new configuration"));
+        assert!(rendered.contains("Create new model profile"));
     }
 }

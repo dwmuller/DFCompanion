@@ -22,6 +22,32 @@ pub(crate) const MAX_MODEL_ID_BYTES: usize = 256;
 const MAX_URL_BYTES: usize = 512;
 pub const MAX_SYSTEM_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_API_KEY_BYTES: usize = 4_096;
+pub const DEFAULT_CONTEXT_WINDOW_TOKENS: u32 = 32_768;
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8_192;
+const MIN_REQUEST_INPUT_TOKENS: u32 = 4_096;
+
+pub(crate) const fn default_context_window_tokens() -> u32 {
+    DEFAULT_CONTEXT_WINDOW_TOKENS
+}
+
+pub(crate) const fn default_max_output_tokens() -> u32 {
+    DEFAULT_MAX_OUTPUT_TOKENS
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenBudget {
+    pub context_window_tokens: u32,
+    pub max_output_tokens: u32,
+}
+
+pub struct ModelProfileInput<'a> {
+    pub name: &'a str,
+    pub interaction_method: AdapterKind,
+    pub model_id: &'a str,
+    pub url: &'a str,
+    pub system_text: &'a str,
+    pub token_budget: TokenBudget,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct SupportedAdapter {
@@ -86,6 +112,23 @@ pub struct AiConfiguration {
     pub model_id: String,
     pub url: String,
     pub system_text: String,
+    #[serde(default = "default_context_window_tokens")]
+    pub context_window_tokens: u32,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
+}
+
+impl AiConfiguration {
+    pub fn input_token_budget(&self) -> usize {
+        (self.context_window_tokens - self.max_output_tokens) as usize
+    }
+
+    pub fn token_budget(&self) -> TokenBudget {
+        TokenBudget {
+            context_window_tokens: self.context_window_tokens,
+            max_output_tokens: self.max_output_tokens,
+        }
+    }
 }
 
 pub(crate) fn deserialize_interaction_method<'de, D>(
@@ -184,17 +227,43 @@ impl ConfigurationRepository {
         url: &str,
         system_text: &str,
     ) -> Result<AiConfiguration, String> {
-        validate_fields(interaction_method, name, model_id, url, system_text)?;
+        self.create_with_limits(ModelProfileInput {
+            name,
+            interaction_method,
+            model_id,
+            url,
+            system_text,
+            token_budget: TokenBudget {
+                context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+                max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+            },
+        })
+    }
+
+    pub fn create_with_limits(
+        &self,
+        input: ModelProfileInput<'_>,
+    ) -> Result<AiConfiguration, String> {
+        validate_fields(
+            input.interaction_method,
+            input.name,
+            input.model_id,
+            input.url,
+            input.system_text,
+            input.token_budget,
+        )?;
         let mut current = self.write()?;
-        ensure_unique_name(&current.configurations, name, None)?;
+        ensure_unique_name(&current.configurations, input.name, None)?;
         let id = new_configuration_id()?;
         let configuration = AiConfiguration {
             id,
-            name: name.trim().to_owned(),
-            interaction_method,
-            model_id: model_id.trim().to_owned(),
-            url: normalize_url(url)?,
-            system_text: system_text.trim().to_owned(),
+            name: input.name.trim().to_owned(),
+            interaction_method: input.interaction_method,
+            model_id: input.model_id.trim().to_owned(),
+            url: normalize_url(input.url)?,
+            system_text: input.system_text.trim().to_owned(),
+            context_window_tokens: input.token_budget.context_window_tokens,
+            max_output_tokens: input.token_budget.max_output_tokens,
         };
         let mut next = current.clone();
         next.configurations.push(configuration.clone());
@@ -212,20 +281,51 @@ impl ConfigurationRepository {
         url: &str,
         system_text: &str,
     ) -> Result<AiConfiguration, String> {
-        validate_fields(interaction_method, name, model_id, url, system_text)?;
+        let token_budget = self
+            .try_get(id)?
+            .ok_or_else(|| "AI configuration was not found.".to_owned())?
+            .token_budget();
+        self.update_with_limits(
+            id,
+            ModelProfileInput {
+                name,
+                interaction_method,
+                model_id,
+                url,
+                system_text,
+                token_budget,
+            },
+        )
+    }
+
+    pub fn update_with_limits(
+        &self,
+        id: &str,
+        input: ModelProfileInput<'_>,
+    ) -> Result<AiConfiguration, String> {
+        validate_fields(
+            input.interaction_method,
+            input.name,
+            input.model_id,
+            input.url,
+            input.system_text,
+            input.token_budget,
+        )?;
         let mut current = self.write()?;
-        ensure_unique_name(&current.configurations, name, Some(id))?;
+        ensure_unique_name(&current.configurations, input.name, Some(id))?;
         let mut next = current.clone();
         let configuration = next
             .configurations
             .iter_mut()
             .find(|configuration| configuration.id == id)
             .ok_or_else(|| "AI configuration was not found.".to_owned())?;
-        configuration.name = name.trim().to_owned();
-        configuration.interaction_method = interaction_method;
-        configuration.model_id = model_id.trim().to_owned();
-        configuration.url = normalize_url(url)?;
-        configuration.system_text = system_text.trim().to_owned();
+        configuration.name = input.name.trim().to_owned();
+        configuration.interaction_method = input.interaction_method;
+        configuration.model_id = input.model_id.trim().to_owned();
+        configuration.url = normalize_url(input.url)?;
+        configuration.system_text = input.system_text.trim().to_owned();
+        configuration.context_window_tokens = input.token_budget.context_window_tokens;
+        configuration.max_output_tokens = input.token_budget.max_output_tokens;
         let updated = configuration.clone();
         self.persist(&next)?;
         *current = next;
@@ -351,6 +451,7 @@ fn validate_file(file: &ConfigurationFile) -> Result<(), String> {
             &configuration.model_id,
             &configuration.url,
             &configuration.system_text,
+            configuration.token_budget(),
         )?;
         if !names.insert(configuration.name.to_lowercase()) {
             return Err("AI configuration file contains duplicate names.".to_owned());
@@ -372,6 +473,7 @@ fn validate_fields(
     model_id: &str,
     url: &str,
     system_text: &str,
+    token_budget: TokenBudget,
 ) -> Result<(), String> {
     if !is_supported_interaction_method(interaction_method) {
         return Err("Unsupported AI interaction method.".to_owned());
@@ -394,6 +496,18 @@ fn validate_fields(
     if system_text.trim().is_empty() || system_text.trim().len() > MAX_SYSTEM_TEXT_BYTES {
         return Err(format!(
             "System text must contain between 1 and {MAX_SYSTEM_TEXT_BYTES} bytes."
+        ));
+    }
+    if token_budget.max_output_tokens == 0 {
+        return Err("Maximum output tokens must be greater than zero.".to_owned());
+    }
+    if token_budget
+        .context_window_tokens
+        .saturating_sub(token_budget.max_output_tokens)
+        < MIN_REQUEST_INPUT_TOKENS
+    {
+        return Err(format!(
+            "Context window must provide at least {MIN_REQUEST_INPUT_TOKENS} input tokens after reserving maximum output tokens."
         ));
     }
     normalize_url(url).map(|_| ())
@@ -560,6 +674,54 @@ mod tests {
         assert!(!contents.contains("secret"));
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn should_supply_default_token_budgets_when_loading_older_configuration() {
+        let file: ConfigurationFile = serde_json::from_value(serde_json::json!({
+            "configurations": [{
+                "id": "old",
+                "name": "Older profile",
+                "interaction_method": "OpenAI",
+                "model_id": "gpt-test",
+                "url": "https://api.openai.com/v1/",
+                "system_text": "Answer carefully."
+            }],
+            "active_id": "old"
+        }))
+        .unwrap();
+
+        let configuration = &file.configurations[0];
+        assert_eq!(
+            (
+                configuration.context_window_tokens,
+                configuration.max_output_tokens,
+                configuration.input_token_budget()
+            ),
+            (
+                DEFAULT_CONTEXT_WINDOW_TOKENS,
+                DEFAULT_MAX_OUTPUT_TOKENS,
+                (DEFAULT_CONTEXT_WINDOW_TOKENS - DEFAULT_MAX_OUTPUT_TOKENS) as usize
+            )
+        );
+    }
+
+    #[test]
+    fn should_reject_token_budgets_when_output_consumes_too_much_context() {
+        let repository = ConfigurationRepository::in_memory();
+        let result = repository.create_with_limits(ModelProfileInput {
+            name: "Too small",
+            interaction_method: AdapterKind::OpenAI,
+            model_id: "model",
+            url: "https://api.openai.com/v1/",
+            system_text: SYSTEM_TEXT,
+            token_budget: TokenBudget {
+                context_window_tokens: 11_999,
+                max_output_tokens: 8_000,
+            },
+        });
+
+        assert!(result.is_err());
     }
 
     #[test]
