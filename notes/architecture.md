@@ -57,11 +57,11 @@ it.
 
 `ChatSession` is the conversation state machine. It contains pending inputs,
 conversation history, the in-flight turn or compaction, automatic-turn timers,
-and rollback checkpoints. It performs no I/O: it consumes `ChatEvents` and
-returns ordered `Effect` values. `CompanionApp` performs those effects, including
-publishing UI state, starting asynchronous AI work, pausing a blocked game, and
-updating the notification history. Slow operations therefore do not hold the
-worker loop or Dwarf Fortress.
+and rollback checkpoints. It performs no I/O: it consumes `ChatEvent` and
+returns ordered `ChatEffect` values. `CompanionApp` performs those effects,
+including publishing UI state, starting asynchronous AI work, pausing a blocked
+game, and updating the notification history. Slow operations therefore do not
+hold the worker loop or Dwarf Fortress.
 
 `AiRuntime` is stateless with respect to the conversation. It executes one AI
 turn or one history-compaction request from the supplied configuration, history,

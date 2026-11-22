@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant};
 use tracing::debug;
 
-use crate::chat_session::{self, ChatSession, Context, Effect};
+use crate::chat_session::{self, ChatEffect, ChatSession, Context};
 use crate::events::{
     ChatSaveRequest, EventQueue, EventReceiver, ExternalEvent, LifecycleEvent, LoadedChatState,
 };
@@ -249,7 +249,7 @@ impl CompanionApp {
     /// Effects are carried out while the session is locked, so that those of
     /// concurrent events keep their order. They never wait: slow work is
     /// spawned and reports back with another event.
-    fn dispatch(self: &Arc<Self>, event: chat_session::ChatEvents) {
+    fn dispatch(self: &Arc<Self>, event: chat_session::ChatEvent) {
         self.dispatch_with(event, |_| ());
     }
 
@@ -257,7 +257,7 @@ impl CompanionApp {
     /// session just before the event is handled.
     fn dispatch_with<T>(
         self: &Arc<Self>,
-        event: chat_session::ChatEvents,
+        event: chat_session::ChatEvent,
         inspect: impl FnOnce(&ChatSession) -> T,
     ) -> T {
         let mut session = self.session.lock().unwrap();
@@ -269,32 +269,32 @@ impl CompanionApp {
         inspected
     }
 
-    fn perform(self: &Arc<Self>, effect: Effect) {
+    fn perform(self: &Arc<Self>, effect: ChatEffect) {
         match effect {
-            Effect::Notify(message) => {
+            ChatEffect::Notify(message) => {
                 self.notifier.notify(message);
             }
-            Effect::UserEvent(event) => {
+            ChatEffect::UserEvent(event) => {
                 emit(event);
             }
-            Effect::TransitionInputs { through, from, to } => {
+            ChatEffect::TransitionInputs { through, from, to } => {
                 self.notifier.transition_inputs(through, from, to);
             }
-            Effect::PublishChatState(state) => {
+            ChatEffect::PublishChatState(state) => {
                 let previous = self.chat_state.send_replace(state);
                 debug!("chat state: {:?} -> {:?}", previous, state);
             }
-            Effect::PublishRollbackFloor(floor) => {
+            ChatEffect::PublishRollbackFloor(floor) => {
                 self.rollback_floor.send_replace(floor);
             }
-            Effect::TruncateLog(from) => {
+            ChatEffect::TruncateLog(from) => {
                 self.history.truncate_from(from);
             }
             // Rollback reads this out of the effect list itself, in
             // [`Self::rollback`], before the rest reach here. This arm keeps
             // the match exhaustive.
-            Effect::ReplyEditorText(_) => {}
-            Effect::PersistChatState(history) => {
+            ChatEffect::ReplyEditorText(_) => {}
+            ChatEffect::PersistChatState(history) => {
                 let lifecycle = self.lifecycle.borrow();
                 let Some(site_id) = lifecycle
                     .site_id
@@ -314,7 +314,7 @@ impl CompanionApp {
                     tracing::warn!("{error}");
                 }
             }
-            Effect::StartTurn {
+            ChatEffect::StartTurn {
                 turn_id,
                 configuration,
                 history,
@@ -327,10 +327,10 @@ impl CompanionApp {
                         .ai
                         .run_turn(&configuration, &history, &prompt, &cancel)
                         .await;
-                    this.dispatch(chat_session::ChatEvents::TurnFinished { turn_id, result });
+                    this.dispatch(chat_session::ChatEvent::TurnFinished { turn_id, result });
                 });
             }
-            Effect::StartCompaction {
+            ChatEffect::StartCompaction {
                 compaction_id,
                 configuration,
                 history,
@@ -342,20 +342,20 @@ impl CompanionApp {
                         .ai
                         .compact_history(&configuration, &history, &cancel)
                         .await;
-                    this.dispatch(chat_session::ChatEvents::CompactionFinished {
+                    this.dispatch(chat_session::ChatEvent::CompactionFinished {
                         compaction_id,
                         result,
                     });
                 });
             }
-            Effect::QueryGameRunning => {
+            ChatEffect::QueryGameRunning => {
                 let this = self.clone();
                 tokio::spawn(async move {
                     let running = this.game_is_running().await;
-                    this.dispatch(chat_session::ChatEvents::GameRunning(running));
+                    this.dispatch(chat_session::ChatEvent::GameRunning(running));
                 });
             }
-            Effect::Block { reason } => {
+            ChatEffect::Block { reason } => {
                 tracing::warn!(%reason, "AI processing blocked; pausing fortress");
                 let this = self.clone();
                 tokio::spawn(async move {
@@ -492,10 +492,10 @@ impl CompanionApp {
                     None => break,
                 },
                 _ = sleep_until(flush_at.unwrap_or(check_at)), if !restoring_chat && flush_at.is_some() => {
-                    self.dispatch(chat_session::ChatEvents::FlushDue);
+                    self.dispatch(chat_session::ChatEvent::FlushDue);
                 }
                 _ = sleep_until(check_at), if !restoring_chat => {
-                    self.dispatch(chat_session::ChatEvents::CheckDue);
+                    self.dispatch(chat_session::ChatEvent::CheckDue);
                 }
             }
         }
@@ -537,7 +537,7 @@ impl CompanionApp {
     async fn handle_external_event(self: &Arc<Self>, item: ExternalEvent) {
         match item {
             ExternalEvent::Lifecycle(LifecycleEvent::Unreachable) => {
-                self.dispatch(chat_session::ChatEvents::CancelUnnotifiedTurn);
+                self.dispatch(chat_session::ChatEvent::CancelUnnotifiedTurn);
                 self.mark_lifecycle_unreachable();
             }
             ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(snapshot)) => {
@@ -545,7 +545,7 @@ impl CompanionApp {
                 if !snapshot.map_loaded
                     && self.lifecycle.borrow().state == LifecycleState::MapLoaded
                 {
-                    self.dispatch(chat_session::ChatEvents::CancelUnnotifiedTurn);
+                    self.dispatch(chat_session::ChatEvent::CancelUnnotifiedTurn);
                 }
                 if is_new_fortress {
                     {
@@ -586,7 +586,7 @@ impl CompanionApp {
                     DisplayMessage::new(DisplayMessageKind::User, &text)
                         .with_input_state(InputState::Pending),
                 );
-                self.dispatch(chat_session::ChatEvents::UserRequest { text, id: Some(id) });
+                self.dispatch(chat_session::ChatEvent::UserRequest { text, id: Some(id) });
             }
             ExternalEvent::GameEvent(event) => {
                 let id = self.notifier.notify(
@@ -596,7 +596,7 @@ impl CompanionApp {
                     )
                     .with_input_state(InputState::Pending),
                 );
-                self.dispatch(chat_session::ChatEvents::Report {
+                self.dispatch(chat_session::ChatEvent::Report {
                     event,
                     id: Some(id),
                 });
@@ -714,7 +714,7 @@ impl CompanionApp {
         {
             // The orientation prompt is not shown to the player, so it has no
             // notification.
-            self.dispatch(chat_session::ChatEvents::UserRequest {
+            self.dispatch(chat_session::ChatEvent::UserRequest {
                 text: ORIENT_MESSAGE.to_owned(),
                 id: None,
             });
@@ -737,7 +737,7 @@ impl CompanionApp {
 
     /// Clears the blocked state. Returns whether chat was blocked.
     pub fn resume_if_blocked(self: &Arc<Self>) -> bool {
-        self.dispatch_with(chat_session::ChatEvents::Resume, |session| {
+        self.dispatch_with(chat_session::ChatEvent::Resume, |session| {
             session.chat_state() == ChatState::Blocked
         })
     }
@@ -755,14 +755,14 @@ impl CompanionApp {
         let mut session = self.session.lock().unwrap();
         let effects = session.handle(
             &self.session_context(),
-            chat_session::ChatEvents::Rollback {
+            chat_session::ChatEvent::Rollback {
                 target,
                 editor_text,
             },
         );
         for effect in effects {
             match effect {
-                Effect::ReplyEditorText(result) => reply = Some(result),
+                ChatEffect::ReplyEditorText(result) => reply = Some(result),
                 other => self.perform(other),
             }
         }

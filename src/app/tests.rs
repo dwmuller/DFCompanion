@@ -238,7 +238,7 @@ fn user_event_effects_reach_notification_history() {
     let subscriber = tracing_subscriber::registry().with(layer);
 
     tracing::subscriber::with_default(subscriber, || {
-        app.perform(Effect::UserEvent(crate::user_events::UserEvent::new(
+        app.perform(ChatEffect::UserEvent(crate::user_events::UserEvent::new(
             crate::user_events::UserEventKind::Diagnostic,
             "from tracing",
         )));

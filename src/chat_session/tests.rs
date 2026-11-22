@@ -35,24 +35,24 @@ fn report(text: &str) -> GameEvent {
     }
 }
 
-fn user(text: &str, id: u64) -> ChatEvents {
-    ChatEvents::UserRequest {
+fn user(text: &str, id: u64) -> ChatEvent {
+    ChatEvent::UserRequest {
         text: text.to_owned(),
         id: Some(NotificationId(id)),
     }
 }
 
-fn game_report(text: &str, id: u64) -> ChatEvents {
-    ChatEvents::Report {
+fn game_report(text: &str, id: u64) -> ChatEvent {
+    ChatEvent::Report {
         event: report(text),
         id: Some(NotificationId(id)),
     }
 }
 
 /// The turn an effect list starts, if it starts one.
-fn started_turn(effects: &[Effect]) -> Option<(u64, Prompt, History, CancellationToken)> {
+fn started_turn(effects: &[ChatEffect]) -> Option<(u64, Prompt, History, CancellationToken)> {
     effects.iter().find_map(|effect| match effect {
-        Effect::StartTurn {
+        ChatEffect::StartTurn {
             turn_id,
             prompt,
             history,
@@ -63,51 +63,54 @@ fn started_turn(effects: &[Effect]) -> Option<(u64, Prompt, History, Cancellatio
     })
 }
 
-fn transitions(effects: &[Effect]) -> Vec<(u64, InputState, InputState)> {
+fn transitions(effects: &[ChatEffect]) -> Vec<(u64, InputState, InputState)> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::TransitionInputs { through, from, to } => Some((through.0, *from, *to)),
+            ChatEffect::TransitionInputs { through, from, to } => Some((through.0, *from, *to)),
             _ => None,
         })
         .collect()
 }
 
-fn published(effects: &[Effect]) -> Vec<ChatState> {
+fn published(effects: &[ChatEffect]) -> Vec<ChatState> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::PublishChatState(state) => Some(*state),
+            ChatEffect::PublishChatState(state) => Some(*state),
             _ => None,
         })
         .collect()
 }
 
-fn notified(effects: &[Effect], kind: DisplayMessageKind) -> Vec<String> {
+fn notified(effects: &[ChatEffect], kind: DisplayMessageKind) -> Vec<String> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::Notify(message) if message.kind == kind => Some(message.text.clone()),
+            ChatEffect::Notify(message) if message.kind == kind => Some(message.text.clone()),
             _ => None,
         })
         .collect()
 }
 
-fn user_event_texts(effects: &[Effect], kind: crate::user_events::UserEventKind) -> Vec<String> {
+fn user_event_texts(
+    effects: &[ChatEffect],
+    kind: crate::user_events::UserEventKind,
+) -> Vec<String> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::UserEvent(event) if event.kind == kind => Some(event.text.clone()),
+            ChatEffect::UserEvent(event) if event.kind == kind => Some(event.text.clone()),
             _ => None,
         })
         .collect()
 }
 
-fn persisted(effects: &[Effect]) -> Vec<&History> {
+fn persisted(effects: &[ChatEffect]) -> Vec<&History> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::PersistChatState(history) => Some(history),
+            ChatEffect::PersistChatState(history) => Some(history),
             _ => None,
         })
         .collect()
@@ -121,8 +124,8 @@ fn answer(history: &History, prompt: &Prompt, text: &str) -> Result<TurnOutput, 
     })
 }
 
-fn finished(turn_id: u64, result: Result<TurnOutput, TurnError>) -> ChatEvents {
-    ChatEvents::TurnFinished { turn_id, result }
+fn finished(turn_id: u64, result: Result<TurnOutput, TurnError>) -> ChatEvent {
+    ChatEvent::TurnFinished { turn_id, result }
 }
 
 #[test]
@@ -220,7 +223,7 @@ fn a_failed_turn_returns_its_inputs_to_pending_and_blocks() {
     );
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::Block { reason } if reason.contains("AI request failed") && reason.contains("boom")
+        ChatEffect::Block { reason } if reason.contains("AI request failed") && reason.contains("boom")
     )));
     assert_eq!(published(&effects), vec![ChatState::Blocked]);
     assert_eq!(session.pending_user_message_count(), 1);
@@ -244,7 +247,7 @@ fn nothing_starts_while_blocked_until_resumed() {
     assert!(started_turn(&effects).is_none());
     assert_eq!(session.chat_state(), ChatState::Blocked);
 
-    let effects = session.handle(&context(now), ChatEvents::Resume);
+    let effects = session.handle(&context(now), ChatEvent::Resume);
     assert_eq!(published(&effects), vec![ChatState::Idle]);
     // Resuming alone sends nothing; the next input does, and it carries every
     // request retained during the block.
@@ -267,7 +270,7 @@ fn a_request_without_a_configuration_blocks_and_keeps_the_input() {
     assert!(started_turn(&effects).is_none());
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::Block { reason } if reason == "No active AI configuration."
+        ChatEffect::Block { reason } if reason == "No active AI configuration."
     )));
     assert!(transitions(&effects).is_empty());
     assert_eq!(session.pending_through(), Some(NotificationId(1)));
@@ -285,7 +288,7 @@ fn a_configuration_error_blocks_with_the_error() {
 
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::Block { reason } if reason.contains("cannot read configuration")
+        ChatEffect::Block { reason } if reason.contains("cannot read configuration")
     )));
 }
 
@@ -296,7 +299,7 @@ fn cancelling_returns_the_inputs_to_pending_without_blocking() {
     let effects = session.handle(&context(now), user("hello", 1));
     let (turn_id, _, _, cancel) = started_turn(&effects).unwrap();
 
-    let effects = session.handle(&context(now), ChatEvents::CancelTurn);
+    let effects = session.handle(&context(now), ChatEvent::CancelTurn);
     assert!(cancel.is_cancelled());
     // The turn is still in flight until it reports back.
     assert!(effects.is_empty());
@@ -342,7 +345,7 @@ fn a_completed_turn_emits_reported_usage_as_a_user_event() {
 
     let effects = session.handle(
         &context(now),
-        ChatEvents::TurnFinished {
+        ChatEvent::TurnFinished {
             turn_id,
             result: Ok(output),
         },
@@ -359,14 +362,14 @@ fn cancelling_an_unnotified_turn_discards_its_hidden_input() {
     let mut session = ChatSession::new(now);
     let effects = session.handle(
         &context(now),
-        ChatEvents::UserRequest {
+        ChatEvent::UserRequest {
             text: "[Automatic session start]".to_owned(),
             id: None,
         },
     );
     let (turn_id, _, _, cancel) = started_turn(&effects).unwrap();
 
-    session.handle(&context(now), ChatEvents::CancelUnnotifiedTurn);
+    session.handle(&context(now), ChatEvent::CancelUnnotifiedTurn);
     assert!(cancel.is_cancelled());
     session.handle(&context(now), finished(turn_id, Err(TurnError::Cancelled)));
 
@@ -446,7 +449,7 @@ fn reports_wait_for_the_flush_timer_and_are_sent_together() {
     assert_eq!(session.flush_deadline(), Some(now + EVENT_FLUSH_DELAY));
 
     let due = now + EVENT_FLUSH_DELAY;
-    let effects = session.handle(&context(due), ChatEvents::FlushDue);
+    let effects = session.handle(&context(due), ChatEvent::FlushDue);
     let (_, prompt, ..) = started_turn(&effects).expect("the flush starts a turn");
     assert_eq!(prompt.included_inputs, 2);
     assert_eq!(session.flush_deadline(), None);
@@ -461,7 +464,7 @@ fn flushing_does_nothing_when_event_turns_are_off() {
 
     let mut off = context(now);
     off.event_turns = false;
-    let effects = session.handle(&off, ChatEvents::FlushDue);
+    let effects = session.handle(&off, ChatEvent::FlushDue);
 
     assert!(started_turn(&effects).is_none());
     // The report stays queued for the next turn.
@@ -478,7 +481,7 @@ fn flushing_does_nothing_while_blocked() {
     session.handle(&none, user("hello", 1)); // Blocks: no configuration.
     session.handle(&context(now), game_report("one", 2));
 
-    let effects = session.handle(&context(now), ChatEvents::FlushDue);
+    let effects = session.handle(&context(now), ChatEvent::FlushDue);
 
     assert!(started_turn(&effects).is_none());
     assert_eq!(session.pending_report_count(), 1);
@@ -508,19 +511,19 @@ fn a_periodic_check_asks_whether_the_game_runs_before_starting_a_turn() {
     session.handle(&context(now), game_report("one", 1));
     let due = now + PERIODIC_CHECK_INTERVAL;
 
-    let effects = session.handle(&context(due), ChatEvents::CheckDue);
+    let effects = session.handle(&context(due), ChatEvent::CheckDue);
     assert!(effects
         .iter()
-        .any(|e| matches!(e, Effect::QueryGameRunning)));
+        .any(|e| matches!(e, ChatEffect::QueryGameRunning)));
     assert!(started_turn(&effects).is_none());
     assert_eq!(session.check_deadline(), due + PERIODIC_CHECK_INTERVAL);
 
-    let effects = session.handle(&context(due), ChatEvents::GameRunning(Some(false)));
+    let effects = session.handle(&context(due), ChatEvent::GameRunning(Some(false)));
     assert!(started_turn(&effects).is_none());
-    let effects = session.handle(&context(due), ChatEvents::GameRunning(None));
+    let effects = session.handle(&context(due), ChatEvent::GameRunning(None));
     assert!(started_turn(&effects).is_none());
 
-    let effects = session.handle(&context(due), ChatEvents::GameRunning(Some(true)));
+    let effects = session.handle(&context(due), ChatEvent::GameRunning(Some(true)));
     let (_, prompt, ..) = started_turn(&effects).expect("a running game gets a check");
     assert_eq!(prompt.included_inputs, 1);
     assert_eq!(session.flush_deadline(), None);
@@ -534,11 +537,11 @@ fn periodic_checks_are_silent_when_off_or_without_a_configuration() {
 
     let mut off = context(due);
     off.periodic_turns = false;
-    assert!(session.handle(&off, ChatEvents::CheckDue).is_empty());
+    assert!(session.handle(&off, ChatEvent::CheckDue).is_empty());
 
     let mut none = context(due);
     none.configuration = Ok(None);
-    assert!(session.handle(&none, ChatEvents::CheckDue).is_empty());
+    assert!(session.handle(&none, ChatEvent::CheckDue).is_empty());
     assert_eq!(session.chat_state(), ChatState::Idle);
 }
 
@@ -547,7 +550,7 @@ fn a_no_comment_answer_to_an_automatic_turn_is_neither_shown_nor_remembered() {
     let now = Instant::now();
     let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
-    let effects = session.handle(&context(now), ChatEvents::GameRunning(Some(true)));
+    let effects = session.handle(&context(now), ChatEvent::GameRunning(Some(true)));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
     let effects = session.handle(
@@ -568,7 +571,7 @@ fn an_automatic_answer_is_shown_with_a_beep_and_remembered() {
     let now = Instant::now();
     let mut session = ChatSession::new(now);
     session.handle(&context(now), game_report("one", 1));
-    let effects = session.handle(&context(now), ChatEvents::GameRunning(Some(true)));
+    let effects = session.handle(&context(now), ChatEvent::GameRunning(Some(true)));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
 
     let effects = session.handle(
@@ -579,7 +582,7 @@ fn an_automatic_answer_is_shown_with_a_beep_and_remembered() {
     let beeps: Vec<bool> = effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Notify(m) if m.kind == DisplayMessageKind::Companion => Some(m.beep),
+            ChatEffect::Notify(m) if m.kind == DisplayMessageKind::Companion => Some(m.beep),
             _ => None,
         })
         .collect();
@@ -593,14 +596,14 @@ fn only_changes_of_chat_state_are_published() {
     let mut session = ChatSession::new(now);
     // Still idle: nothing to publish.
     assert!(published(&session.handle(&context(now), game_report("one", 1))).is_empty());
-    assert!(published(&session.handle(&context(now), ChatEvents::Resume)).is_empty());
+    assert!(published(&session.handle(&context(now), ChatEvent::Resume)).is_empty());
 }
 
-fn published_floors(effects: &[Effect]) -> Vec<Option<NotificationId>> {
+fn published_floors(effects: &[ChatEffect]) -> Vec<Option<NotificationId>> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::PublishRollbackFloor(floor) => Some(*floor),
+            ChatEffect::PublishRollbackFloor(floor) => Some(*floor),
             _ => None,
         })
         .collect()
@@ -680,22 +683,22 @@ fn the_rollback_floor_returns_to_a_failed_turns_inputs() {
     assert!(published_floors(&effects).is_empty());
 }
 
-fn editor_reply(effects: &[Effect]) -> Option<Result<String, String>> {
+fn editor_reply(effects: &[ChatEffect]) -> Option<Result<String, String>> {
     effects.iter().find_map(|effect| match effect {
-        Effect::ReplyEditorText(result) => Some(result.clone()),
+        ChatEffect::ReplyEditorText(result) => Some(result.clone()),
         _ => None,
     })
 }
 
-fn truncated_from(effects: &[Effect]) -> Option<NotificationId> {
+fn truncated_from(effects: &[ChatEffect]) -> Option<NotificationId> {
     effects.iter().find_map(|effect| match effect {
-        Effect::TruncateLog(id) => Some(*id),
+        ChatEffect::TruncateLog(id) => Some(*id),
         _ => None,
     })
 }
 
-fn rollback(target: u64, editor_text: &str) -> ChatEvents {
-    ChatEvents::Rollback {
+fn rollback(target: u64, editor_text: &str) -> ChatEvent {
+    ChatEvent::Rollback {
         target: NotificationId(target),
         editor_text: editor_text.to_owned(),
     }
@@ -882,9 +885,9 @@ fn only_the_newest_fifty_turns_can_be_rolled_back() {
 }
 
 /// The compaction an effect list starts, if it starts one.
-fn started_compaction(effects: &[Effect]) -> Option<(u64, History, CancellationToken)> {
+fn started_compaction(effects: &[ChatEffect]) -> Option<(u64, History, CancellationToken)> {
     effects.iter().find_map(|effect| match effect {
-        Effect::StartCompaction {
+        ChatEffect::StartCompaction {
             compaction_id,
             history,
             cancel,
@@ -905,8 +908,8 @@ fn compacted(summary: &str, recent: &History) -> Result<CompactionOutput, TurnEr
 fn compaction_finished(
     compaction_id: u64,
     result: Result<CompactionOutput, TurnError>,
-) -> ChatEvents {
-    ChatEvents::CompactionFinished {
+) -> ChatEvent {
+    ChatEvent::CompactionFinished {
         compaction_id,
         result,
     }
@@ -928,7 +931,7 @@ fn drive_past_compaction_threshold(session: &mut ChatSession, now: Instant) {
 
 /// Completes whatever work the effects start — a turn or a compaction — until
 /// nothing more is pending, as the real worker would.
-fn complete_pending_work(session: &mut ChatSession, now: Instant, mut effects: Vec<Effect>) {
+fn complete_pending_work(session: &mut ChatSession, now: Instant, mut effects: Vec<ChatEffect>) {
     loop {
         if let Some((turn_id, prompt, history, _)) = started_turn(&effects) {
             effects = session.handle(
@@ -1105,7 +1108,7 @@ fn a_failed_compaction_blocks_without_changing_history() {
     assert_eq!(session.history().len(), before.len());
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::Block { reason } if reason.contains("compaction failed") && reason.contains("boom")
+        ChatEffect::Block { reason } if reason.contains("compaction failed") && reason.contains("boom")
     )));
 }
 

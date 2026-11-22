@@ -4,8 +4,8 @@
 //! the queue of inputs waiting for the AI, the conversation history, the turn
 //! in flight, whether processing is blocked, and the timers for automatic
 //! turns. It performs no I/O and reads no clock. The worker feeds it
-//! [`Event`]s along with a [`Context`] describing the outside world, and
-//! carries out the [`Effect`]s it returns. That keeps every interleaving of
+//! [`ChatEvent`]s along with a [`Context`] describing the outside world, and
+//! carries out the [`ChatEffect`]s it returns. That keeps every interleaving of
 //! player input, game events, timers and turn results testable without tasks,
 //! timers or a provider.
 
@@ -66,7 +66,7 @@ impl Context {
 /// Inputs to the chat session, representing events that the session needs to
 /// handle.
 #[derive(Debug, NamedVariant)]
-pub enum ChatEvents {
+pub enum ChatEvent {
     /// Something to ask the AI, which gets a turn right away. `id` is the id of
     /// the notification that displays it, if any.
     UserRequest {
@@ -84,15 +84,15 @@ pub enum ChatEvents {
     FlushDue,
     /// The time for a periodic check arrived. See [`Session::check_deadline`].
     CheckDue,
-    /// The answer to [`Effect::QueryGameRunning`]; `None` if the game could not
+    /// The answer to [`ChatEffect::QueryGameRunning`]; `None` if the game could not
     /// be reached.
     GameRunning(Option<bool>),
-    /// A turn started by [`Effect::StartTurn`] ended.
+    /// A turn started by [`ChatEffect::StartTurn`] ended.
     TurnFinished {
         turn_id: u64,
         result: Result<TurnOutput, TurnError>,
     },
-    /// A compaction started by [`Effect::StartCompaction`] ended.
+    /// A compaction started by [`ChatEffect::StartCompaction`] ended.
     /// `compaction_id` must match the one the effect carried, or this is a
     /// stale result and is ignored.
     CompactionFinished {
@@ -120,7 +120,7 @@ pub enum ChatEvents {
 }
 
 #[derive(Debug)]
-pub enum Effect {
+pub enum ChatEffect {
     Notify(DisplayMessage),
     /// Emit an event through the user-visible tracing subscriber.
     UserEvent(UserEvent),
@@ -236,10 +236,10 @@ pub struct ChatSession {
     next_compaction_id: u64,
     flush_at: Option<Instant>,
     next_check: Instant,
-    /// The last chat state sent out in an [`Effect::PublishChatState`].
+    /// The last chat state sent out in an [`ChatEffect::PublishChatState`].
     published: ChatState,
     /// The last rollback floor sent out in an
-    /// [`Effect::PublishRollbackFloor`].
+    /// [`ChatEffect::PublishRollbackFloor`].
     published_floor: Option<NotificationId>,
 }
 
@@ -355,26 +355,26 @@ impl ChatSession {
     }
 
     /// Handles an event and returns what the caller has to do about it, in order.
-    pub fn handle(&mut self, context: &Context, event: ChatEvents) -> Vec<Effect> {
+    pub fn handle(&mut self, context: &Context, event: ChatEvent) -> Vec<ChatEffect> {
         let mut effects = Vec::new();
         self.step(context, event, &mut effects);
         let state = self.chat_state();
         if state != self.published {
             self.published = state;
-            effects.push(Effect::PublishChatState(state));
+            effects.push(ChatEffect::PublishChatState(state));
         }
         let floor = self.rollback_floor();
         if floor != self.published_floor {
             self.published_floor = floor;
-            effects.push(Effect::PublishRollbackFloor(floor));
+            effects.push(ChatEffect::PublishRollbackFloor(floor));
         }
         effects
     }
 
     #[instrument(level = "debug", skip_all, fields(event = event.variant_name()))]
-    fn step(&mut self, context: &Context, event: ChatEvents, effects: &mut Vec<Effect>) {
+    fn step(&mut self, context: &Context, event: ChatEvent, effects: &mut Vec<ChatEffect>) {
         match event {
-            ChatEvents::UserRequest { text, id } => {
+            ChatEvent::UserRequest { text, id } => {
                 tracing::trace!(
                     "Handling user request with id {}",
                     id.map_or("<none>".to_string(), |id| id.to_string())
@@ -384,7 +384,7 @@ impl ChatSession {
                 self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                 self.try_start_turn(context, effects);
             }
-            ChatEvents::Report { event, id } => {
+            ChatEvent::Report { event, id } => {
                 tracing::trace!(
                     "Handling game report with id {}",
                     id.map_or("<none>".to_string(), |id| id.to_string())
@@ -392,20 +392,20 @@ impl ChatSession {
                 self.queue.push_back(AiInput::GameReport { event, id });
                 self.flush_at.get_or_insert(context.now + EVENT_FLUSH_DELAY);
             }
-            ChatEvents::FlushDue => {
+            ChatEvent::FlushDue => {
                 self.flush_at = None;
                 if context.event_turns && !self.blocked && context.has_configuration() {
                     self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                     self.try_start_turn(context, effects);
                 }
             }
-            ChatEvents::CheckDue => {
+            ChatEvent::CheckDue => {
                 self.next_check = context.now + PERIODIC_CHECK_INTERVAL;
                 if context.periodic_turns && !self.blocked && context.has_configuration() {
-                    effects.push(Effect::QueryGameRunning);
+                    effects.push(ChatEffect::QueryGameRunning);
                 }
             }
-            ChatEvents::GameRunning(running) => {
+            ChatEvent::GameRunning(running) => {
                 tracing::trace!("Handling game running event: {running:?}");
                 if running == Some(true)
                     && context.periodic_turns
@@ -416,12 +416,12 @@ impl ChatSession {
                     self.try_start_turn(context, effects);
                 }
             }
-            ChatEvents::TurnFinished { turn_id, result } => {
+            ChatEvent::TurnFinished { turn_id, result } => {
                 tracing::trace!("Handling turn finished event: {turn_id:?}");
                 tracing::trace!("Turn finished with result: {result:?}");
                 self.finish_turn(context, turn_id, result, effects)
             }
-            ChatEvents::CompactionFinished {
+            ChatEvent::CompactionFinished {
                 compaction_id,
                 result,
             } => {
@@ -430,12 +430,12 @@ impl ChatSession {
                 );
                 self.finish_compaction(context, compaction_id, result, effects)
             }
-            ChatEvents::CancelTurn => {
+            ChatEvent::CancelTurn => {
                 if let Some(in_flight) = &self.in_flight {
                     in_flight.cancel.cancel();
                 }
             }
-            ChatEvents::CancelUnnotifiedTurn => {
+            ChatEvent::CancelUnnotifiedTurn => {
                 let Some(in_flight) = &mut self.in_flight else {
                     return;
                 };
@@ -449,10 +449,10 @@ impl ChatSession {
                     in_flight.cancel.cancel();
                 }
             }
-            ChatEvents::Resume => {
+            ChatEvent::Resume => {
                 self.blocked = false;
             }
-            ChatEvents::Rollback {
+            ChatEvent::Rollback {
                 target,
                 editor_text,
             } => {
@@ -465,16 +465,16 @@ impl ChatSession {
 
 impl ChatSession {
     /// Stops processing until the player resumes it, and says why.
-    fn block(&mut self, reason: String, effects: &mut Vec<Effect>) {
+    fn block(&mut self, reason: String, effects: &mut Vec<ChatEffect>) {
         if !self.blocked {
             self.blocked = true;
-            effects.push(Effect::Block { reason });
+            effects.push(ChatEffect::Block { reason });
         }
     }
 
     /// Starts a turn if nothing prevents it: processing is not blocked, no turn
     /// is in flight, and there is something to send.
-    fn try_start_turn(&mut self, context: &Context, effects: &mut Vec<Effect>) {
+    fn try_start_turn(&mut self, context: &Context, effects: &mut Vec<ChatEffect>) {
         if self.blocked || self.in_flight.is_some() || self.in_flight_compaction.is_some() {
             return;
         }
@@ -509,13 +509,13 @@ impl ChatSession {
         let turn_id = self.next_turn_id;
         self.next_turn_id += 1;
         if let Some(through) = prompt.through {
-            effects.push(Effect::TransitionInputs {
+            effects.push(ChatEffect::TransitionInputs {
                 through,
                 from: InputState::Pending,
                 to: InputState::Processing,
             });
         }
-        effects.push(Effect::UserEvent(UserEvent::new(
+        effects.push(ChatEffect::UserEvent(UserEvent::new(
             UserEventKind::AiUsage,
             prompt.token_estimates_summary(),
         )));
@@ -526,7 +526,7 @@ impl ChatSession {
             cancel: cancel.clone(),
             discard_on_cancel: false,
         });
-        effects.push(Effect::StartTurn {
+        effects.push(ChatEffect::StartTurn {
             turn_id,
             configuration,
             history: self.history.clone(),
@@ -537,7 +537,7 @@ impl ChatSession {
 
     /// Starts a compaction job that reports back with
     /// [`Event::CompactionFinished`].
-    fn start_compaction(&mut self, configuration: AiConfiguration, effects: &mut Vec<Effect>) {
+    fn start_compaction(&mut self, configuration: AiConfiguration, effects: &mut Vec<ChatEffect>) {
         let compaction_id = self.next_compaction_id;
         self.next_compaction_id += 1;
         let cancel = CancellationToken::new();
@@ -545,7 +545,7 @@ impl ChatSession {
             compaction_id,
             cancel: cancel.clone(),
         });
-        effects.push(Effect::StartCompaction {
+        effects.push(ChatEffect::StartCompaction {
             compaction_id,
             configuration,
             history: self.history.clone(),
@@ -558,7 +558,7 @@ impl ChatSession {
         context: &Context,
         turn_id: u64,
         result: Result<TurnOutput, TurnError>,
-        effects: &mut Vec<Effect>,
+        effects: &mut Vec<ChatEffect>,
     ) {
         let Some(InFlight {
             prompt,
@@ -569,7 +569,7 @@ impl ChatSession {
             return; // Not the turn in flight: a stale report.
         };
         let finish_inputs = |to: InputState| {
-            prompt.through.map(|through| Effect::TransitionInputs {
+            prompt.through.map(|through| ChatEffect::TransitionInputs {
                 through,
                 from: InputState::Processing,
                 to,
@@ -602,18 +602,18 @@ impl ChatSession {
                     self.restoration_note_dates = None;
                 }
                 if is_user_interaction || !is_no_comment(&answer) {
-                    effects.push(Effect::Notify(
+                    effects.push(ChatEffect::Notify(
                         DisplayMessage::new(DisplayMessageKind::Companion, answer)
                             .with_beep(!is_user_interaction),
                     ));
                 }
-                effects.push(Effect::UserEvent(UserEvent::new(
+                effects.push(ChatEffect::UserEvent(UserEvent::new(
                     UserEventKind::AiUsage,
                     usage.iter().map(|u| u.summary()).join("\n"),
                 )));
                 effects.extend(finish_inputs(InputState::Done));
                 if is_user_interaction {
-                    effects.push(Effect::PersistChatState(self.history.clone()));
+                    effects.push(ChatEffect::PersistChatState(self.history.clone()));
                 }
                 if !self.queue.is_empty() {
                     self.try_start_turn(context, effects);
@@ -640,7 +640,7 @@ impl ChatSession {
         context: &Context,
         compaction_id: u64,
         result: Result<CompactionOutput, TurnError>,
-        effects: &mut Vec<Effect>,
+        effects: &mut Vec<ChatEffect>,
     ) {
         let Some(_) = self
             .in_flight_compaction
@@ -653,16 +653,16 @@ impl ChatSession {
                 self.history = output.history;
                 self.compaction_cooldown_turns = COMPACTION_COOLDOWN_TURNS;
                 if !output.usage.is_empty() {
-                    effects.push(Effect::UserEvent(UserEvent::new(
+                    effects.push(ChatEffect::UserEvent(UserEvent::new(
                         UserEventKind::AiUsage,
                         output.usage.iter().map(|u| u.summary()).join("\n"),
                     )));
                 }
-                effects.push(Effect::Notify(DisplayMessage::new(
+                effects.push(ChatEffect::Notify(DisplayMessage::new(
                     DisplayMessageKind::Status,
                     "Conversation history was compacted to stay within the AI context budget.",
                 )));
-                effects.push(Effect::PersistChatState(self.history.clone()));
+                effects.push(ChatEffect::PersistChatState(self.history.clone()));
                 self.try_start_turn(context, effects);
             }
             Err(TurnError::Failed(error)) => {
@@ -679,7 +679,7 @@ impl ChatSession {
         context: &Context,
         target: NotificationId,
         editor_text: String,
-        effects: &mut Vec<Effect>,
+        effects: &mut Vec<ChatEffect>,
     ) {
         // A compaction in flight captured the pre-rollback history. Cancel it
         // so a late result cannot overwrite the history being restored.
@@ -735,26 +735,26 @@ impl ChatSession {
         };
 
         let Some((first_notification, inputs)) = dropped else {
-            effects.push(Effect::ReplyEditorText(Err(
+            effects.push(ChatEffect::ReplyEditorText(Err(
                 "This message is too old to roll back, or has already been rolled back.".to_owned(),
             )));
             return;
         };
 
         if let Some(from) = first_notification {
-            effects.push(Effect::TruncateLog(from));
+            effects.push(ChatEffect::TruncateLog(from));
         }
-        effects.push(Effect::ReplyEditorText(Ok(combine_editor_text(
+        effects.push(ChatEffect::ReplyEditorText(Ok(combine_editor_text(
             &inputs,
             &editor_text,
         ))));
-        effects.push(Effect::Notify(DisplayMessage::new(
+        effects.push(ChatEffect::Notify(DisplayMessage::new(
             DisplayMessageKind::Status,
             "Conversation rolled back. This cannot be undone.",
         )));
         self.rolled_back_note_due = true;
         self.blocked = false;
-        effects.push(Effect::PersistChatState(self.history.clone()));
+        effects.push(ChatEffect::PersistChatState(self.history.clone()));
         if !self
             .queue
             .iter()
