@@ -1122,6 +1122,7 @@ impl GameState {
     pub fn list_work_details(
         &self,
         search: Option<&str>,
+        labor: Option<&str>,
         unit_id: Option<i32>,
         offset: usize,
         limit: usize,
@@ -1139,6 +1140,7 @@ impl GameState {
             vec![
                 search.unwrap_or_default().to_owned(),
                 unit_id.map(|id| id.to_string()).unwrap_or_default(),
+                labor.unwrap_or_default().to_owned(),
                 offset.to_string(),
                 limit.to_string(),
             ],

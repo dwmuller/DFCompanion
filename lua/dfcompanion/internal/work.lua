@@ -1,6 +1,7 @@
 local common = require('dfcompanion.internal.common')
 local creatures = require('dfcompanion.internal.creatures')
 local text = common.text
+local labor_name = common.labor_name
 local set_flags = common.set_flags
 local paged = common.paged
 local reply = common.reply
@@ -198,7 +199,7 @@ end
 
 -- Returns work-detail configuration, not effective labor permissions or
 -- current jobs. unit_id is restricted to residents in the known-creature list.
-local function list_work_details(search_filter, unit_id, offset, limit)
+local function list_work_details(search_filter, unit_id, labor_filter, offset, limit)
     local work_details = work_details_vector()
     if not work_details then
         return reply({error = 'Work details are unavailable outside fortress mode.'})
@@ -212,12 +213,33 @@ local function list_work_details(search_filter, unit_id, offset, limit)
             return reply({error = 'unit_id must identify a known living resident.'})
         end
     end
+    labor_filter = (labor_filter or ''):lower()
+        :gsub('[^%w]+', '_'):gsub('^_+', ''):gsub('_+$', '')
+    if labor_filter ~= '' then
+        local known_labor = false
+        for id = math.max(0, df.unit_labor._first_item), df.unit_labor._last_item do
+            if labor_name(id) == labor_filter then
+                known_labor = true
+                break
+            end
+        end
+        if not known_labor then
+            return reply({error = 'Unknown labor "' .. labor_filter .. '". Use a normalized DF labor name such as furnace_operate or stone_cutting.'})
+        end
+    end
     search_filter = (search_filter or ''):lower()
     local rows = {}
     for index, detail in ipairs(work_details) do
         local row, assigned_ids = work_detail_row(detail, index, known_residents)
         local relevant = not filter_id or assigned_ids[filter_id]
             or row.assignment_mode == 'everybody'
+        local matches_labor = labor_filter == ''
+        for _, labor in ipairs(row.labors) do
+            if labor == labor_filter then
+                matches_labor = true
+                break
+            end
+        end
         local matches_search = search_filter == '' or row.name:lower():find(search_filter, 1, true)
         if not matches_search then
             for _, labor in ipairs(row.labors) do
@@ -229,7 +251,7 @@ local function list_work_details(search_filter, unit_id, offset, limit)
                 end
             end
         end
-        if relevant and matches_search then
+        if relevant and matches_labor and matches_search then
             table.insert(rows, row)
         end
     end
@@ -239,7 +261,8 @@ local function list_work_details(search_filter, unit_id, offset, limit)
         return a.index < b.index
     end)
     return reply(paged({
-        notes = "assigned_units lists explicit membership among known residents and repeats each resident's global specialized flag. Residents in everybody-mode details may not appear in assigned_units; use get_unit_details with work for an individual resident. assignment_mode is the stored work-detail policy; effective labor permissions are not inferred.",
+        labor = labor_filter ~= '' and labor_filter or nil,
+        notes = "assigned_units lists explicit membership among known residents and repeats each resident's global specialized flag. Residents in everybody-mode details may not appear in assigned_units; use get_unit_details with work for an individual resident. assignment_mode is the stored work-detail policy; effective labor permissions are not inferred. The labor filter is an exact normalized labor name.",
     }, 'work_details', rows, offset, limit))
 end
 

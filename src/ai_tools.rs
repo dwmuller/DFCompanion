@@ -217,6 +217,7 @@ struct ListWorkshopsArgs {
 #[serde(deny_unknown_fields)]
 struct ListWorkDetailsArgs {
     search: Option<String>,
+    labor: Option<String>,
     unit_id: Option<i32>,
     #[serde(default)]
     offset: usize,
@@ -409,11 +410,15 @@ fn registry() -> &'static [ToolSpec] {
             .required(&["unit_ids"]),
             tool(
                 "list_work_details",
-                "List fortress work details, covered labors, and explicitly assigned known residents. assignment_mode distinguishes everybody, nobody, selected_workers, or default; assigned_units lists explicit membership only and includes each listed resident's global specialized toggle. For a particular resident, get_unit_details with work is authoritative, including when a detail is in everybody mode. This is configuration, not current jobs, skills, or inferred effective labor permissions; use get_dfhack_automation separately to check autolabor. This is read-only.",
+                "List fortress work details, covered labors, and explicitly assigned known residents. assignment_mode distinguishes everybody, nobody, selected_workers, or default; assigned_units lists explicit membership only and includes each listed resident's global specialized toggle. Use labor for an exact normalized DF labor name, such as furnace_operate, rather than a substring search. For a particular resident, get_unit_details with work is authoritative, including when a detail is in everybody mode. This is configuration, not current jobs, skills, or inferred effective labor permissions; native enabled toggles are available through get_unit_details with work. This is read-only.",
                 with_paging(json!({
                     "search": {
                         "type": "string",
                         "description": "Only include details whose name or labor contains this text (case-insensitive)."
+                    },
+                    "labor": {
+                        "type": "string",
+                        "description": "Only include details that cover this exact normalized DF labor, such as furnace_operate or stone_cutting."
                     },
                     "unit_id": {
                         "type": "integer",
@@ -427,6 +432,7 @@ fn registry() -> &'static [ToolSpec] {
                     }
                     game.list_work_details(
                         args.search.as_deref(),
+                        args.labor.as_deref(),
                         args.unit_id,
                         args.offset,
                         args.limit,

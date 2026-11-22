@@ -306,6 +306,39 @@ async fn ai_tools_end_to_end() {
             assert!(unit["specialized"].is_boolean(), "{unit}");
         }
     }
+    if let Some(labor) = work_details["work_details"][0]["labors"][0].as_str() {
+        let by_labor = call(
+            "list_work_details",
+            serde_json::json!({"labor": labor, "limit": 50}),
+        )
+        .await;
+        assert!(by_labor.get("error").is_none(), "{by_labor}");
+        assert_eq!(by_labor["labor"], labor, "{by_labor}");
+        assert!(
+            by_labor["work_details"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|detail| detail["labors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value.as_str() == Some(labor))),
+            "{by_labor}"
+        );
+    }
+    let bad_labor = call(
+        "list_work_details",
+        serde_json::json!({"labor": "not_a_real_labor"}),
+    )
+    .await;
+    assert!(
+        bad_labor["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Unknown labor"),
+        "{bad_labor}"
+    );
     let work_orders = call("list_work_orders", serde_json::json!({"limit": 50})).await;
     assert!(work_orders.get("error").is_none(), "{work_orders}");
     assert!(work_orders["work_orders"].is_array(), "{work_orders}");

@@ -84,6 +84,7 @@ async fn bad_arguments_are_rejected_before_touching_the_game() {
         ("list_work_details", json!({"offset": 5001})),
         ("list_work_details", json!({"unit_id": -1})),
         ("list_work_details", json!({"unrecognized": true})),
+        ("list_work_details", json!({"labor": 5})),
         ("list_work_orders", json!({"offset": 5001})),
         ("list_work_orders", json!({"limit": 0})),
         ("list_work_orders", json!({"search": 1})),
@@ -141,6 +142,7 @@ fn tool_descriptions_list_arguments() {
     assert!(text.contains("historical provenance"));
     let text = describe_tool("list_work_details").unwrap();
     assert!(text.contains("search"));
+    assert!(text.contains("labor"));
     assert!(text.contains("unit_id"));
     assert!(text.contains("assignment_mode"));
     assert!(text.contains("selected_workers"));
@@ -206,6 +208,7 @@ fn list_work_details_schema_is_strict_and_has_expected_arguments() {
     assert_eq!(spec.schema["additionalProperties"], false);
     assert_eq!(spec.schema["properties"]["unit_id"]["minimum"], 0);
     assert!(spec.schema["properties"].get("search").is_some());
+    assert!(spec.schema["properties"].get("labor").is_some());
     assert!(spec.schema["properties"].get("offset").is_some());
     assert!(spec.schema["properties"].get("limit").is_some());
 }
