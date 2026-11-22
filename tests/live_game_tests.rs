@@ -326,6 +326,20 @@ async fn ai_tools_end_to_end() {
                     .any(|value| value.as_str() == Some(labor))),
             "{by_labor}"
         );
+        let coverage = call(
+            "get_labor_coverage",
+            serde_json::json!({"labor": labor, "limit": 50}),
+        )
+        .await;
+        assert!(coverage.get("error").is_none(), "{coverage}");
+        assert_eq!(coverage["labor"], labor, "{coverage}");
+        assert!(coverage["covering_details"].is_array(), "{coverage}");
+        assert!(coverage["residents"].is_array(), "{coverage}");
+        assert!(
+            coverage["enabled_count"].as_u64().unwrap() as usize
+                >= coverage["residents"].as_array().unwrap().len(),
+            "{coverage}"
+        );
     }
     let bad_labor = call(
         "list_work_details",

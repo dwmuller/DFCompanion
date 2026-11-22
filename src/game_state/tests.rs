@@ -97,6 +97,24 @@ fn empty_labor_relationship_lists_are_restored() {
 }
 
 #[test]
+fn labor_coverage_normalizes_empty_relationship_lists() {
+    let mut result = json!({
+        "covering_details": {},
+        "residents": [
+            {"id": 1, "applicable_details": {}}
+        ]
+    });
+    restore_empty_list(&mut result["covering_details"]);
+    restore_empty_list(&mut result["residents"]);
+    for resident in result["residents"].as_array_mut().unwrap() {
+        restore_empty_list(&mut resident["applicable_details"]);
+    }
+
+    assert_eq!(result["covering_details"], json!([]));
+    assert_eq!(result["residents"][0]["applicable_details"], json!([]));
+}
+
+#[test]
 fn empty_work_detail_lists_are_restored() {
     let mut result = json!({"work_details": {}, "notes": "unchanged"});
     restore_work_detail_lists(&mut result);

@@ -29,6 +29,7 @@ local exports = {
     find_candidates = modules.creatures,
     mind_of = modules.creatures,
     list_work_details = modules.work,
+    labor_coverage = modules.work,
     list_work_orders = modules.work,
     report_entry = modules.reports,
     recent_reports = modules.reports,

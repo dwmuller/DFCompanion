@@ -86,6 +86,13 @@ redaction note. Visible results are bounded and include terrain, building,
 zone, creature, and non-carried item information, with object-specific
 door/hatch/bridge state.
 
+Labor observations distinguish native current state from configuration:
+`get_unit_details` reports enabled `unit.status.labors` bits, matching work
+details, specialization, and active DFHack automation as contextual information.
+It does not infer historical toggle provenance. `list_work_details` supports an
+exact normalized labor filter, and `get_labor_coverage` provides a bounded
+resident roster for one labor with status and applicable detail summaries.
+
 User-visible diagnostic events use a dedicated tracing layer. `ChatSession`
 emits typed `UserEvent` effects without doing I/O; the application emits those
 through allowlisted `user-*` tracing targets, and the subscriber converts them

@@ -755,4 +755,5 @@ M.work_detail_summary = work_detail_summary
 M.work_detail_row = work_detail_row
 M.is_specialized = is_specialized
 M.mind_of = mind_of
+M.resident_row = resident_row
 return M

@@ -2,6 +2,7 @@ local common = require('dfcompanion.internal.common')
 local creatures = require('dfcompanion.internal.creatures')
 local text = common.text
 local labor_name = common.labor_name
+local U = common.U
 local set_flags = common.set_flags
 local paged = common.paged
 local reply = common.reply
@@ -9,6 +10,7 @@ local work_details_vector = creatures.work_details_vector
 local work_detail_summary = creatures.work_detail_summary
 local work_detail_row = creatures.work_detail_row
 local known_residents_by_id = creatures.known_residents_by_id
+local resident_row = creatures.resident_row
 local MAX_WORK_ORDER_CONDITIONS = 10
 local MAX_WORK_ORDER_CONDITION_REAGENTS = 10
 local WORK_ORDER_FREQUENCIES = {
@@ -266,6 +268,103 @@ local function list_work_details(search_filter, unit_id, labor_filter, offset, l
     }, 'work_details', rows, offset, limit))
 end
 
+local function find_labor_id(name)
+    for id = math.max(0, df.unit_labor._first_item), df.unit_labor._last_item do
+        if labor_name(id) == name then
+            return id
+        end
+    end
+end
+
+local function normalize_labor_filter(labor)
+    return (labor or ''):lower():gsub('[^%w]+', '_')
+        :gsub('^_+', ''):gsub('_+$', '')
+end
+
+-- Bounded roster of known residents with one exact native labor enabled.
+local function labor_coverage(labor_filter, idle_only, offset, limit)
+    local labor = normalize_labor_filter(labor_filter)
+    local labor_id = find_labor_id(labor)
+    if not labor_id then
+        return reply({error = 'Unknown labor "' .. labor ..
+            '". Use a normalized DF labor name such as furnace_operate or stone_cutting.'})
+    end
+    local work_details = work_details_vector()
+    if not work_details then
+        return reply({error = 'Work details are unavailable outside fortress mode.'})
+    end
+    idle_only = idle_only == 'true'
+
+    local covering, everybody_count = {}, 0
+    for index, detail in ipairs(work_details) do
+        if detail.allowed_labors[labor_id] then
+            local row = work_detail_summary(detail, index)
+            if row.assignment_mode == 'everybody' then
+                everybody_count = everybody_count + 1
+            end
+            table.insert(covering, row)
+        end
+    end
+    table.sort(covering, function(a, b) return a.index < b.index end)
+
+    local rows, specialized_count, explicit_member_count, idle_count = {}, 0, 0, 0
+    for _, unit in ipairs(df.global.world.units.active) do
+        if not U.isDead(unit) and (U.isCitizen(unit) or U.isResident(unit))
+            and unit.status.labors[labor_id] then
+            local resident = resident_row(unit)
+            if not idle_only or resident.idle then
+                local applicable_details, explicit_member = {}, false
+                for _, summary in ipairs(covering) do
+                    local detail = work_details[summary.index]
+                    local member = false
+                    for _, id in ipairs(detail.assigned_units) do
+                        if id == unit.id then
+                            member = true
+                            break
+                        end
+                    end
+                    local applies = summary.assignment_mode == 'everybody'
+                        or (summary.assignment_mode ~= 'nobody' and member)
+                    if applies then
+                        table.insert(applicable_details, summary.name)
+                        explicit_member = explicit_member or member
+                    end
+                end
+                local specialized = creatures.is_specialized(unit)
+                specialized_count = specialized_count + (specialized and 1 or 0)
+                explicit_member_count = explicit_member_count + (explicit_member and 1 or 0)
+                idle_count = idle_count + (resident.idle and 1 or 0)
+                table.insert(rows, {
+                    id = resident.id,
+                    name = resident.name,
+                    profession = resident.profession,
+                    status = resident.status,
+                    idle = resident.idle or false,
+                    position = resident.position,
+                    specialized = specialized,
+                    explicit_detail_member = explicit_member,
+                    applicable_details = applicable_details,
+                })
+            end
+        end
+    end
+    table.sort(rows, function(a, b)
+        if a.idle ~= b.idle then return a.idle end
+        return a.name < b.name
+    end)
+    return reply(paged({
+        labor = labor,
+        covering_details = covering,
+        everybody_detail_count = everybody_count,
+        enabled_count = #rows,
+        specialized_count = specialized_count,
+        explicit_member_count = explicit_member_count,
+        idle_count = idle_count,
+        idle_only = idle_only,
+        notes = 'enabled_count counts known residents whose current native labor toggle is enabled. applicable_details explains matching work-detail policies; this is not a prediction of which resident will take a job next.',
+    }, 'residents', rows, offset, limit))
+end
+
 -- Manager orders are distinct from workshop job queues and labor assignments.
 local function list_work_orders(search_filter, offset, limit)
     if not dfhack.isMapLoaded() or not dfhack.world.isFortressMode() then
@@ -297,5 +396,6 @@ end
 
 local M = {}
 M.list_work_details = list_work_details
+M.labor_coverage = labor_coverage
 M.list_work_orders = list_work_orders
 return M

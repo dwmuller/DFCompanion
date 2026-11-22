@@ -1149,6 +1149,39 @@ impl GameState {
         Ok(result)
     }
 
+    /// Known residents with a current native enablement for one labor, plus
+    /// the work details that apply to each resident.
+    pub fn labor_coverage(
+        &self,
+        labor: &str,
+        idle_only: bool,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        check_page(limit)?;
+        if offset > MAX_WORK_DETAIL_OFFSET {
+            return Err("offset exceeds the maximum supported list index.".to_owned());
+        }
+        let mut result = self.call_lua_json(
+            "check labor coverage",
+            "labor_coverage",
+            vec![
+                labor.to_owned(),
+                idle_only.to_string(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
+        )?;
+        restore_empty_list(&mut result["covering_details"]);
+        restore_empty_list(&mut result["residents"]);
+        if let Some(residents) = result["residents"].as_array_mut() {
+            for resident in residents {
+                restore_empty_list(&mut resident["applicable_details"]);
+            }
+        }
+        Ok(result)
+    }
+
     /// A page of fortress manager/work orders and their stored conditions.
     pub fn list_work_orders(
         &self,

@@ -50,10 +50,6 @@ fortress-management questions.
 
 ### P0 — correctness blockers and broad question classes
 
-- Expose enabled and effective per-unit labors in unit work details, including
-  provenance from manual settings, work details, and DFHack automation. Provide
-  inverse work-detail queries such as "which detail covers this labor?" and
-  "which residents are skilled and idle but belong to no relevant detail?"
 - Expose workshop-to-stockpile links, stockpile sub-filters, reaction reagents,
   and queued-job wait reasons. A companion diagnostic should be able to explain
   why a production order is blocked, evaluate manager-order conditions, and
@@ -75,9 +71,8 @@ fortress-management questions.
 - Include specialized/hauling conflicts in the labor output. For example, flag
   an unspecialized member of a production detail while an everybody-mode Haulers
   detail is active.
-- Add labor/skill coverage diagnostics: skill and enabled-labor holder counts,
-  capable workers currently busy or absent, and the trades that would become
-  uncovered if a particular unit changed roles.
+- Extend labor coverage with skill-level filters and determine which trades
+  would become uncovered if a particular unit changed roles.
 - Make material and reaction classes searchable. `search_items` and
   `list_work_orders` should share vocabulary for concepts such as flux, and a
   zero-result search should distinguish no matches from an unknown

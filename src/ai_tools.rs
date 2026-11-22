@@ -225,6 +225,18 @@ struct ListWorkDetailsArgs {
     limit: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LaborCoverageArgs {
+    labor: String,
+    #[serde(default)]
+    idle_only: bool,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_creature_limit")]
+    limit: usize,
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct ListWorkOrdersArgs {
@@ -439,6 +451,35 @@ fn registry() -> &'static [ToolSpec] {
                     )
                 },
             ),
+            tool(
+                "get_labor_coverage",
+                "Show a compact roster of known residents whose current native labor toggle enables one exact normalized DF labor, plus applicable work details, specialization, current status, and position. Use idle_only to focus on available workers. The labor filter accepts names such as furnace_operate or stone_cutting. This is current configuration and state, not a prediction of which resident will take a job next. This is read-only.",
+                with_paging(json!({
+                    "labor": {
+                        "type": "string",
+                        "description": "Exact normalized DF labor name, such as furnace_operate or stone_cutting."
+                    },
+                    "idle_only": {
+                        "type": "boolean",
+                        "description": "Only include residents currently without a job or social activity."
+                    }
+                })),
+                |game, args: LaborCoverageArgs| {
+                    if args.offset > MAX_CREATURE_OFFSET {
+                        return Err("offset exceeds the maximum supported list index.".to_owned());
+                    }
+                    if args.labor.trim().is_empty() {
+                        return Err("labor cannot be empty.".to_owned());
+                    }
+                    game.labor_coverage(
+                        &args.labor,
+                        args.idle_only,
+                        args.offset,
+                        args.limit,
+                    )
+                },
+            )
+            .required(&["labor"]),
             {
                 let mut properties = with_paging(json!({
                     "search": {

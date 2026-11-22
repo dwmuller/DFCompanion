@@ -85,6 +85,12 @@ async fn bad_arguments_are_rejected_before_touching_the_game() {
         ("list_work_details", json!({"unit_id": -1})),
         ("list_work_details", json!({"unrecognized": true})),
         ("list_work_details", json!({"labor": 5})),
+        ("get_labor_coverage", json!({})),
+        ("get_labor_coverage", json!({"labor": ""})),
+        (
+            "get_labor_coverage",
+            json!({"labor": "mine", "idle_only": "yes"}),
+        ),
         ("list_work_orders", json!({"offset": 5001})),
         ("list_work_orders", json!({"limit": 0})),
         ("list_work_orders", json!({"search": 1})),
@@ -130,6 +136,7 @@ fn tool_descriptions_list_arguments() {
     assert!(list.contains("get_fortress_geometry()"));
     assert!(list.contains("get_floor_plan(z, [x], [y], [width], [height])"));
     assert!(list.contains("list_work_details"));
+    assert!(list.contains("get_labor_coverage(labor, [idle_only], [offset], [limit])"));
     assert!(list.contains("list_work_orders"));
 
     let text = describe_tool("get_unit_details").unwrap();
@@ -147,6 +154,9 @@ fn tool_descriptions_list_arguments() {
     assert!(text.contains("assignment_mode"));
     assert!(text.contains("selected_workers"));
     assert!(text.contains("specialized"));
+    let text = describe_tool("get_labor_coverage").unwrap();
+    assert!(text.contains("labor (string, required)"));
+    assert!(text.contains("idle_only"));
     let text = describe_tool("list_work_orders").unwrap();
     assert!(text.contains("search"));
     assert!(text.contains("offset"));
