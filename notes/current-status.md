@@ -43,6 +43,9 @@ What feature or bug we're actively working on.
 - Tool rounds are checked against the active model's input budget. Results that
   would exceed it are replaced with explicit per-tool errors, allowing the model
   to finish from partial evidence rather than blocking AI processing.
+- Tool definitions now carry short descriptions plus full argument schemas on
+  every request. Detailed semantics, caveats, and argument guidance moved behind
+  the `tool_help(name)` tool, which works even when no fortress is loaded.
 - The AI's game tools are gated on a loaded fortress: a tool call with no
   fortress loaded returns an error the model can relay, while the conversation
   itself is never paused. This fixes a crash where querying fort data during a

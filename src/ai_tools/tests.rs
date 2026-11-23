@@ -57,10 +57,53 @@ async fn bad_arguments_are_reported_before_the_fortress_gate() {
 #[test]
 fn definitions_have_strict_schemas() {
     let definitions = definitions();
-    assert!(definitions.len() >= 7);
+    assert!(definitions.len() >= 8);
     for definition in definitions {
         assert_eq!(definition.schema.unwrap()["additionalProperties"], false);
     }
+}
+
+#[test]
+fn exposed_definitions_should_use_short_descriptions_and_offer_help() {
+    let definitions = definitions();
+    let work_orders = definitions
+        .iter()
+        .find(|definition| definition.name == ToolName::Custom("list_work_orders".to_owned()))
+        .unwrap();
+    let help = definitions
+        .iter()
+        .find(|definition| definition.name == ToolName::Custom("tool_help".to_owned()))
+        .unwrap();
+
+    assert!(work_orders.description.as_deref().unwrap().len() < 200);
+    assert!(help.schema.as_ref().unwrap()["required"] == json!(["name"]));
+}
+
+#[tokio::test]
+async fn tool_help_should_work_without_a_loaded_fortress() {
+    let result = execute_named(
+        &game_state_with(LifecycleState::Unreachable),
+        "tool_help",
+        json!({"name": "list_work_orders"}),
+    )
+    .await;
+    let result = serde_json::from_str::<Value>(&result).unwrap();
+
+    assert_eq!(result["tool"], "list_work_orders");
+    assert!(result["help"]
+        .as_str()
+        .unwrap()
+        .contains("resident's current job/status"));
+}
+
+#[tokio::test]
+async fn tool_help_should_reject_unknown_tools() {
+    let result = execute_named(&game_state(), "tool_help", json!({"name": "unknown"})).await;
+
+    assert!(serde_json::from_str::<Value>(&result).unwrap()["error"]
+        .as_str()
+        .unwrap()
+        .contains("Unknown tool"));
 }
 
 #[test]
@@ -189,6 +232,21 @@ fn tool_descriptions_list_arguments() {
     assert!(text.contains("x (integer, required)"));
     assert!(text.contains("Hidden tiles return only a redaction note"));
     assert!(describe_tool("nope").is_err());
+}
+
+#[test]
+fn short_descriptions_should_reduce_initial_tool_context() {
+    let detailed_description_tokens = registry()
+        .iter()
+        .map(|spec| tokenx_rs::estimate_token_count(spec.description))
+        .sum::<usize>();
+    let exposed_description_tokens = definitions()
+        .iter()
+        .filter_map(|definition| definition.description.as_deref())
+        .map(tokenx_rs::estimate_token_count)
+        .sum::<usize>();
+
+    assert!(exposed_description_tokens < detailed_description_tokens / 2);
 }
 
 #[test]

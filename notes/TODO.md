@@ -52,12 +52,10 @@ Items that are primarily about the mechanics of AI interactions.
   - When a result is omitted for the configured token budget, preserve
     structured metadata such as row count, result size, remaining budget, and
     suggested filters instead of returning only a generic truncation error.
-- Reduce the permanent tool-definition context cost with a hybrid help design.
-  Keep short tool descriptions, schemas, and argument constraints in every
-  request, but move detailed semantics, caveats, examples, and workflow guidance
-  behind a `tool_help` call. Split registry metadata into short and detailed
-  descriptions, and compare tool-call retries, help invocations, provider
-  rounds, and prompt tokens before accepting the change.
+- Measure the hybrid `tool_help` design in play. Short descriptions and full
+  schemas are sent in every request; detailed semantics remain available
+  on demand. Compare tool-call retries, help invocations, provider rounds, and
+  prompt tokens to decide whether additional pruning is worthwhile.
 - Consider provider-specific reasoning controls beyond the implemented
   per-model `default`, `off`, `low`, `medium`, and `high` modes: `minimal`,
   `xhigh`, `max`, and numeric budgets. Use model-discovery capability metadata

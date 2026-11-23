@@ -38,6 +38,30 @@ struct ToolSpec {
     handler: Handler,
 }
 
+impl ToolSpec {
+    fn short_description(&self) -> String {
+        let first_sentence = self
+            .description
+            .split_once(". ")
+            .map_or(self.description, |(sentence, _)| sentence);
+        let mut short = first_sentence.to_owned();
+        if !short.ends_with('.') {
+            short.push('.');
+        }
+        if short.len() > 180 {
+            let end = short
+                .char_indices()
+                .take_while(|(index, _)| *index < 177)
+                .map(|(index, _)| index)
+                .last()
+                .unwrap_or(177);
+            short.truncate(end);
+            short.push_str("...");
+        }
+        short
+    }
+}
+
 /// Builds a tool whose arguments are deserialized into `A` before `run` is called.
 /// `properties` is the JSON-schema `properties` object; the wrapper makes the
 /// schema strict (no additional properties).
@@ -744,14 +768,32 @@ fn registry() -> &'static [ToolSpec] {
 }
 
 pub fn definitions() -> Vec<Tool> {
-    registry()
+    let mut definitions = registry()
         .iter()
         .map(|spec| {
             Tool::new(ToolName::Custom(spec.name.to_owned()))
-                .with_description(spec.description)
+                .with_description(spec.short_description())
                 .with_schema(spec.schema.clone())
         })
-        .collect()
+        .collect::<Vec<_>>();
+    definitions.push(
+        Tool::new(ToolName::Custom("tool_help".to_owned()))
+            .with_description(
+                "Get detailed semantics, caveats, examples, and argument guidance for a game-state tool. Use when a tool's short description or schema is insufficient.",
+            )
+            .with_schema(json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact tool name, for example list_work_orders."
+                    }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            })),
+    );
+    definitions
 }
 
 fn is_required(spec: &ToolSpec, argument: &str) -> bool {
@@ -781,11 +823,15 @@ pub fn describe_tools() -> String {
             .join(", ");
         text.push_str(&format!("\n{}({arguments})", spec.name));
     }
+    text.push_str("\ntool_help(name)");
     text
 }
 
 /// Full description of one tool for the `/tool` command.
 pub fn describe_tool(name: &str) -> Result<String, String> {
+    if name == "tool_help" {
+        return Ok("tool_help\nGet detailed semantics, caveats, examples, and argument guidance for a game-state tool.\nArguments:\n  name (string, required): Exact tool name.".to_owned());
+    }
     let spec = registry()
         .iter()
         .find(|spec| spec.name == name)
@@ -851,10 +897,32 @@ pub async fn execute(game_state: &GameState, call: &ToolCall) -> String {
 }
 
 pub async fn execute_named(game_state: &GameState, name: &str, arguments: Value) -> String {
+    if name == "tool_help" {
+        return execute_help(arguments).to_string();
+    }
     run(game_state, name, arguments)
         .await
         .unwrap_or_else(|error| json!({"error": error}))
         .to_string()
+}
+
+fn execute_help(arguments: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ToolHelpArgs {
+        name: String,
+    }
+
+    match parse_args::<ToolHelpArgs>(arguments) {
+        Ok(args) => match describe_tool(&args.name) {
+            Ok(help) => json!({
+                "tool": args.name,
+                "help": help,
+            }),
+            Err(error) => json!({"error": error}),
+        },
+        Err(error) => json!({"error": error}),
+    }
 }
 
 /// Per-turn limit on tool calls.

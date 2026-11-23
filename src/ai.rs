@@ -1,5 +1,8 @@
 use genai::{
-    chat::{ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ToolResponse},
+    chat::{
+        ChatMessage as GenaiMessage, ChatOptions, ChatRequest, ReasoningEffort, ToolChoice,
+        ToolResponse,
+    },
     resolver::{AuthData, Endpoint, ServiceTargetResolver},
     Client, ModelIden, ServiceTarget,
 };
@@ -725,6 +728,7 @@ impl AiRuntime {
         let mut usage: Vec<AiTurnUsage> = Vec::new();
         let mut purpose = "initial request".to_owned();
         let mut estimated_request_tokens = prompt.token_estimates.total_tokens;
+        let mut max_tokens_recovery_attempted = false;
         loop {
             if cancel.is_cancelled() {
                 return Err(TurnError::Cancelled);
@@ -761,17 +765,28 @@ impl AiRuntime {
                 .collect::<Vec<_>>();
             if tool_calls.is_empty() {
                 let stop_reason = response.stop_reason.clone();
-                let mut answer = response
+                let answer = response
                     .texts()
                     .iter()
                     .filter(|text| !text.trim().is_empty())
                     .join("\n\n");
                 if answer.is_empty() {
-                    answer = format!(
-                        "{} returned no text response (stop reason: {}).\n\n",
-                        configuration.interaction_method,
-                        stop_reason.map_or("unknown".to_owned(), |reason| format!("{reason:?}"))
-                    );
+                    if matches!(stop_reason, Some(genai::chat::StopReason::MaxTokens(_)))
+                        && !max_tokens_recovery_attempted
+                    {
+                        max_tokens_recovery_attempted = true;
+                        request = request.append_message(GenaiMessage::user(
+                            "The previous response exhausted the output budget before producing visible text. Give the player a concise final answer now, using the evidence already gathered. Do not call more tools.",
+                        ));
+                        options = options
+                            .clone()
+                            .with_reasoning_effort(ReasoningEffort::Low)
+                            .with_tool_choice(ToolChoice::None);
+                        purpose = "output recovery".to_owned();
+                        continue;
+                    }
+                    let stop_reason =
+                        stop_reason.map_or("unknown".to_owned(), |reason| format!("{reason:?}"));
                     let dump_msg = match write_ai_failure_dump(
                         "No text response",
                         configuration.interaction_method.as_str(),
@@ -782,7 +797,10 @@ impl AiRuntime {
                         Ok(path) => format!("AI failure dump written to: {}", path.display()),
                         Err(error) => format!("Failed to write AI failure dump: {}", error),
                     };
-                    answer.push_str(&dump_msg);
+                    return Err(TurnError::Failed(format!(
+                        "{} returned no text response (stop reason: {stop_reason}).\n\n{dump_msg}",
+                        configuration.interaction_method
+                    )));
                 }
                 return Ok(TurnOutput {
                     history: history_after_turn(history, prompt, &answer),

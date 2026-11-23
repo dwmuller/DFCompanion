@@ -787,6 +787,60 @@ async fn oversized_tool_results_should_be_reported_without_blocking_the_turn() {
     server.abort();
 }
 
+#[tokio::test]
+async fn max_tokens_without_text_should_retry_once_without_tools() {
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![
+        json!({
+            "id": "resp-truncated",
+            "object": "response",
+            "created_at": 1,
+            "status": "incomplete",
+            "model": "test-model",
+            "output": [],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 4096, "total_tokens": 4106}
+        }),
+        json!({
+            "id": "resp-recovered",
+            "object": "response",
+            "created_at": 2,
+            "status": "completed",
+            "model": "test-model",
+            "output": [{
+                "id": "msg-test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Concise answer.", "annotations": []}]
+            }],
+            "usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}
+        }),
+    ])
+    .await;
+    let mut configuration = compaction_configuration(url);
+    configuration.interaction_method = genai::adapter::AdapterKind::OpenAIResp;
+    let prompt = test_prompt(PromptKind::UserRequest, "answer");
+
+    let result = runtime
+        .run_turn_with_key(
+            &configuration,
+            "test-secret",
+            &History::default(),
+            &prompt,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let _ = requests.recv().await.unwrap();
+    let (_, _, _, recovery_request) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert_eq!(result.answer, "Concise answer.");
+    assert_eq!(recovery_request["reasoning"]["effort"], "low");
+    assert_eq!(recovery_request["tool_choice"], "none");
+}
+
 /// A history with more messages than the compaction threshold allows.
 fn long_history() -> History {
     let prompt = test_prompt(PromptKind::UserRequest, "q");

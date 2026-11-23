@@ -1027,7 +1027,7 @@ fn a_successful_compaction_should_allow_two_growing_turns_before_soft_compaction
     context.configuration = Ok(Some(configuration.clone()));
     drive_past_compaction_threshold(&mut session, now);
     let before = session.history().clone();
-    let summary = (0..1_168).map(|i| format!("item{i} ")).collect::<String>();
+    let summary = (0..2_300).map(|i| format!("item{i} ")).collect::<String>();
     let candidate = History::with_test_summary(&summary, &before);
     let first_queue = VecDeque::from([AiInput::UserRequest {
         text: "next".to_owned(),
