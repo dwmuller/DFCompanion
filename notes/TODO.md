@@ -42,12 +42,15 @@ Items that are primarily about the mechanics of AI interactions.
 - Investigate the use of foreign Dwarf Fortress MCP services.
   - See `notes/foreign_mcp_planning.md`
 - Add compact response modes for detail-heavy list tools:
-  - `list_work_orders` and `list_stockpiles` should offer `index`, `summary`,
-    and `full` detail levels, with compact output as the default.
+  - `list_work_orders`, `list_stockpiles`, and `list_zones` should offer
+    `index`, `summary`, and `full` detail levels, with compact output as the
+    default.
   - Stockpile index/summary output should separate identity, contents, and link
     summaries from the full `subfilters` payload.
   - Work-order index/summary output should separate basic identity/state from
     full condition and reagent arrays.
+  - Zone output should support z filtering and compact identity/location
+    summaries before returning full zone detail.
   - Lower default page sizes for these tools while retaining explicit paging.
   - When a result is omitted for the configured token budget, preserve
     structured metadata such as row count, result size, remaining budget, and
@@ -75,7 +78,9 @@ fortress-management questions.
 - Add an item-instance query and optional fortress-wide inclusion of carried
   items. Results should identify holder/container, exact position, material,
   quality, wear, forbidden/reserved state and, where relevant, squad
-  assignment.
+  assignment. Include queryable emotional attachment and ownership
+  relationships, or expose attachments in unit details, because replacement
+  of carried equipment can otherwise cause unexpected happiness loss.
 - Improve report/event fidelity: preserve unknown types instead of mapping them
   to unrelated categories, add structured departure events for fortress
   members, and support unit/position-based report queries without relying only
@@ -86,6 +91,13 @@ fortress-management questions.
 
 ### P1 — high-value joins and compact diagnostics
 
+- Add a `relations` part to unit details exposing player-visible guild
+  membership, religion/group affiliation, and worshipped deities. This is
+  repeatedly the decisive missing join for questions about what would make
+  specific workers happier.
+- Add construction/building-state inspection for in-progress or failed
+  construction: building id/type, target coordinates, required furnishing,
+  known missing/blocked resources, assigned job, and reported failure reason.
 - Include specialized/hauling conflicts in the labor output. For example, flag
   an unspecialized member of a production detail while an everybody-mode Haulers
   detail is active.
@@ -102,9 +114,10 @@ fortress-management questions.
   treating "inside the fortress" as an objective state for disconnected sites.
 - Extend `inspect_tile` with additional construction/object details not covered
   by the first implementation.
-- Allow creature lists to be filtered by z/area/zone and, where supported,
-  sky-exposed status. This is especially useful for locating residents or
-  livestock near an entrance.
+- Allow creature lists to be filtered by z/area/zone, disposition, and, where
+  supported, sky-exposed status. Consider a convenience "above ground / surface
+  exposure" query. This is especially useful for locating residents, livestock,
+  or hostile creatures near an entrance.
 - ? Add a bounded pathability/reachability query, for example between two
   visible coordinates or from a tile to a named zone. The result should explain
   blockers such as locked/forbidden passages without exposing hidden tiles.
@@ -116,19 +129,27 @@ fortress-management questions.
   schedule/alert/standing orders, station and barrack/burrow assignment, and
   enough automation attribution to distinguish a combat squad from a rotating
   training squad.
-- Add state-change and trend snapshots for repeated observations, with compact
+- ? Add state-change and trend snapshots for repeated observations, with compact
   deltas for stock, population, workshop throughput, roster membership and
-  notable status changes.
+  notable status changes. For creatures, label a disappearance strictly as
+  "no longer observed" rather than asserting that a unit left, died, or changed
+  map. Dwarf Fortress may intentionally withhold that distinction for
+  fog-of-war reasons, so a presence diff is useful observational context but
+  not definitive state.
 - Add a recent-arrivals/change-since view for creatures. Prefer an explicit
   arrival or observation date and a last-seen baseline over inference from
-  monotonically increasing unit IDs or conversation memory.
+  monotonically increasing unit IDs or conversation memory, while preserving
+  the "not currently visible" ambiguity.
+- Add a justice/mandates readout for active export bans and similar orders:
+  affected goods, issuing official, active/expired state, and mandate details
+  available to the player.
 
 ### P2 — deeper domain summaries and speculation
 
-- Add first-class religion and location-role data: temple deity and religion,
-  worshipper identification, available/vacant location positions and
-  eligibility-relevant fields, and other currently inferable-only relationships
-  such as a guildhall's associated organization.
+- Add first-class location-role data: temple deity and religion, available or
+  vacant location positions and eligibility-relevant fields, and other currently
+  inferable-only relationships such as a guildhall's associated organization.
+  Unit-side guild/deity relationships are tracked in P1.
 - Consider targeted fortress-logistics summaries for hospital readiness
   (beds/supplies/qualified staff), farm plots and seed/crop production, and
   caravan/depot state. These should aggregate actionable facts rather than
