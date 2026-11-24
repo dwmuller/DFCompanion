@@ -10,7 +10,7 @@
         "Bypass",
         "-File",
         "${workspaceFolder}/tools/dfhack-mcp.ps1"
-      ],
+      ]
     }
   }
 }
