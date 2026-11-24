@@ -213,6 +213,12 @@ fn tool_descriptions_list_arguments() {
     assert!(describe_tool("list_workshops")
         .unwrap()
         .contains("stockpile/workshop links"));
+    assert!(describe_tool("list_workshops")
+        .unwrap()
+        .contains("wait_reasons"));
+    assert!(describe_tool("diagnose_production_block")
+        .unwrap()
+        .contains("workshop_id"));
     let text = describe_tool("get_labor_coverage").unwrap();
     assert!(text.contains("labor (string, required)"));
     assert!(text.contains("idle_only"));

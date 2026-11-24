@@ -271,6 +271,31 @@ fn restore_reaction_lists(value: &mut Value) {
     }
 }
 
+fn restore_workshop_lists(value: &mut Value) {
+    restore_empty_list(&mut value["workshops"]);
+    if let Some(workshops) = value["workshops"].as_array_mut() {
+        for workshop in workshops {
+            restore_empty_list(&mut workshop["jobs"]);
+            restore_empty_list(&mut workshop["give_to_stockpiles"]);
+            restore_empty_list(&mut workshop["take_from_stockpiles"]);
+            restore_empty_list(&mut workshop["give_to_workshops"]);
+            restore_empty_list(&mut workshop["take_from_workshops"]);
+            if let Some(jobs) = workshop["jobs"].as_array_mut() {
+                for job in jobs {
+                    restore_empty_list(&mut job["wait_reasons"]);
+                    restore_empty_list(&mut job["flags"]);
+                    restore_empty_list(&mut job["requirements"]);
+                    if let Some(requirements) = job["requirements"].as_array_mut() {
+                        for requirement in requirements {
+                            restore_empty_list(&mut requirement["flags"]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn validate_detail_parts(include: &[String]) -> Result<(), String> {
     if let Some(part) = include.iter().find(|p| !DETAIL_PARTS.contains(&p.as_str())) {
         return Err(format!(
@@ -1266,7 +1291,7 @@ impl GameState {
         limit: usize,
     ) -> Result<Value, String> {
         check_page(limit)?;
-        self.call_lua_json(
+        let mut result = self.call_lua_json(
             "list workshops",
             "list_workshops",
             vec![
@@ -1275,7 +1300,75 @@ impl GameState {
                 offset.to_string(),
                 limit.to_string(),
             ],
-        )
+        )?;
+        restore_workshop_lists(&mut result);
+        Ok(result)
+    }
+
+    /// Combines the read-only evidence needed to diagnose a blocked production
+    /// order without inferring a root cause that DF does not expose.
+    pub fn diagnose_production_block(
+        &self,
+        search: Option<&str>,
+        workshop_id: Option<i64>,
+        order_id: Option<i64>,
+    ) -> Result<Value, String> {
+        if search.is_none() && workshop_id.is_none() && order_id.is_none() {
+            return Err("Provide search, workshop_id, or order_id.".to_owned());
+        }
+
+        let workshop_filter = workshop_id.map(|_| None).unwrap_or_else(|| search);
+        let mut workshops = self.list_workshops(workshop_filter, true, 0, 50)?;
+        if let Some(workshops_array) = workshops["workshops"].as_array_mut() {
+            if let Some(id) = workshop_id {
+                workshops_array.retain(|workshop| workshop["id"].as_i64() == Some(id));
+            }
+            if let Some(id) = order_id {
+                for workshop in workshops_array.iter_mut() {
+                    if let Some(jobs) = workshop["jobs"].as_array_mut() {
+                        jobs.retain(|job| job["order_id"].as_i64() == Some(id));
+                    }
+                }
+                workshops_array.retain(|workshop| {
+                    workshop["jobs"]
+                        .as_array()
+                        .is_some_and(|jobs| !jobs.is_empty())
+                });
+            }
+        }
+
+        let mut work_orders = self.list_work_orders(search, 0, 50)?;
+        if let Some(order_id) = order_id {
+            if let Some(orders) = work_orders["work_orders"].as_array_mut() {
+                orders.retain(|order| order["id"].as_i64() == Some(order_id));
+            }
+        }
+
+        let stockpiles = self.list_stockpiles(None, None, 0, 50)?;
+        let mut reactions = Vec::new();
+        if let Some(workshops_array) = workshops["workshops"].as_array() {
+            for workshop in workshops_array {
+                if let Some(jobs) = workshop["jobs"].as_array() {
+                    for job in jobs {
+                        if let Some(reaction) = job["reaction"].as_str() {
+                            let detail = self.get_reaction(Some(reaction), None, false, 0, 10)?;
+                            reactions.push(detail);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(json!({
+            "search": search,
+            "workshop_id": workshop_id,
+            "order_id": order_id,
+            "workshops": workshops["workshops"].clone(),
+            "work_orders": work_orders["work_orders"].clone(),
+            "stockpiles": stockpiles["stockpiles"].clone(),
+            "reaction_definitions": reactions,
+            "notes": "This diagnostic combines queued-job wait evidence, manager-order conditions, reaction definitions, and stockpile routing. wait_reasons are factual native cues, not a complete root-cause determination."
+        }))
     }
 
     /// Counts of the other building kinds.

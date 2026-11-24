@@ -273,6 +273,14 @@ struct ListWorkOrdersArgs {
     limit: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagnoseProductionBlockArgs {
+    search: Option<String>,
+    workshop_id: Option<i64>,
+    order_id: Option<i64>,
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct GetReactionArgs {
@@ -712,7 +720,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_workshops",
-                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, flags, worker, and item-delivery progress measured in material dimensions (not item counts). Each bounded requirement reports required/delivered/remaining dimensions plus item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions. Reaction jobs include a concise raw-recipe summary. Up to 3 jobs are listed per workshop; truncation flags report omitted jobs or requirements. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
+                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, factual wait_reasons, flags, worker, and item-delivery progress measured in material dimensions (not item counts). wait_reasons identifies suspended, lost-item, missing-required-item, fetching/bringing-item, and worker-unavailable states without inferring hidden causes. Each bounded requirement reports required/delivered/remaining dimensions plus item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions. Reaction jobs include a concise raw-recipe summary. Up to 3 jobs are listed per workshop; truncation flags report omitted jobs or requirements. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "name": {
                         "type": "string",
@@ -725,6 +733,31 @@ fn registry() -> &'static [ToolSpec] {
                 })),
                 |game, args: ListWorkshopsArgs| {
                     game.list_workshops(args.name.as_deref(), args.only_with_jobs, args.offset, args.limit)
+                },
+            ),
+            tool(
+                "diagnose_production_block",
+                "Diagnose a likely production-order blockage by combining matching queued workshop jobs, native wait reasons and item-delivery progress, manager-order conditions and requirements, reaction details, and workshop/stockpile routing links. Supply one or more of search, workshop_id, or order_id. This joins evidence from existing read-only tools; it does not mutate jobs or claim the complete cause of every wait state.",
+                json!({
+                    "search": {
+                        "type": "string",
+                        "description": "Text to match against workshop and manager-order names, reactions, or recipes."
+                    },
+                    "workshop_id": {
+                        "type": "integer",
+                        "description": "Restrict the diagnostic to one workshop id."
+                    },
+                    "order_id": {
+                        "type": "integer",
+                        "description": "Restrict the diagnostic to one manager-order id."
+                    }
+                }),
+                |game, args: DiagnoseProductionBlockArgs| {
+                    game.diagnose_production_block(
+                        args.search.as_deref(),
+                        args.workshop_id,
+                        args.order_id,
+                    )
                 },
             ),
             tool(

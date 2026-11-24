@@ -166,6 +166,28 @@ fn empty_work_order_lists_are_restored() {
 }
 
 #[test]
+fn empty_workshop_job_wait_reasons_are_restored() {
+    let mut result = json!({
+        "workshops": [
+            {
+                "jobs": [
+                    {
+                        "wait_reasons": {},
+                        "flags": {},
+                        "requirements": {}
+                    }
+                ]
+            }
+        ]
+    });
+
+    restore_workshop_lists(&mut result);
+
+    assert_eq!(result["workshops"][0]["jobs"][0]["wait_reasons"], json!([]));
+    assert_eq!(result["workshops"][0]["jobs"][0]["flags"], json!([]));
+}
+
+#[test]
 fn empty_reaction_definition_lists_are_restored() {
     let mut result = json!({
         "reactions": [

@@ -153,11 +153,39 @@ local function workshop_job_state(job, worker)
     return 'assigned'
 end
 
+-- Factual reasons a queued job may not be progressing, separate from native
+-- state and full flags. These are cues for diagnostics rather than a claim
+-- that a hidden DF mechanic is absent.
+local function workshop_job_wait_reasons(job, worker, remaining_dimension)
+    local reasons = {}
+    if job.flags.suspend then
+        table.insert(reasons, 'suspended')
+    end
+    if job.flags.item_lost then
+        table.insert(reasons, 'item_lost')
+    end
+    if remaining_dimension > 0 then
+        table.insert(reasons, 'waiting_for_required_items')
+    end
+    if job.flags.fetching then
+        table.insert(reasons, 'fetching_required_items')
+    end
+    if job.flags.bringing then
+        table.insert(reasons, 'bringing_required_items')
+    end
+    if not worker and not job.flags.suspend and not job.flags.item_lost
+            and remaining_dimension == 0 then
+        table.insert(reasons, 'waiting_for_worker')
+    end
+    return reasons
+end
+
 -- One queued workshop job: identity, manager-order linkage, worker, native
 -- state, and bounded item-requirement delivery progress.
 local function workshop_job_row(job)
     local worker = dfhack.job.getWorker(job)
     local requirements, requested_total, delivered_total = workshop_job_requirements(job)
+    local remaining_dimension = math.max(0, requested_total - delivered_total)
     local row = {
         id = job.id,
         name = text(dfhack.job.getName(job)),
@@ -165,6 +193,7 @@ local function workshop_job_row(job)
         order_id = job.order_id >= 0 and job.order_id or nil,
         reaction = job.reaction_name ~= '' and text(job.reaction_name) or nil,
         state = workshop_job_state(job, worker),
+        wait_reasons = workshop_job_wait_reasons(job, worker, remaining_dimension),
         flags = set_flags(job.flags),
         worker = worker and {id = worker.id, name = name_of(worker)} or nil,
         item_requirements_count = #job.job_items.elements,
@@ -172,7 +201,7 @@ local function workshop_job_row(job)
         quantity_unit = 'dimension',
         required_dimension = requested_total,
         delivered_dimension = delivered_total,
-        remaining_dimension = math.max(0, requested_total - delivered_total),
+        remaining_dimension = remaining_dimension,
         items_requested = requested_total,
         items_delivered = delivered_total,
         items_remaining = math.max(0, requested_total - delivered_total),

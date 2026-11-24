@@ -971,6 +971,15 @@ async fn ai_tools_end_to_end() {
                 WORKSHOP_JOB_STATES.contains(&job["state"].as_str().unwrap()),
                 "unexpected job state: {job}"
             );
+            assert!(job["wait_reasons"].is_array(), "{job}");
+            assert!(
+                job["wait_reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|reason| reason.is_string()),
+                "{job}"
+            );
             assert!(job["flags"].is_array(), "{job}");
             assert!(job["requirements"].is_array(), "{job}");
             assert!(job["item_requirements_count"].is_u64(), "{job}");
