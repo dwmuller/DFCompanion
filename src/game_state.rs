@@ -248,6 +248,29 @@ fn restore_work_order_lists(value: &mut Value) {
     }
 }
 
+fn restore_reaction_lists(value: &mut Value) {
+    restore_empty_list(&mut value["reactions"]);
+    if let Some(reactions) = value["reactions"].as_array_mut() {
+        for reaction in reactions {
+            for key in ["allowed_buildings", "reagents", "products", "flags"] {
+                restore_empty_list(&mut reaction[key]);
+            }
+            if let Some(reagents) = reaction["reagents"].as_array_mut() {
+                for reagent in reagents {
+                    for key in ["flags", "reagent_flags"] {
+                        if reagent.get(key).is_some() {
+                            restore_empty_list(&mut reagent[key]);
+                        }
+                    }
+                    if reagent.get("contains").is_some() {
+                        restore_empty_list(&mut reagent["contains"]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn validate_detail_parts(include: &[String]) -> Result<(), String> {
     if let Some(part) = include.iter().find(|p| !DETAIL_PARTS.contains(&p.as_str())) {
         return Err(format!(
@@ -1203,6 +1226,34 @@ impl GameState {
             ],
         )?;
         restore_work_order_lists(&mut result);
+        Ok(result)
+    }
+
+    /// Looks up a reaction definition by exact code or by text search.
+    pub fn get_reaction(
+        &self,
+        code: Option<&str>,
+        search: Option<&str>,
+        available_only: bool,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, String> {
+        check_page(limit)?;
+        if offset > MAX_WORK_ORDER_OFFSET {
+            return Err("offset exceeds the maximum supported list index.".to_owned());
+        }
+        let mut result = self.call_lua_json(
+            "get reaction",
+            "get_reaction",
+            vec![
+                code.unwrap_or_default().to_owned(),
+                search.unwrap_or_default().to_owned(),
+                available_only.to_string(),
+                offset.to_string(),
+                limit.to_string(),
+            ],
+        )?;
+        restore_reaction_lists(&mut result);
         Ok(result)
     }
 

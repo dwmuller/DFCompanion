@@ -166,6 +166,36 @@ fn empty_work_order_lists_are_restored() {
 }
 
 #[test]
+fn empty_reaction_definition_lists_are_restored() {
+    let mut result = json!({
+        "reactions": [
+            {
+                "allowed_buildings": {},
+                "reagents": [{
+                    "flags": {},
+                    "reagent_flags": {},
+                    "contains": {}
+                }],
+                "products": {},
+                "flags": {}
+            }
+        ]
+    });
+
+    restore_reaction_lists(&mut result);
+
+    assert_eq!(result["reactions"][0]["allowed_buildings"], json!([]));
+    assert_eq!(result["reactions"][0]["reagents"][0]["flags"], json!([]));
+    assert_eq!(
+        result["reactions"][0]["reagents"][0]["reagent_flags"],
+        json!([])
+    );
+    assert_eq!(result["reactions"][0]["reagents"][0]["contains"], json!([]));
+    assert_eq!(result["reactions"][0]["products"], json!([]));
+    assert_eq!(result["reactions"][0]["flags"], json!([]));
+}
+
+#[test]
 fn version_preflight_warns_when_either_version_differs() {
     assert_eq!(
         version_mismatch_warning(Some("53.16"), Some("53.16-r2")),

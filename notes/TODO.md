@@ -72,9 +72,10 @@ fortress-management questions.
 
 ### P0 — correctness blockers and broad question classes
 
-- Expose reaction reagents and queued-job wait reasons, then add a companion
-  diagnostic that combines workshop stockpile links, stockpile sub-filters,
-  and manager-order conditions to explain why a production order is blocked.
+- Expose queued-job wait reasons, then add a companion diagnostic that combines
+  workshop stockpile links, stockpile sub-filters, manager-order conditions,
+  reaction inputs, and job material requirements to explain why a production
+  order is blocked.
 - Add an item-instance query and optional fortress-wide inclusion of carried
   items. Results should identify holder/container, exact position, material,
   quality, wear, forbidden/reserved state and, where relevant, squad

@@ -84,6 +84,9 @@ What feature or bug we're actively working on.
   sub-filter counts for accepted categories, enabling the AI to identify
   which workshops take from or give to a pile without reverse-engineering
   coordinates or job reports.
+- Reaction jobs now report required, delivered, and remaining material
+  dimensions explicitly, with a concise recipe summary; `get_reaction` exposes
+  permitted and civilization-generated recipes from the loaded world's raws.
 - Implemented across `src/game_state.rs`, `src/app.rs`, `src/ai_tools.rs`,
   `src/web.rs`, `src/main.rs`, `lua/plugin/dfcompanion.lua`, and
   `lua/rpc/dfcompanion.lua`; the unit suite passes and clippy is clean.

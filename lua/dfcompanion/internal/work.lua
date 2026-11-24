@@ -13,6 +13,8 @@ local known_residents_by_id = creatures.known_residents_by_id
 local resident_row = creatures.resident_row
 local MAX_WORK_ORDER_CONDITIONS = 10
 local MAX_WORK_ORDER_CONDITION_REAGENTS = 10
+local MAX_WORK_ORDER_REQUIREMENTS = 10
+local MAX_REACTION_PAGE_SIZE = 50
 local WORK_ORDER_FREQUENCIES = {
     [df.workquota_frequency_type.NONE] = 'unknown',
     [df.workquota_frequency_type.OneTime] = 'one_time',
@@ -51,57 +53,293 @@ local function work_order_subtype(item_type, subtype)
     return def and text(def.id) or nil
 end
 
-local function item_order_condition(condition)
+-- Shared factual serialization for reaction reagents, manager-order
+-- requirements, and queued-job item requirements. The objects all expose the
+-- same DF item-filter fields, but callers supply the applicable quantity and
+-- can pass the containing reaction when serializing a raw reagent directly.
+-- reagent_index is explicit because manager conditions do not expose that
+-- field; reading an absent DFHack struct field raises an error.
+local function item_requirement_row(item, quantity, containing_reaction, reagent_index)
     local row = {
-        comparison = WORK_ORDER_COMPARISONS[condition.compare_type] or 'unknown',
-        quantity = condition.compare_val,
+        quantity = quantity or item.quantity,
         flags = {},
     }
-    if condition.item_type ~= df.item_type.NONE then
-        row.item_type = df.item_type[condition.item_type]
-        row.item_subtype = work_order_subtype(condition.item_type, condition.item_subtype)
+    if item.item_type ~= df.item_type.NONE then
+        row.item_type = df.item_type[item.item_type]
+        row.item_subtype = work_order_subtype(item.item_type, item.item_subtype)
     end
-    row.material = work_order_material(condition.mat_type, condition.mat_index)
-    if condition.metal_ore ~= -1 then
-        local ore = df.global.world.raws.inorganics.all[condition.metal_ore]
+    row.material = work_order_material(item.mat_type, item.mat_index)
+    if item.metal_ore ~= -1 then
+        local ore = df.global.world.raws.inorganics.all[item.metal_ore]
         row.bearing = ore and text(ore.id) or nil
     end
-    if condition.reaction_class ~= '' then
-        row.reaction_class = text(condition.reaction_class)
+    if item.reaction_class ~= '' then
+        row.reaction_class = text(item.reaction_class)
     end
-    if condition.has_material_reaction_product ~= '' then
-        row.reaction_product = text(condition.has_material_reaction_product)
+    if item.has_material_reaction_product ~= '' then
+        row.reaction_product = text(item.has_material_reaction_product)
     end
-    if condition.has_tool_use ~= df.tool_uses.NONE then
-        row.tool = df.tool_uses[condition.has_tool_use]
+    if item.has_tool_use ~= df.tool_uses.NONE then
+        row.tool = df.tool_uses[item.has_tool_use]
     end
-    if condition.min_dimension ~= -1 then
-        row.min_dimension = condition.min_dimension
+    if item.min_dimension ~= -1 then
+        row.min_dimension = item.min_dimension
     end
-    if condition.reaction_id ~= -1 then
-        local reaction = df.global.world.raws.reactions.reactions[condition.reaction_id]
-        if reaction then
-            row.reaction = text(reaction.code)
+    local reaction = containing_reaction
+    if not reaction and item.reaction_id ~= nil and item.reaction_id ~= -1 then
+        reaction = df.global.world.raws.reactions.reactions[item.reaction_id]
+    end
+    if reaction then
+        row.reaction = text(reaction.code)
+        local reagent
+        if reagent_index ~= nil and reagent_index ~= -1 then
+            row.reagent_index = reagent_index
+            reagent = reaction.reagents[reagent_index]
+        elseif containing_reaction then
+            reagent = item
+        end
+        if reagent then
+            row.reagent = text(reagent.code)
+            local reagent_flags = set_flags(reagent.flags)
+            if #reagent_flags > 0 then
+                row.reagent_flags = reagent_flags
+            end
+        end
+        if item.contains and #item.contains > 0 then
             row.contains = {}
-            row.contains_count = #condition.contains
-            row.contains_truncated = #condition.contains > MAX_WORK_ORDER_CONDITION_REAGENTS
+            row.contains_count = #item.contains
+            row.contains_truncated = #item.contains > MAX_WORK_ORDER_CONDITION_REAGENTS
             local count = 0
-            for _, reagent_index in ipairs(condition.contains) do
+            for _, reagent_index in ipairs(item.contains) do
                 count = count + 1
                 if count <= MAX_WORK_ORDER_CONDITION_REAGENTS then
-                    local reagent = reaction.reagents[reagent_index]
+                    reagent = reaction.reagents[reagent_index]
                     table.insert(row.contains, reagent and text(reagent.code) or tostring(reagent_index))
                 end
             end
         end
     end
-    for _, flags in ipairs({condition.flags1, condition.flags2, condition.flags3}) do
+    for _, flags in ipairs({item.flags1, item.flags2, item.flags3}) do
         for _, name in ipairs(set_flags(flags)) do
             table.insert(row.flags, name)
         end
     end
     table.sort(row.flags)
     return row
+end
+
+local function item_order_condition(condition)
+    local row = item_requirement_row(condition, condition.compare_val)
+    row.comparison = WORK_ORDER_COMPARISONS[condition.compare_type] or 'unknown'
+    return row
+end
+
+local function work_order_requirements(order)
+    local result = {}
+    local items = order.items and order.items.elements
+    if not items then
+        return result
+    end
+    for index, item in ipairs(items) do
+        if #result >= MAX_WORK_ORDER_REQUIREMENTS then
+            break
+        end
+        local row = item_requirement_row(item, nil, nil, item.reagent_index)
+        row.index = index
+        table.insert(result, row)
+    end
+    return result
+end
+
+local function reaction_product_row(product)
+    local row = {
+        token = text(product.product_token),
+        to_container = product.product_to_container,
+    }
+    if product:getType() == df.reaction_product_type.item then
+        row.item_type = df.item_type[product.item_type]
+        row.item_subtype = work_order_subtype(product.item_type, product.item_subtype)
+        row.material = work_order_material(product.mat_type, product.mat_index)
+        row.count = product.count
+        row.probability = product.probability
+        row.product_dimension = product.product_dimension
+        local material_source = {}
+        if product.get_material.reagent_code ~= '' then
+            material_source.reagent = text(product.get_material.reagent_code)
+        end
+        if product.get_material.product_code ~= '' then
+            material_source.product = text(product.get_material.product_code)
+        end
+        if next(material_source) then
+            row.material_source = material_source
+        end
+    end
+    return row
+end
+
+local function reaction_row(reaction, index, available)
+    local row = {
+        index = index,
+        code = text(reaction.code),
+        name = text(reaction.name),
+        skill = df.job_skill[reaction.skill],
+        source = reaction.flags.GENERATED and 'generated' or 'raw',
+        available = available,
+        flags = set_flags(reaction.flags),
+        allowed_buildings = {},
+        reagents = {},
+        products = {},
+    }
+    if reaction.source_enid >= 0 then
+        row.source_entity_id = reaction.source_enid
+    end
+    if reaction.source_hfid >= 0 then
+        row.source_histfig_id = reaction.source_hfid
+    end
+    for building_index, building_type in ipairs(reaction.building.type) do
+        local building = {type = df.building_type[building_type]}
+        local subtype = reaction.building.subtype[building_index]
+        if subtype and subtype >= 0 then
+            building.subtype = subtype
+        end
+        local custom = reaction.building.custom[building_index]
+        if custom and custom ~= '' and custom ~= -1 then
+            building.custom = text(custom)
+        end
+        table.insert(row.allowed_buildings, building)
+    end
+    for reagent_index, reagent in ipairs(reaction.reagents) do
+        local reagent_row
+        if reagent:getType() == df.reaction_reagent_type.item then
+            reagent_row = item_requirement_row(
+                reagent, reagent.quantity, reaction, reagent_index)
+            reagent_row.required_dimension = reagent.quantity
+            reagent_row.quantity_unit = 'dimension'
+        else
+            reagent_row = {type = df.reaction_reagent_type[reagent:getType()]}
+        end
+        reagent_row.code = text(reagent.code)
+        table.insert(row.reagents, reagent_row)
+    end
+    for _, product in ipairs(reaction.products) do
+        table.insert(row.products, reaction_product_row(product))
+    end
+    return row
+end
+
+local function reaction_summary(reaction_code)
+    if not reaction_code or reaction_code == '' then
+        return nil
+    end
+    local reaction
+    for _, candidate in ipairs(df.global.world.raws.reactions.reactions) do
+        if candidate.code == reaction_code then
+            reaction = candidate
+            break
+        end
+    end
+    if not reaction then
+        return nil
+    end
+    local function describe_item(item_type, material, reaction_class, dimension, count)
+        local description = item_type or 'item'
+        if material then
+            description = description .. ' (' .. material .. ')'
+        elseif reaction_class then
+            description = description .. ' (reaction class ' .. reaction_class .. ')'
+        end
+        if dimension and dimension >= 0 then
+            description = description .. ', ' .. dimension .. ' dimension'
+            if item_type == 'BAR' and dimension == 150 then
+                count = count or 1
+                description = count .. ' bar' .. (count == 1 and '' or 's') ..
+                    ' (' .. (material or 'unspecified material') ..
+                    ', 150 dimension each)'
+            elseif item_type == 'BOULDER' and reaction_class == 'FLUX'
+                    and dimension == 1 then
+                description = '1 flux boulder'
+            end
+        end
+        return description
+    end
+    local ingredients = {}
+    for _, reagent in ipairs(reaction.reagents) do
+        if reagent:getType() == df.reaction_reagent_type.item then
+            table.insert(ingredients, describe_item(
+                df.item_type[reagent.item_type],
+                work_order_material(reagent.mat_type, reagent.mat_index),
+                reagent.reaction_class ~= '' and text(reagent.reaction_class) or nil,
+                reagent.quantity))
+        else
+            table.insert(ingredients, text(reagent.code))
+        end
+    end
+    local products = {}
+    for _, product in ipairs(reaction.products) do
+        if product:getType() == df.reaction_product_type.item then
+            table.insert(products, describe_item(
+                df.item_type[product.item_type],
+                work_order_material(product.mat_type, product.mat_index),
+                nil,
+                product.product_dimension,
+                product.count))
+        else
+            table.insert(products, text(product.product_token))
+        end
+    end
+    return table.concat(ingredients, ' + ') .. ' -> ' .. table.concat(products, ' + ')
+end
+
+local function list_reactions(code_filter, search_filter, available_only, offset, limit)
+    code_filter = text(code_filter):upper()
+    search_filter = text(search_filter):lower()
+    if (code_filter == '') == (search_filter == '') then
+        return reply({error = 'Provide exactly one of code or search.'})
+    end
+    local entity = df.historical_entity.find(df.global.plotinfo.civ_id)
+    if available_only == 'true' and not entity then
+        return reply({error = 'The current civilization is unavailable.'})
+    end
+    local permitted = {}
+    if entity then
+        for _, reaction_index in ipairs(entity.entity_raw.workshops.permitted_reaction_id) do
+            permitted[reaction_index] = true
+        end
+    end
+    local reactions = {}
+    for index, reaction in ipairs(df.global.world.raws.reactions.reactions) do
+        local available = permitted[index] == true
+            or (entity ~= nil and reaction.source_enid == entity.id)
+        local matches = not (available_only == 'true' and not available)
+        if code_filter ~= '' then
+            matches = matches and reaction.code:upper() == code_filter
+        else
+            local searchable = (reaction.code .. ' ' .. reaction.name):lower()
+            for _, reagent in ipairs(reaction.reagents) do
+                searchable = searchable .. ' ' .. (reagent.code or '')
+                if reagent:getType() == df.reaction_reagent_type.item then
+                    searchable = searchable .. ' ' .. (reagent.reaction_class or '')
+                        .. ' ' .. (work_order_material(reagent.mat_type, reagent.mat_index) or '')
+                end
+            end
+            for _, product in ipairs(reaction.products) do
+                searchable = searchable .. ' ' .. (product.product_token or '')
+                if product:getType() == df.reaction_product_type.item then
+                    searchable = searchable .. ' ' ..
+                        (work_order_material(product.mat_type, product.mat_index) or '')
+                end
+            end
+            matches = matches and searchable:lower():find(search_filter, 1, true) ~= nil
+        end
+        if matches then
+            table.insert(reactions, reaction_row(reaction, index, available))
+        end
+    end
+    table.sort(reactions, function(a, b) return a.code < b.code end)
+    return reply(paged({
+        available_only = available_only == 'true',
+        notes = 'Reaction inputs with required_dimension use DF material dimensions, not item counts; a standard bar is 150 dimension. Available means permitted by the current civilization or generated for it, not currently in stock or enabled at a particular workshop.',
+    }, 'reactions', reactions, offset, math.min(tonumber(limit) or 10, MAX_REACTION_PAGE_SIZE)))
 end
 
 local function manager_order_row(order)
@@ -120,6 +358,12 @@ local function manager_order_row(order)
         item_conditions_truncated = #order.item_conditions > MAX_WORK_ORDER_CONDITIONS,
         order_conditions_truncated = #order.order_conditions > MAX_WORK_ORDER_CONDITIONS,
     }
+    local requirement_count = order.items and #order.items.elements or 0
+    if requirement_count > 0 then
+        row.requirements = work_order_requirements(order)
+        row.requirement_count = requirement_count
+        row.requirements_truncated = requirement_count > MAX_WORK_ORDER_REQUIREMENTS
+    end
     if order.item_type ~= df.item_type.NONE then
         row.item_type = df.item_type[order.item_type]
         row.item_subtype = work_order_subtype(order.item_type, order.item_subtype)
@@ -161,6 +405,20 @@ local function manager_order_row(order)
             table.insert(search_parts, category)
         end
     end
+    for _, requirement in ipairs(row.requirements or {}) do
+        for _, key in ipairs({
+            'item_type', 'item_subtype', 'material', 'bearing',
+            'reaction_class', 'reaction_product', 'tool', 'reagent',
+            'reaction',
+        }) do
+            if requirement[key] then
+                table.insert(search_parts, requirement[key])
+            end
+        end
+        for _, flag in ipairs(requirement.flags) do
+            table.insert(search_parts, flag)
+        end
+    end
     local condition_count = 0
     for _, condition in ipairs(order.item_conditions) do
         condition_count = condition_count + 1
@@ -169,7 +427,7 @@ local function manager_order_row(order)
             table.insert(row.item_conditions, condition_row)
             for _, key in ipairs({
                 'item_type', 'item_subtype', 'material', 'bearing',
-                'reaction_class', 'reaction_product', 'tool',
+                'reaction_class', 'reaction_product', 'tool', 'reagent',
                 'reaction',
             }) do
                 if condition_row[key] then
@@ -390,7 +648,9 @@ local function list_work_orders(search_filter, offset, limit)
     return reply(paged({
         notes = 'amount_left and amount_total are the stored DF fields. is_active and is_validated are raw manager-order flags, not inferred completed/waiting states. order-condition satisfied is the stored DF flag; item conditions are not evaluated and flags4/flags5 are not decoded. Condition arrays include at most ' ..
             MAX_WORK_ORDER_CONDITIONS .. ' entries each, and reagent lists at most ' ..
-            MAX_WORK_ORDER_CONDITION_REAGENTS .. ' entries, with truncation reported.',
+            MAX_WORK_ORDER_CONDITION_REAGENTS .. ' entries. Requirements are stored job-item ' ..
+            'filters, capped at ' .. MAX_WORK_ORDER_REQUIREMENTS ..
+            ' entries; truncation is reported. Native flags and reaction reagent flags are factual restrictions, not evaluated availability.',
     }, 'work_orders', rows, offset, limit))
 end
 
@@ -398,4 +658,7 @@ local M = {}
 M.list_work_details = list_work_details
 M.labor_coverage = labor_coverage
 M.list_work_orders = list_work_orders
+M.item_requirement_row = item_requirement_row
+M.get_reaction = list_reactions
+M.reaction_summary = reaction_summary
 return M

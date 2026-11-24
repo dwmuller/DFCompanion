@@ -138,6 +138,16 @@ async fn bad_arguments_are_rejected_before_touching_the_game() {
         ("list_work_orders", json!({"limit": 0})),
         ("list_work_orders", json!({"search": 1})),
         ("list_work_orders", json!({"unrecognized": true})),
+        ("get_reaction", json!({})),
+        (
+            "get_reaction",
+            json!({"code": "PIG_IRON_MAKING", "search": "pig iron"}),
+        ),
+        ("get_reaction", json!({"search": "iron", "limit": 0})),
+        (
+            "get_reaction",
+            json!({"code": "iron", "unrecognized": true}),
+        ),
         ("get_floor_plan", json!({})),
         ("get_floor_plan", json!({"z": 0, "width": 97})),
         ("get_floor_plan", json!({"z": 0, "height": 0})),
@@ -312,6 +322,38 @@ fn list_work_orders_schema_is_strict_and_has_expected_arguments() {
             search: None,
             offset: 0,
             limit: DEFAULT_CREATURE_LIMIT,
+        }
+    );
+}
+
+#[test]
+fn get_reaction_schema_is_strict_and_defaults_to_available_reactions() {
+    let spec = registry()
+        .iter()
+        .find(|spec| spec.name == "get_reaction")
+        .unwrap();
+    assert_eq!(spec.schema["additionalProperties"], false);
+    assert_eq!(
+        spec.schema["properties"]["offset"]["maximum"],
+        MAX_REACTION_OFFSET
+    );
+    assert_eq!(spec.schema["properties"]["limit"]["minimum"], 1);
+    assert_eq!(
+        spec.schema["properties"]["limit"]["maximum"],
+        MAX_ITEM_PAGE_SIZE
+    );
+    assert!(spec.schema["properties"].get("code").is_some());
+    assert!(spec.schema["properties"].get("search").is_some());
+
+    let args: GetReactionArgs = parse_args(json!({})).unwrap();
+    assert_eq!(
+        args,
+        GetReactionArgs {
+            code: None,
+            search: None,
+            available_only: true,
+            offset: 0,
+            limit: DEFAULT_REACTION_LIMIT,
         }
     );
 }

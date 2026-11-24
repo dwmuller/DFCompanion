@@ -31,6 +31,7 @@ local exports = {
     list_work_details = modules.work,
     labor_coverage = modules.work,
     list_work_orders = modules.work,
+    get_reaction = modules.work,
     report_entry = modules.reports,
     recent_reports = modules.reports,
     search_items = modules.items,

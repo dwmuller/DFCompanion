@@ -844,6 +844,51 @@ async fn ai_tools_end_to_end() {
             .all(|location| location["zone_count"].as_i64().unwrap() > 0),
         "phantom locations must not be returned: {locations}"
     );
+    let pig_iron = call(
+        "get_reaction",
+        serde_json::json!({"code": "PIG_IRON_MAKING", "available_only": false}),
+    )
+    .await;
+    let reactions = pig_iron["reactions"].as_array().unwrap();
+    assert_eq!(reactions.len(), 1, "{pig_iron}");
+    assert_eq!(reactions[0]["code"], "PIG_IRON_MAKING");
+    assert!(reactions[0]["reagents"].is_array(), "{pig_iron}");
+    assert!(reactions[0]["products"].is_array(), "{pig_iron}");
+    assert!(
+        reactions[0]["reagents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reagent| {
+                reagent["material"] == "INORGANIC:IRON"
+                    && reagent["required_dimension"] == 150
+                    && reagent["quantity_unit"] == "dimension"
+            }),
+        "{pig_iron}"
+    );
+    assert!(
+        reactions[0]["products"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|product| {
+                product["material"] == "INORGANIC:PIG_IRON" && product["product_dimension"] == 150
+            }),
+        "{pig_iron}"
+    );
+    let searched_reactions = call(
+        "get_reaction",
+        serde_json::json!({"search": "pig iron", "available_only": false, "limit": 5}),
+    )
+    .await;
+    assert!(
+        searched_reactions["reactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reaction| reaction["code"] == "PIG_IRON_MAKING"),
+        "{searched_reactions}"
+    );
     let workshops = call("list_workshops", serde_json::json!({"limit": 50})).await;
     assert!(
         workshops["workshops"]
@@ -932,12 +977,18 @@ async fn ai_tools_end_to_end() {
             assert!(job["items_requested"].is_i64(), "{job}");
             assert!(job["items_delivered"].is_i64(), "{job}");
             assert!(job["items_remaining"].is_i64(), "{job}");
+            assert_eq!(job["quantity_unit"], "dimension", "{job}");
+            assert_eq!(job["required_dimension"], job["items_requested"], "{job}");
             let mut requested = 0i64;
             let mut delivered = 0i64;
             for req in job["requirements"].as_array().unwrap() {
                 let r = req["requested"].as_i64().unwrap();
                 let d = req["delivered"].as_i64().unwrap();
                 let rem = req["remaining"].as_i64().unwrap();
+                assert_eq!(req["quantity_unit"], "dimension", "{req}");
+                assert_eq!(req["required_dimension"], r, "{req}");
+                assert_eq!(req["delivered_dimension"], d, "{req}");
+                assert_eq!(req["remaining_dimension"], rem, "{req}");
                 assert!(r >= 0 && d >= 0 && rem >= 0, "{req}");
                 assert!(d <= r, "{req}");
                 assert_eq!(rem, r - d, "{req}");

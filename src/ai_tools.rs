@@ -26,8 +26,10 @@ pub const NO_FORTRESS_LOADED: &str = "No fortress is currently loaded.";
 
 const MAX_CREATURE_OFFSET: usize = 5_000;
 const MAX_WORK_ORDER_OFFSET: usize = 5_000;
+const MAX_REACTION_OFFSET: usize = 5_000;
 const DEFAULT_CREATURE_LIMIT: usize = 25;
 const DEFAULT_REPORT_LIMIT: usize = 10;
+const DEFAULT_REACTION_LIMIT: usize = 10;
 
 type Handler = Box<dyn Fn(&GameState, Value) -> Result<Value, String> + Send + Sync>;
 
@@ -271,6 +273,27 @@ struct ListWorkOrdersArgs {
     limit: usize,
 }
 
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct GetReactionArgs {
+    code: Option<String>,
+    search: Option<String>,
+    #[serde(default = "default_true")]
+    available_only: bool,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_reaction_limit")]
+    limit: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_reaction_limit() -> usize {
+    DEFAULT_REACTION_LIMIT
+}
+
 /// Adds the shared `offset` and `limit` paging properties to a schema's properties.
 fn with_paging(mut properties: Value) -> Value {
     properties["offset"] = json!({
@@ -504,17 +527,58 @@ fn registry() -> &'static [ToolSpec] {
                 },
             )
             .required(&["labor"]),
+            tool(
+                "get_reaction",
+                "Look up a reaction definition by exact code or search its name, code, reagents, and products. Input requirements are reported in DF material dimensions, not item counts; available means permitted by the current civilization or generated for it, not currently in stock or workshop-enabled. This is read-only.",
+                {
+                    let mut properties = with_paging(json!({
+                        "code": {
+                            "type": "string",
+                            "description": "Exact reaction code, such as PIG_IRON_MAKING. Provide this or search, but not both."
+                        },
+                        "search": {
+                            "type": "string",
+                            "description": "Case-insensitive text to match against reaction names, codes, reagent materials/classes, and products. Provide this or code, but not both."
+                        },
+                        "available_only": {
+                            "type": "boolean",
+                            "description": "Only include reactions permitted by the current civilization or generated for it. Defaults to true."
+                        }
+                    }));
+                    properties["offset"]["maximum"] = json!(MAX_REACTION_OFFSET);
+                    properties["limit"]["description"] =
+                        json!("Maximum number of matching reactions to return. Defaults to 10.");
+                    properties
+                },
+                |game, args: GetReactionArgs| {
+                    if args.offset > MAX_REACTION_OFFSET {
+                        return Err("offset exceeds the maximum supported list index.".to_owned());
+                    }
+                    let code = args.code.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    let search = args.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    if code.is_some() == search.is_some() {
+                        return Err("Provide exactly one of code or search.".to_owned());
+                    }
+                    game.get_reaction(
+                        code,
+                        search,
+                        args.available_only,
+                        args.offset,
+                        args.limit,
+                    )
+                },
+            ),
             {
                 let mut properties = with_paging(json!({
                     "search": {
                         "type": "string",
-                        "description": "Only include orders whose description or item/material constraints contain this text (case-insensitive)."
+                        "description": "Only include orders whose description, requirements, conditions, or item/material constraints contain this text (case-insensitive)."
                     }
                 }));
                 properties["offset"]["maximum"] = json!(MAX_WORK_ORDER_OFFSET);
                 tool(
                     "list_work_orders",
-                    "List fortress manager/work orders and their quantities, stored activity flags, recurrence, workshop restrictions, and conditions. Prefer this to determine whether production has already been ordered. This is distinct from workshop job queues (list_workshops), a resident's current job/status, and labor/work-detail assignments. Conditions are reported, not independently evaluated. This is read-only.",
+                    "List fortress manager/work orders and their quantities, stored activity flags, recurrence, workshop restrictions, concrete input requirements, and conditions. Requirements report quantity, item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions, with truncation metadata. Prefer this to determine whether production has already been ordered. This is distinct from workshop job queues (list_workshops), a resident's current job/status, and labor/work-detail assignments. Conditions are reported, not independently evaluated. This is read-only.",
                     properties,
                     |game, args: ListWorkOrdersArgs| {
                         if args.offset > MAX_WORK_ORDER_OFFSET {
@@ -648,7 +712,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_workshops",
-                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, flags, worker, and item-delivery progress (requested/delivered/remaining per requirement). Up to 3 jobs are listed per workshop; jobs_truncated reports whether more were queued. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
+                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, flags, worker, and item-delivery progress measured in material dimensions (not item counts). Each bounded requirement reports required/delivered/remaining dimensions plus item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions. Reaction jobs include a concise raw-recipe summary. Up to 3 jobs are listed per workshop; truncation flags report omitted jobs or requirements. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "name": {
                         "type": "string",

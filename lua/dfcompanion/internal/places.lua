@@ -1,4 +1,5 @@
 local common = require('dfcompanion.internal.common')
+local work = require('dfcompanion.internal.work')
 local U = common.U
 local text = common.text
 local name_of = common.name_of
@@ -14,6 +15,7 @@ local paged = common.paged
 local reply = common.reply
 
 local MAX_WORKSHOP_JOBS_LISTED = 3
+local MAX_WORKSHOP_JOB_REQUIREMENTS = 10
 
 local function zone_row(zone, location_names)
     local row = {
@@ -95,8 +97,9 @@ local function workshop_job_requirements(job)
     local delivered_by_index = {}
     for _, ref in ipairs(job.items) do
         local idx = ref.job_item_idx
-        if idx and idx >= 0 then
-            delivered_by_index[idx] = (delivered_by_index[idx] or 0) + 1
+        if idx and idx >= 0 and ref.item then
+            delivered_by_index[idx] = (delivered_by_index[idx] or 0)
+                + ref.item:getTotalDimension()
         end
     end
     local requirements, requested_total, delivered_total = {}, 0, 0
@@ -108,12 +111,19 @@ local function workshop_job_requirements(job)
         local delivered = math.min(delivered_by_index[idx0] or 0, requested)
         requested_total = requested_total + requested
         delivered_total = delivered_total + delivered
-        table.insert(requirements, {
-            index = idx0,
-            requested = requested,
-            delivered = delivered,
-            remaining = math.max(0, requested - delivered),
-        })
+        if #requirements < MAX_WORKSHOP_JOB_REQUIREMENTS then
+            local requirement = work.item_requirement_row(
+                item, nil, nil, item.reagent_index)
+            requirement.index = idx0
+            requirement.required_dimension = requested
+            requirement.delivered_dimension = delivered
+            requirement.remaining_dimension = math.max(0, requested - delivered)
+            requirement.quantity_unit = 'dimension'
+            requirement.requested = requested
+            requirement.delivered = delivered
+            requirement.remaining = math.max(0, requested - delivered)
+            table.insert(requirements, requirement)
+        end
     end
     return requirements, requested_total, delivered_total
 end
@@ -144,12 +154,11 @@ local function workshop_job_state(job, worker)
 end
 
 -- One queued workshop job: identity, manager-order linkage, worker, native
--- state, and item-requirement delivery progress. Reaction reagent details and
--- stockpile/condition cross-referencing are out of scope here.
+-- state, and bounded item-requirement delivery progress.
 local function workshop_job_row(job)
     local worker = dfhack.job.getWorker(job)
     local requirements, requested_total, delivered_total = workshop_job_requirements(job)
-    return {
+    local row = {
         id = job.id,
         name = text(dfhack.job.getName(job)),
         job_type = df.job_type[job.job_type] or 'NONE',
@@ -159,11 +168,20 @@ local function workshop_job_row(job)
         flags = set_flags(job.flags),
         worker = worker and {id = worker.id, name = name_of(worker)} or nil,
         item_requirements_count = #job.job_items.elements,
+        requirements_truncated = #job.job_items.elements > MAX_WORKSHOP_JOB_REQUIREMENTS,
+        quantity_unit = 'dimension',
+        required_dimension = requested_total,
+        delivered_dimension = delivered_total,
+        remaining_dimension = math.max(0, requested_total - delivered_total),
         items_requested = requested_total,
         items_delivered = delivered_total,
         items_remaining = math.max(0, requested_total - delivered_total),
         requirements = requirements,
     }
+    if job.reaction_name ~= '' then
+        row.recipe_summary = work.reaction_summary(job.reaction_name)
+    end
+    return row
 end
 
 -- Scans the fortress's buildings, zones and locations once and returns them as
@@ -425,7 +443,9 @@ local function list_workshops(name_filter, only_with_jobs, offset, limit)
             table.insert(rows, workshop)
         end
     end
-    return reply(paged({}, 'workshops', rows, offset, limit))
+    return reply(paged({
+        notes = 'Job requirement progress is measured in material dimensions, not item counts; quantity_unit identifies the unit. The items_requested/items_delivered/items_remaining fields are legacy aliases of the dimension totals. recipe_summary is a concise raw-reaction summary, not an availability or blocker diagnosis.',
+    }, 'workshops', rows, offset, limit))
 end
 
 -- Counts of the other building kinds, built and under construction.
