@@ -68,10 +68,14 @@ for i, ref in ipairs(job.items) do
 end
 ```
 
-Important: DFHack's `ipairs` over vectors yields **0-based** indices. This
-differs from standard Lua tables. When matching a vector index against a stored
-index field (such as `job_item_idx`), do not subtract one. Confirm the base with
-a probe when in doubt.
+Important: DFHack's vectors are 0-based because they originate from C++ code,
+not 1-based as is more common in Lua. When matching a vector index against a
+stored index field (such as `job_item_idx`), do not subtract one. Confirm the
+base with a probe when in doubt.  
+
+Important: df.global.world.jobs.list and df.global.world.projectiles.list are
+linked lists, not standard Lua tables. Use `utils.listpairs()` to traverse them
+rather than `ipairs()`.
 
 # Testing Lua fragments
 
@@ -116,7 +120,30 @@ reported by the target, typically:
 Editing the source files alone changes nothing in the running game. Always
 install after editing before testing.
 
-# Reloading changed Lua files in the running game
+# Using dfhack-run
+
+An MCP server is defined named "dfhack" to allow you to run dfhack-run commands
+through the MCP protocol. This enables you to execute Lua fragments, reload
+scripts, and interact with the game without directly modifying the running
+instance. Arguments are generally interpreted as if typed directly into the
+DFHack console in the game. One exception is the command "lua", which in the
+console must be given as ":lua".
+
+## Reloading changed plugin scripts in the running game
+
+To reload a plugin script, use the `reload` function. Example:
+
+```text
+lua "reload('dfcompanion')"
+```
+
+Reloading a plugin script disables it. To re-enable the plugin, use dfhack-run's
+built-in enable command::
+
+```text
+enable dfcompanion
+```
+## Reloading changed Lua script modules in the running game
 
 DFHack caches script modules. A running game will keep using the
 old version of a module if it's updated while the game is running.
@@ -124,16 +151,12 @@ old version of a module if it's updated while the game is running.
 To force a reload of a changed Lua script module, use dfhack-run to execute a
 call to reqscript(). This will work in most cases, unless another module has
 cached a reference to a function in the reloaded script, or a script location
-has changed. Example:
+has changed. Example arguments:
 
-```powershell
-& "<DFHACK_INSTALL_DIR>\hack\dfhack-run.exe" lua "reqscript('dfcompanion.internal.places')"
+```text
+lua "reqscript('dfcompanion.internal.places')"
 ```
 
-To reload a plugin script, use the `reload` function instead. Example:
-```powershell
-& "<DFHACK_INSTALL_DIR>\hack\dfhack-run.exe" lua "reload('dfcompanion')"
-```
 
 # Verification order
 

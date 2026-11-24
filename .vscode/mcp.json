@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "dfhack": {
+      "type": "stdio",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/tools/dfhack-mcp.ps1"
+      ],
+    }
+  }
+}
