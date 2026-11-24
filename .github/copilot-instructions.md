@@ -15,11 +15,13 @@ Lua RPC and plugin scripts.
     - Language Server Protocol (LSP) tools over string searches for
       finding usages and references in the code.
     - git tools over shell-based git commands.
+    - Rust cargo over shell-based cargo commands.
     - For DFHack CLI tasks, use the DFHack MCP tool when
       available; otherwise use shell commands.
   - Known exceptions:
-    - Use shell commands for cargo and CMake tasks when no MCP equivalents
-      are available. 
+    - Use shell commands for CMake tasks when no MCP equivalents are available.
+    - If any MCP tool that replaces shell commands is failing, notify the user
+      and then offer to fall back to shell commands.
 - Rust tooling: `cargo` for building, checking, linting, and testing.
 - DFHack CLI and Lua scripting for interacting with the game.
 - HTTP client tools for testing the web interface.
@@ -36,9 +38,6 @@ Lua RPC and plugin scripts.
     inert until a fortress is ready. The service also polls DFHack for that
     state on its own.
   - Scripts in `lua/rpc/` provide other supporting functions.
-  - The Lua scripts have to be copied to the DFHack installation for live
-    testing. See the "Lua script installation" section under Core Engineering &
-    Privacy Rules for details.
 - `tests/` contains test code for the application that is not associated with a
   specific Rust module, written in Rust using the standard testing framework.
 - The web UI is implemented by `src/web.rs` and files in `src/web/` using HTMX
@@ -49,11 +48,13 @@ Lua RPC and plugin scripts.
 
 - Files in `notes/` are more recent and more up to date. You'll find more
   architecture discussion there.
-  - `notes/current-status.md` contains notes about *current* work. This includes
+  - `notes/current-status.md` contains notes about *current* work. Keep this up to date. This documents
     tasks that are incomplete or about to be started. It should not contain
     notes about completed work -- notes of this sort should be recorded in
-    architecture.md if they're significant enough to warrant explicit mention
-    outside of the code. Keep this up to date.
+    architecture.md instead if it:
+    - Changes a previous design decision, or
+    - introduces a new module or external dependency, or
+    - alters a documented convention.
   - `notes/TODO.md` contains a list of tasks and planned improvements for the
     project. Remove items from here when they've been completed.
   - `notes/architecture.md` contains notes on the overarching design
@@ -94,19 +95,5 @@ external resources, these resources may be useful.
   (prohibited by project terms).
 - **Non-blocking gameplay:** Event forwarding and AI calls must respect bounded
   queues and fail without hanging Dwarf Fortress or losing pending user context.
-- **Lua script installation:** After editing Lua scripts, use the PowerShell
-  command `cmake --build build --config Debug --target install-dfhack-script` to
-  copy them to the DFHack installation for live testing. If the command fails,
-  show the full error output, state that the Lua scripts were not copied, and
-  ask the user for direction before attempting any other fix or retry. Do not
-  modify the DFHack installation manually.
-- **Rust verification:** After editing Rust files in `src/` or `tests/`, run
-  `cargo fmt`, `cargo check`, `cargo clippy`, and `cargo test` to verify
-  changes. If any of these commands fails, fix the reported issues and rerun
-  the failed command. Attempt at most 3 fix-and-rerun cycles per failing
-  command. If the command still fails after 3 cycles, show the final error
-  output, state which command failed, and ask the user for direction before
-  making further changes. If a fix is unclear, ask the user for direction
-  before continuing. Report the final result of each command.
 
 

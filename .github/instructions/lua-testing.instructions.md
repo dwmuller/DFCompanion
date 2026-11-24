@@ -2,39 +2,23 @@
 applyTo: "lua/**"
 ---
 
-# Running arbitrary Lua in the running game
+# Using dfhack-run
 
-Use `dfhack-run.exe` from the `hack` directory under the DFHack installation to
-execute Lua in the live game. The installation path is defined as
-DFHACK_INSTALL_DIR by CMake during the build process. To read it, open
-build/CMakeCache.txt and use the value of the line that starts with
-`DFHACK_INSTALL_DIR:`, for example
-`DFHACK_INSTALL_DIR:PATH=E:/SteamLibrary/steamapps/common/DFHack`. The examples
-in this document use `<DFHACK_INSTALL_DIR>` as a placeholder for the actual
-installation path.
+An MCP server is defined named "dfhack" to allow you to run dfhack-run commands
+through the MCP protocol. This enables you to execute Lua fragments, reload
+scripts, and interact with the game without directly modifying the running
+instance. Arguments are generally interpreted as if typed directly into the
+DFHack console in the game. One exception is the command `lua`. (In the console
+the user must give it as `:lua`.)
 
-Invoke it with the `lua` command and pass the script as a single argument:
+The `lua` argument to `dfhack_run` executes the following string as a Lua fragment
+in the game's Lua environment. The fragment has access to all global variables
+and functions available in the game's Lua environment, including `df`, `dfhack`,
+and any installed modules.
 
-```text
-& "<DFHACK_INSTALL_DIR>\hack\dfhack-run.exe" lua "print(df.global.world.units.active[0].id)"
-```
-
-The script runs in the game's Lua environment with full access to `df`, `dfhack`,
-and the installed `dfcompanion` modules. Output is printed to the console.
-
-From PowerShell, use a here-string to avoid quoting problems with multi-line
-scripts:
-
-```powershell
-$lua = @'
-local places = require('dfcompanion.internal.places')
-print(places.list_workshops('', 'true', 0, 10))
-'@
-& "<DFHACK_INSTALL_DIR>\hack\dfhack-run.exe" lua $lua
-```
-
-`dfhack-run` only works when a game is running with a fortress loaded. It does
+`dfhack_run` only works when a game is running with a fortress loaded. It does
 not start the game.
+
 
 # Probing DFHack behavior
 
@@ -59,7 +43,14 @@ end
 
 ```lua
 -- Inspect a specific job's requirements and attached items
-local job = find_job(some_predicate) -- hypothetical function to locate a job matching some condition
+local job = nil
+local i_wanted = 2
+for i, item in utils.listpairs(df.global.world.jobs.list) do
+    if i == i_wanted then
+        job = item
+        break
+    end
+end
 for i, element in ipairs(job.job_items.elements) do
     print('element', i, element.quantity)
 end
@@ -75,24 +66,15 @@ base with a probe when in doubt.
 
 Important: df.global.world.jobs.list and df.global.world.projectiles.list are
 linked lists, not standard Lua tables. Use `utils.listpairs()` to traverse them
-rather than `ipairs()`.
+rather than `ipairs()`. You also cannot index directly into
+`df.global.world.jobs.list` or `df.global.world.projectiles.list` using square
+brackets.
 
 # Testing Lua fragments
 
 To test a fragment in isolation without modifying the installed modules, run it
-directly through `dfhack-run`. Use this to validate an expression, a field
-name, or a small algorithm before wiring it into a module.
-
-```powershell
-$lua = @'
-local total = 0
-for _, ref in ipairs(df.global.world.jobs.list[0].items) do
-    total = total + 1
-end
-print('attached refs:', total)
-'@
-& "<DFHACK_INSTALL_DIR>\hack\dfhack-run.exe" lua $lua
-```
+directly using `dfhack_run`'s `lua` argument. Use this to validate an
+expression, a field name, or a small algorithm before wiring it into a module. 
 
 Keep fragment tests read-only. Do not call functions that mutate game state
 during a probe unless the user has explicitly asked for that behavior.
@@ -110,28 +92,15 @@ The Lua sources under `lua/` are installed into the DFHack directory by the
 cmake --build build --config Debug --target install-dfhack-script
 ```
 
-This copies the files into the DFHack install tree. The installed locations are
-reported by the target, typically:
-
-- `lua/dfcompanion.lua` -> `<DFHack>/hack/scripts/dfcompanion.lua`
-- `lua/dfcompanion/**` -> `<DFHack>/hack/lua/dfcompanion/...`
-- `lua/rpc/**` -> `<DFHack>/hack/lua/rpc/...`
+This copies the files into the DFHack install tree. 
 
 Editing the source files alone changes nothing in the running game. Always
 install after editing before testing.
 
-# Using dfhack-run
 
-An MCP server is defined named "dfhack" to allow you to run dfhack-run commands
-through the MCP protocol. This enables you to execute Lua fragments, reload
-scripts, and interact with the game without directly modifying the running
-instance. Arguments are generally interpreted as if typed directly into the
-DFHack console in the game. One exception is the command "lua", which in the
-console must be given as ":lua".
+## Reload changed plugin scripts in the running game
 
-## Reloading changed plugin scripts in the running game
-
-To reload a plugin script, use the `reload` function. Example:
+To reload a changed plugin script, use the `reload` function. Example:
 
 ```text
 lua "reload('dfcompanion')"
@@ -143,7 +112,10 @@ built-in enable command::
 ```text
 enable dfcompanion
 ```
-## Reloading changed Lua script modules in the running game
+
+Always re-enable the `dfcompanion`plugin after reloading it.
+
+## Reload changed Lua script modules in the running game
 
 DFHack caches script modules. A running game will keep using the
 old version of a module if it's updated while the game is running.
@@ -164,8 +136,5 @@ lua "reqscript('dfcompanion.internal.places')"
 2. Run `cmake --build build --config Debug --target install-dfhack-script`.
 3. Reload the changed file using the methods described earlier.
 4. Probe the installed module through `dfhack-run`.
-5. Run the Rust tests only when the edited Lua file is called from Rust code or
-   changes a value that Rust reads (for example, an RPC response shape). Run them
-   from the repository root:
-   `cargo test --test live_game_tests -- --ignored`, with the game running and a
-   fortress loaded. For all other Lua-only changes, skip this step.
+5. Run live Rust tests from the repository root with the game running and a
+   fortress loaded. `cargo test --test live_game_tests -- --ignored`.

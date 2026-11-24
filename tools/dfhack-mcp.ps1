@@ -15,7 +15,7 @@ function Resolve-DfHackExe {
             $match = Select-String -LiteralPath $cacheFile -Pattern '^DFHACK_INSTALL_DIR:[^=]+=(.+)$' | Select-Object -First 1
             if ($match) {
                 $installDir = $match.Matches[0].Groups[1].Value.Trim()
-                $exePath = Join-Path $installDir "dfhack-run.exe"
+                $exePath = Join-Path $installDir "hack\dfhack-run.exe"
                 if (Test-Path -LiteralPath $exePath) {
                     return $exePath
                 }
@@ -73,7 +73,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                     tools = @(
                         @{
                             name        = "dfhack_run"
-                            description = "Execute a DFHack command in a running Dwarf Fortress instance via dfhack-run.exe (resolved from build/CMakeCache.txt)."
+                            description = "ALWAYS use this to execute a DFHack command in a running Dwarf Fortress instance instead of running dfhack-run.exe manually."
                             inputSchema = @{
                                 type       = "object"
                                 properties = @{

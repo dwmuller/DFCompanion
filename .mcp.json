@@ -1,5 +1,5 @@
 {
-  "servers": {
+  "mcpServers": {
     "dfhack": {
       "type": "stdio",
       "command": "pwsh",
