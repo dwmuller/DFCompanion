@@ -7,6 +7,7 @@ local position_of = common.position_of
 local words = common.words
 local unit_name_by_id = common.unit_name_by_id
 local is_finished = common.is_finished
+local set_flags = common.set_flags
 local zone_area = common.zone_area
 local zone_contains = common.zone_contains
 local paged = common.paged
@@ -86,6 +87,83 @@ local function subfilter_summary(settings, accepts)
         end
     end
     return result
+end
+
+-- Per-job-item delivery progress: requested quantity from job_items.elements
+-- matched against attached job.items refs by job_item_idx (0-based in both).
+local function workshop_job_requirements(job)
+    local delivered_by_index = {}
+    for _, ref in ipairs(job.items) do
+        local idx = ref.job_item_idx
+        if idx and idx >= 0 then
+            delivered_by_index[idx] = (delivered_by_index[idx] or 0) + 1
+        end
+    end
+    local requirements, requested_total, delivered_total = {}, 0, 0
+    for i, item in ipairs(job.job_items.elements) do
+        -- DFHack's ipairs over a vector yields 0-based indices, matching
+        -- job_item_idx, so no adjustment is needed here.
+        local idx0 = i
+        local requested = item.quantity
+        local delivered = math.min(delivered_by_index[idx0] or 0, requested)
+        requested_total = requested_total + requested
+        delivered_total = delivered_total + delivered
+        table.insert(requirements, {
+            index = idx0,
+            requested = requested,
+            delivered = delivered,
+            remaining = math.max(0, requested - delivered),
+        })
+    end
+    return requirements, requested_total, delivered_total
+end
+
+-- A compact summary of a job's native state. This is a convenience label over
+-- stable DF flags, not an inferred root cause; the full flags array is also
+-- reported so callers are not limited to this precedence order.
+local function workshop_job_state(job, worker)
+    if job.flags.suspend then
+        return 'suspended'
+    end
+    if job.flags.item_lost then
+        return 'item_lost'
+    end
+    if not worker then
+        return 'unassigned'
+    end
+    if job.flags.working then
+        return 'working'
+    end
+    if job.flags.fetching then
+        return 'fetching'
+    end
+    if job.flags.bringing then
+        return 'bringing'
+    end
+    return 'assigned'
+end
+
+-- One queued workshop job: identity, manager-order linkage, worker, native
+-- state, and item-requirement delivery progress. Reaction reagent details and
+-- stockpile/condition cross-referencing are out of scope here.
+local function workshop_job_row(job)
+    local worker = dfhack.job.getWorker(job)
+    local requirements, requested_total, delivered_total = workshop_job_requirements(job)
+    return {
+        id = job.id,
+        name = text(dfhack.job.getName(job)),
+        job_type = df.job_type[job.job_type] or 'NONE',
+        order_id = job.order_id >= 0 and job.order_id or nil,
+        reaction = job.reaction_name ~= '' and text(job.reaction_name) or nil,
+        state = workshop_job_state(job, worker),
+        flags = set_flags(job.flags),
+        worker = worker and {id = worker.id, name = name_of(worker)} or nil,
+        item_requirements_count = #job.job_items.elements,
+        items_requested = requested_total,
+        items_delivered = delivered_total,
+        items_remaining = math.max(0, requested_total - delivered_total),
+        requirements = requirements,
+    }
 end
 
 -- Scans the fortress's buildings, zones and locations once and returns them as
@@ -174,8 +252,12 @@ local function collect_places()
                 if #b.jobs > 0 then
                     row.jobs = {}
                     for i = 0, math.min(#b.jobs, MAX_WORKSHOP_JOBS_LISTED) - 1 do
-                        table.insert(row.jobs, text(dfhack.job.getName(b.jobs[i])))
+                        local job = b.jobs[i]
+                        if job then
+                            table.insert(row.jobs, workshop_job_row(job))
+                        end
                     end
+                    row.jobs_truncated = #b.jobs > MAX_WORKSHOP_JOBS_LISTED
                 end
                 table.insert(workshops, row)
             else

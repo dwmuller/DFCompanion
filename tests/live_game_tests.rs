@@ -892,6 +892,71 @@ async fn ai_tools_end_to_end() {
             .all(|w| w["job_count"].as_u64().unwrap() > 0),
         "{busy}"
     );
+    // Structured workshop jobs: when a workshop has queued jobs, up to
+    // MAX_WORKSHOP_JOBS_LISTED (3) structured records are returned, with
+    // native state, worker, flags, and item-delivery progress.
+    const WORKSHOP_JOB_STATES: &[&str] = &[
+        "suspended",
+        "item_lost",
+        "unassigned",
+        "working",
+        "fetching",
+        "bringing",
+        "assigned",
+    ];
+    for workshop in busy["workshops"].as_array().unwrap() {
+        let job_count = workshop["job_count"].as_u64().unwrap();
+        let jobs = workshop["jobs"].as_array().unwrap();
+        assert!(
+            !jobs.is_empty(),
+            "workshop with jobs must list jobs: {workshop}"
+        );
+        assert!(jobs.len() <= 3, "at most 3 jobs listed: {workshop}");
+        assert_eq!(
+            workshop["jobs_truncated"],
+            serde_json::json!(job_count > jobs.len() as u64),
+            "{workshop}"
+        );
+        for job in jobs {
+            assert!(job["id"].is_i64(), "{job}");
+            assert!(job["name"].is_string(), "{job}");
+            assert!(job["job_type"].is_string(), "{job}");
+            assert!(job["state"].is_string(), "{job}");
+            assert!(
+                WORKSHOP_JOB_STATES.contains(&job["state"].as_str().unwrap()),
+                "unexpected job state: {job}"
+            );
+            assert!(job["flags"].is_array(), "{job}");
+            assert!(job["requirements"].is_array(), "{job}");
+            assert!(job["item_requirements_count"].is_u64(), "{job}");
+            assert!(job["items_requested"].is_i64(), "{job}");
+            assert!(job["items_delivered"].is_i64(), "{job}");
+            assert!(job["items_remaining"].is_i64(), "{job}");
+            let mut requested = 0i64;
+            let mut delivered = 0i64;
+            for req in job["requirements"].as_array().unwrap() {
+                let r = req["requested"].as_i64().unwrap();
+                let d = req["delivered"].as_i64().unwrap();
+                let rem = req["remaining"].as_i64().unwrap();
+                assert!(r >= 0 && d >= 0 && rem >= 0, "{req}");
+                assert!(d <= r, "{req}");
+                assert_eq!(rem, r - d, "{req}");
+                requested += r;
+                delivered += d;
+            }
+            assert_eq!(job["items_requested"].as_i64().unwrap(), requested, "{job}");
+            assert_eq!(job["items_delivered"].as_i64().unwrap(), delivered, "{job}");
+            assert_eq!(
+                job["items_remaining"].as_i64().unwrap(),
+                requested - delivered,
+                "{job}"
+            );
+            if let Some(worker) = job.get("worker") {
+                assert!(worker["id"].is_i64(), "{worker}");
+                assert!(worker["name"].is_string(), "{worker}");
+            }
+        }
+    }
     let counts = call("get_building_counts", serde_json::json!({})).await;
     assert!(counts["buildings"].is_array(), "{counts}");
     let moods = call("get_strange_moods", serde_json::json!({})).await;

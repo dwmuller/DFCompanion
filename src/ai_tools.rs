@@ -648,7 +648,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_workshops",
-                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
+                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, flags, worker, and item-delivery progress (requested/delivered/remaining per requirement). Up to 3 jobs are listed per workshop; jobs_truncated reports whether more were queued. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "name": {
                         "type": "string",
