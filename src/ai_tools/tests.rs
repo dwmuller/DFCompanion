@@ -79,6 +79,25 @@ fn exposed_definitions_should_use_short_descriptions_and_offer_help() {
     assert!(help.schema.as_ref().unwrap()["required"] == json!(["name"]));
 }
 
+#[test]
+fn should_explain_internal_production_ids_in_exposed_tool_descriptions() {
+    let definitions = definitions();
+    for name in [
+        "list_work_orders",
+        "list_stockpiles",
+        "list_workshops",
+        "diagnose_production_block",
+    ] {
+        let definition = definitions
+            .iter()
+            .find(|definition| definition.name == ToolName::Custom(name.to_owned()))
+            .unwrap();
+        let description = definition.description.as_deref().unwrap();
+        assert!(description.contains("IDs are internal"), "{name}");
+        assert!(description.contains("players"), "{name}");
+    }
+}
+
 #[tokio::test]
 async fn tool_help_should_work_without_a_loaded_fortress() {
     let result = execute_named(

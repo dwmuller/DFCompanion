@@ -188,6 +188,94 @@ fn empty_workshop_job_wait_reasons_are_restored() {
 }
 
 #[test]
+fn should_join_matching_job_requirements_to_their_manager_order() {
+    let workshops = vec![json!({
+        "id": 10,
+        "name": "Smelter",
+        "jobs": [
+            {
+                "id": 4,
+                "order_id": 7,
+                "reaction": "MAKE_IRON_BARS",
+                "requirements": [{"material": "IRON"}],
+                "wait_reasons": ["waiting_for_required_items"]
+            },
+            {"id": 5, "order_id": 8, "reaction": "OTHER"}
+        ]
+    })];
+    let work_orders = vec![
+        json!({"id": 7, "name": "Make bars", "order_conditions": []}),
+        json!({"id": 8, "name": "Other order", "order_conditions": []}),
+    ];
+
+    let (selected_workshops, selected_orders) =
+        filter_production_evidence(&workshops, &work_orders, Some("iron"), None, None);
+
+    assert_eq!(selected_workshops[0]["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(selected_workshops[0]["jobs"][0]["id"], 4);
+    assert_eq!(selected_orders.len(), 1);
+    assert_eq!(selected_orders[0]["id"], 7);
+    let signals = production_block_signals(&selected_workshops, &selected_orders);
+    assert_eq!(signals[0]["signal"], "wait_reason");
+    assert_eq!(signals[0]["value"], "waiting_for_required_items");
+}
+
+#[test]
+fn should_scope_manager_orders_to_selected_workshop_and_surface_order_conditions() {
+    let workshops = vec![json!({
+        "id": 10,
+        "name": "Smelter",
+        "jobs": [{"id": 4, "order_id": 7, "wait_reasons": [], "remaining_dimension": 0}]
+    })];
+    let work_orders = vec![
+        json!({
+            "id": 7,
+            "workshop_id": 10,
+            "is_active": true,
+            "is_validated": true,
+            "order_conditions": [{"condition": "completed", "satisfied": false}]
+        }),
+        json!({"id": 8, "workshop_id": 11, "order_conditions": []}),
+    ];
+
+    let (selected_workshops, selected_orders) =
+        filter_production_evidence(&workshops, &work_orders, None, Some(10), None);
+
+    assert_eq!(selected_workshops.len(), 1);
+    assert_eq!(selected_orders.len(), 1);
+    assert_eq!(selected_orders[0]["id"], 7);
+    let signals = production_block_signals(&selected_workshops, &selected_orders);
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0]["signal"], "unsatisfied_order_condition");
+    assert_eq!(signals[0]["condition"], "completed");
+}
+
+#[test]
+fn should_restore_nested_empty_stockpile_link_lists() {
+    let mut result = json!({
+        "stockpiles": [{
+            "stockpile_links": {
+                "give_to_stockpiles": {},
+                "take_from_stockpiles": [],
+                "give_to_workshops": {},
+                "take_from_workshops": []
+            }
+        }]
+    });
+
+    restore_stockpile_lists(&mut result);
+
+    assert_eq!(
+        result["stockpiles"][0]["stockpile_links"]["give_to_stockpiles"],
+        json!([])
+    );
+    assert_eq!(
+        result["stockpiles"][0]["stockpile_links"]["give_to_workshops"],
+        json!([])
+    );
+}
+
+#[test]
 fn empty_reaction_definition_lists_are_restored() {
     let mut result = json!({
         "reactions": [

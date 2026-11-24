@@ -586,7 +586,7 @@ fn registry() -> &'static [ToolSpec] {
                 properties["offset"]["maximum"] = json!(MAX_WORK_ORDER_OFFSET);
                 tool(
                     "list_work_orders",
-                    "List fortress manager/work orders and their quantities, stored activity flags, recurrence, workshop restrictions, concrete input requirements, and conditions. Requirements report quantity, item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions, with truncation metadata. Prefer this to determine whether production has already been ordered. This is distinct from workshop job queues (list_workshops), a resident's current job/status, and labor/work-detail assignments. Conditions are reported, not independently evaluated. This is read-only.",
+                    "List manager orders and their requirements and conditions; IDs are internal, so identify orders to players by description. Results include quantities, stored activity flags, recurrence, and workshop restrictions. Requirements report quantity, item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions, with truncation metadata. Prefer this to determine whether production has already been ordered. This is distinct from workshop job queues (list_workshops), a resident's current job/status, and labor/work-detail assignments. Conditions are reported, not independently evaluated. This is read-only.",
                     properties,
                     |game, args: ListWorkOrdersArgs| {
                         if args.offset > MAX_WORK_ORDER_OFFSET {
@@ -697,7 +697,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_stockpiles",
-                "List the fortress's stockpiles, each with id, name, position and contents, accepted categories, compact enabled/total sub-filter counts for those accepted categories, links-only mode, and directional links to stockpiles/workshops. Link names and IDs let you determine which workshops take from or give to a pile. Use it to diagnose reagent and haul routing problems. Use `category` to see only piles that accept one category and `name` to match a pile's name. Request another page with the returned next_offset when needed. This is read-only.",
+                "List stockpiles and their directional links; IDs are internal, so identify stockpiles and workshops to players by name and location. Each pile has position and contents, accepted categories, compact enabled/total sub-filter counts for those accepted categories, links-only mode, and directional links to stockpiles/workshops. Link names and IDs let you determine which workshops take from or give to a pile. Use it to diagnose reagent and haul routing problems. Use `category` to see only piles that accept one category and `name` to match a pile's name. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "category": {
                         "type": "string",
@@ -720,7 +720,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "list_workshops",
-                "List the fortress's workshops and furnaces individually, each with id, name, centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, factual wait_reasons, flags, worker, and item-delivery progress measured in material dimensions (not item counts). wait_reasons identifies suspended, lost-item, missing-required-item, fetching/bringing-item, and worker-unavailable states without inferring hidden causes. Each bounded requirement reports required/delivered/remaining dimensions plus item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions. Reaction jobs include a concise raw-recipe summary. Up to 3 jobs are listed per workshop; truncation flags report omitted jobs or requirements. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
+                "List workshops and queued jobs; IDs are internal, so identify workshops and stockpiles to players by name and location. Each workshop includes centre position (z matches the game's UI), size, construction state, queued jobs, and directional stockpile/workshop links (give/take stockpile targets). Queued jobs are structured records with id, name, job_type, order_id, reaction, native state, factual wait_reasons, flags, worker, and item-delivery progress measured in material dimensions (not item counts). wait_reasons identifies suspended, lost-item, missing-required-item, fetching/bringing-item, and worker-unavailable states without inferring hidden causes. Each bounded requirement reports required/delivered/remaining dimensions plus item type/subtype, material, reaction/reagent identity, reaction class/product, tool use, and native restrictions. Reaction jobs include a concise raw-recipe summary. Up to 3 jobs are listed per workshop; truncation flags report omitted jobs or requirements. Use `name` to look at one kind and `only_with_jobs` to see just the busy ones. Request another page with the returned next_offset when needed. This is read-only.",
                 with_paging(json!({
                     "name": {
                         "type": "string",
@@ -737,19 +737,21 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "diagnose_production_block",
-                "Diagnose a likely production-order blockage by combining matching queued workshop jobs, native wait reasons and item-delivery progress, manager-order conditions and requirements, reaction details, and workshop/stockpile routing links. Supply one or more of search, workshop_id, or order_id. This joins evidence from existing read-only tools; it does not mutate jobs or claim the complete cause of every wait state.",
+                "Diagnose production blockers; IDs are internal, so identify workshops and stockpiles to players by name and location. Joins queued-job wait reasons and material delivery with matching manager orders, conditions, reaction inputs, and workshop/stockpile links and filters. Search matches workshop/job/order details. Supply search, workshop_id, or order_id. Signals are factual evidence, not a guaranteed complete cause.",
                 json!({
                     "search": {
                         "type": "string",
-                        "description": "Text to match against workshop and manager-order names, reactions, or recipes."
+                        "description": "Case-insensitive text to match workshop names, queued-job details and requirements, or manager-order details and conditions."
                     },
                     "workshop_id": {
                         "type": "integer",
-                        "description": "Restrict the diagnostic to one workshop id."
+                        "minimum": 0,
+                        "description": "Restrict the diagnostic to one internal workshop ID from another tool."
                     },
                     "order_id": {
                         "type": "integer",
-                        "description": "Restrict the diagnostic to one manager-order id."
+                        "minimum": 0,
+                        "description": "Restrict the diagnostic to one internal manager-order ID from another tool."
                     }
                 }),
                 |game, args: DiagnoseProductionBlockArgs| {

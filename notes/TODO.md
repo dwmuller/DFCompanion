@@ -72,10 +72,16 @@ fortress-management questions.
 
 ### P0 — correctness blockers and broad question classes
 
-- Add a companion diagnostic that combines queued-job wait reasons, workshop
-  stockpile links, stockpile sub-filters, manager-order conditions,
-  reaction inputs, and job material requirements to explain why a production
-  order is blocked.
+- Improve `diagnose_production_block` with a bounded per-requirement join
+  between job inputs, actual item stock (including items inside containers),
+  and directional workshop/stockpile links. Distinguish observed stock from
+  supply eligibility and pathability; never assert that a reagent is reachable
+  or a blockage is proven when filters, item restrictions, or paths are
+  unknown. Explain evidence and uncertainty.
+- Make production diagnostics filter orders and workshops before source
+  truncation, including exact IDs and material/production searches, and return
+  relevant stockpiles rather than an unfiltered dump. Preserve paging or
+  explicit coverage metadata so missing evidence is visible.
 - Add an item-instance query and optional fortress-wide inclusion of carried
   items. Results should identify holder/container, exact position, material,
   quality, wear, forbidden/reserved state and, where relevant, squad
@@ -110,6 +116,9 @@ fortress-management questions.
   skill/material term.
 - Add a stockpile-contents query that includes items inside bins and
   containers, rather than only container objects or top-level contents.
+- Add stockpile link filters to identify unlinked piles and inspect particular
+  workshop/pile routing relationships. Treat give and take as distinct,
+  intentional directions rather than labeling one-way links contradictory.
 - Distinguish natural floor, constructed floor, and objective sky exposure in
   floor plans; include sky exposure for creatures when available. Avoid
   treating "inside the fortress" as an objective state for disconnected sites.

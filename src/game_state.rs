@@ -16,7 +16,7 @@ use dfhack_remote::{BlockRequest, Client, CoreRunLuaRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
 use tokio::sync::watch;
@@ -275,6 +275,7 @@ fn restore_workshop_lists(value: &mut Value) {
     restore_empty_list(&mut value["workshops"]);
     if let Some(workshops) = value["workshops"].as_array_mut() {
         for workshop in workshops {
+            restore_stockpile_links(workshop);
             restore_empty_list(&mut workshop["jobs"]);
             restore_empty_list(&mut workshop["give_to_stockpiles"]);
             restore_empty_list(&mut workshop["take_from_stockpiles"]);
@@ -294,6 +295,216 @@ fn restore_workshop_lists(value: &mut Value) {
             }
         }
     }
+}
+
+fn restore_stockpile_links(row: &mut Value) {
+    if let Some(links) = row.get_mut("stockpile_links") {
+        for key in [
+            "give_to_stockpiles",
+            "take_from_stockpiles",
+            "give_to_workshops",
+            "take_from_workshops",
+        ] {
+            restore_empty_list(&mut links[key]);
+        }
+    }
+}
+
+fn restore_stockpile_lists(value: &mut Value) {
+    restore_empty_list(&mut value["stockpiles"]);
+    if let Some(stockpiles) = value["stockpiles"].as_array_mut() {
+        for stockpile in stockpiles {
+            restore_stockpile_links(stockpile);
+        }
+    }
+}
+
+fn contains_text(value: &Value, search: &str) -> bool {
+    match value {
+        Value::String(text) => text.to_lowercase().contains(search),
+        Value::Array(values) => values.iter().any(|value| contains_text(value, search)),
+        Value::Object(values) => values.values().any(|value| contains_text(value, search)),
+        _ => false,
+    }
+}
+
+fn collect_production_reaction_codes(value: &Value, codes: &mut BTreeSet<String>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_production_reaction_codes(value, codes);
+            }
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                if key == "reaction" {
+                    if let Some(code) = value.as_str() {
+                        codes.insert(code.to_owned());
+                    }
+                } else {
+                    collect_production_reaction_codes(value, codes);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn filter_production_evidence(
+    workshops: &[Value],
+    work_orders: &[Value],
+    search: Option<&str>,
+    workshop_id: Option<i64>,
+    order_id: Option<i64>,
+) -> (Vec<Value>, Vec<Value>) {
+    let search = search
+        .map(str::trim)
+        .filter(|search| !search.is_empty())
+        .map(str::to_lowercase);
+    let mut matching_jobs = Vec::new();
+    for workshop in workshops {
+        if workshop_id.is_some_and(|id| workshop["id"].as_i64() != Some(id)) {
+            continue;
+        }
+        let workshop_matches = search.as_deref().is_some_and(|search| {
+            workshop["name"]
+                .as_str()
+                .is_some_and(|name| name.to_lowercase().contains(search))
+        });
+        if let Some(jobs) = workshop["jobs"].as_array() {
+            for job in jobs {
+                if order_id.is_some_and(|id| job["order_id"].as_i64() != Some(id))
+                    || search
+                        .as_deref()
+                        .is_some_and(|search| !workshop_matches && !contains_text(job, search))
+                {
+                    continue;
+                }
+                matching_jobs.push(job.clone());
+            }
+        }
+    }
+    let linked_order_ids = matching_jobs
+        .iter()
+        .filter_map(|job| job["order_id"].as_i64())
+        .collect::<BTreeSet<_>>();
+
+    let selected_orders = work_orders
+        .iter()
+        .filter(|order| {
+            let id = order["id"].as_i64();
+            let linked_to_job = id.is_some_and(|id| linked_order_ids.contains(&id));
+            workshop_id.is_none_or(|workshop_id| {
+                order["workshop_id"].as_i64() == Some(workshop_id) || linked_to_job
+            }) && order_id.is_none_or(|order_id| id == Some(order_id))
+                && search
+                    .as_deref()
+                    .is_none_or(|search| contains_text(order, search) || linked_to_job)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let selected_order_ids = selected_orders
+        .iter()
+        .filter_map(|order| order["id"].as_i64())
+        .collect::<BTreeSet<_>>();
+
+    let mut selected_workshops = Vec::new();
+    for workshop in workshops {
+        if workshop_id.is_some_and(|id| workshop["id"].as_i64() != Some(id)) {
+            continue;
+        }
+        let workshop_matches = search.as_deref().is_some_and(|search| {
+            workshop["name"]
+                .as_str()
+                .is_some_and(|name| name.to_lowercase().contains(search))
+        });
+        let mut selected = workshop.clone();
+        if let Some(jobs) = selected["jobs"].as_array_mut() {
+            jobs.retain(|job| {
+                let id = job["order_id"].as_i64();
+                order_id.is_none_or(|order_id| id == Some(order_id))
+                    && (search.is_none()
+                        || workshop_matches
+                        || contains_text(job, search.as_deref().unwrap_or_default())
+                        || id.is_some_and(|id| selected_order_ids.contains(&id)))
+            });
+        }
+        let has_selected_jobs = selected["jobs"]
+            .as_array()
+            .is_some_and(|jobs| !jobs.is_empty());
+        if has_selected_jobs
+            || workshop_id.is_some()
+            || workshop_matches
+            || selected["jobs"].as_array().is_none()
+        {
+            selected_workshops.push(selected);
+        }
+    }
+
+    (selected_workshops, selected_orders)
+}
+
+fn production_block_signals(workshops: &[Value], work_orders: &[Value]) -> Vec<Value> {
+    let mut signals = Vec::new();
+    for workshop in workshops {
+        if let Some(jobs) = workshop["jobs"].as_array() {
+            for job in jobs {
+                if let Some(reasons) = job["wait_reasons"].as_array() {
+                    for reason in reasons.iter().filter_map(Value::as_str) {
+                        signals.push(json!({
+                            "source": "queued_job",
+                            "signal": "wait_reason",
+                            "value": reason,
+                            "workshop_id": workshop["id"],
+                            "job_id": job["id"],
+                        }));
+                    }
+                }
+                if job["remaining_dimension"]
+                    .as_i64()
+                    .is_some_and(|remaining| remaining > 0)
+                {
+                    signals.push(json!({
+                        "source": "queued_job",
+                        "signal": "items_not_yet_delivered",
+                        "remaining_dimension": job["remaining_dimension"],
+                        "workshop_id": workshop["id"],
+                        "job_id": job["id"],
+                    }));
+                }
+            }
+        }
+    }
+    for order in work_orders {
+        if order["is_active"] == false {
+            signals.push(json!({
+                "source": "manager_order",
+                "signal": "inactive",
+                "order_id": order["id"],
+            }));
+        }
+        if order["is_validated"] == false {
+            signals.push(json!({
+                "source": "manager_order",
+                "signal": "not_validated",
+                "order_id": order["id"],
+            }));
+        }
+        if let Some(conditions) = order["order_conditions"].as_array() {
+            for condition in conditions
+                .iter()
+                .filter(|condition| condition["satisfied"] == false)
+            {
+                signals.push(json!({
+                    "source": "manager_order",
+                    "signal": "unsatisfied_order_condition",
+                    "order_id": order["id"],
+                    "condition": condition["condition"],
+                }));
+            }
+        }
+    }
+    signals
 }
 
 fn validate_detail_parts(include: &[String]) -> Result<(), String> {
@@ -1148,7 +1359,7 @@ impl GameState {
         limit: usize,
     ) -> Result<Value, String> {
         check_page(limit)?;
-        self.call_lua_json(
+        let mut result = self.call_lua_json(
             "list stockpiles",
             "list_stockpiles",
             vec![
@@ -1157,7 +1368,9 @@ impl GameState {
                 offset.to_string(),
                 limit.to_string(),
             ],
-        )
+        )?;
+        restore_stockpile_lists(&mut result);
+        Ok(result)
     }
 
     /// Named locations such as temples and hospitals.
@@ -1313,61 +1526,70 @@ impl GameState {
         workshop_id: Option<i64>,
         order_id: Option<i64>,
     ) -> Result<Value, String> {
-        if search.is_none() && workshop_id.is_none() && order_id.is_none() {
+        if search.is_none_or(|search| search.trim().is_empty())
+            && workshop_id.is_none()
+            && order_id.is_none()
+        {
             return Err("Provide search, workshop_id, or order_id.".to_owned());
         }
-
-        let workshop_filter = workshop_id.map(|_| None).unwrap_or_else(|| search);
-        let mut workshops = self.list_workshops(workshop_filter, true, 0, 50)?;
-        if let Some(workshops_array) = workshops["workshops"].as_array_mut() {
-            if let Some(id) = workshop_id {
-                workshops_array.retain(|workshop| workshop["id"].as_i64() == Some(id));
-            }
-            if let Some(id) = order_id {
-                for workshop in workshops_array.iter_mut() {
-                    if let Some(jobs) = workshop["jobs"].as_array_mut() {
-                        jobs.retain(|job| job["order_id"].as_i64() == Some(id));
-                    }
-                }
-                workshops_array.retain(|workshop| {
-                    workshop["jobs"]
-                        .as_array()
-                        .is_some_and(|jobs| !jobs.is_empty())
-                });
-            }
+        if workshop_id.is_some_and(|id| id < 0) || order_id.is_some_and(|id| id < 0) {
+            return Err("workshop_id and order_id must be non-negative.".to_owned());
         }
 
-        let mut work_orders = self.list_work_orders(search, 0, 50)?;
-        if let Some(order_id) = order_id {
-            if let Some(orders) = work_orders["work_orders"].as_array_mut() {
-                orders.retain(|order| order["id"].as_i64() == Some(order_id));
-            }
-        }
-
+        let workshops = self.list_workshops(None, true, 0, 50)?;
+        let work_orders = self.list_work_orders(None, 0, 50)?;
         let stockpiles = self.list_stockpiles(None, None, 0, 50)?;
-        let mut reactions = Vec::new();
-        if let Some(workshops_array) = workshops["workshops"].as_array() {
-            for workshop in workshops_array {
-                if let Some(jobs) = workshop["jobs"].as_array() {
-                    for job in jobs {
-                        if let Some(reaction) = job["reaction"].as_str() {
-                            let detail = self.get_reaction(Some(reaction), None, false, 0, 10)?;
-                            reactions.push(detail);
-                        }
-                    }
-                }
+        let source_workshops = workshops["workshops"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let source_orders = work_orders["work_orders"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let (selected_workshops, selected_orders) = filter_production_evidence(
+            &source_workshops,
+            &source_orders,
+            search,
+            workshop_id,
+            order_id,
+        );
+        let mut reaction_codes = BTreeSet::new();
+        for row in selected_workshops.iter().chain(selected_orders.iter()) {
+            collect_production_reaction_codes(row, &mut reaction_codes);
+        }
+        let mut reaction_definitions = Vec::new();
+        for reaction in reaction_codes {
+            let mut detail = self.get_reaction(Some(&reaction), None, false, 0, 10)?;
+            restore_reaction_lists(&mut detail);
+            if let Some(rows) = detail["reactions"].as_array() {
+                reaction_definitions.extend(rows.iter().cloned());
             }
         }
+        let signals = production_block_signals(&selected_workshops, &selected_orders);
+        let stockpile_rows = stockpiles["stockpiles"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let work_orders_total = work_orders["total_matching"].as_u64().unwrap_or(0) as usize;
+        let workshops_total = workshops["total_matching"].as_u64().unwrap_or(0) as usize;
+        let stockpiles_total = stockpiles["total_matching"].as_u64().unwrap_or(0) as usize;
 
         Ok(json!({
             "search": search,
             "workshop_id": workshop_id,
             "order_id": order_id,
-            "workshops": workshops["workshops"].clone(),
-            "work_orders": work_orders["work_orders"].clone(),
-            "stockpiles": stockpiles["stockpiles"].clone(),
-            "reaction_definitions": reactions,
-            "notes": "This diagnostic combines queued-job wait evidence, manager-order conditions, reaction definitions, and stockpile routing. wait_reasons are factual native cues, not a complete root-cause determination."
+            "workshops": selected_workshops,
+            "work_orders": selected_orders,
+            "stockpiles": stockpile_rows,
+            "reaction_definitions": reaction_definitions,
+            "signals": signals,
+            "source_coverage": {
+                "workshops": {"total_matching": workshops_total, "included": source_workshops.len(), "truncated": workshops_total > source_workshops.len()},
+                "work_orders": {"total_matching": work_orders_total, "included": source_orders.len(), "truncated": work_orders_total > source_orders.len()},
+                "stockpiles": {"total_matching": stockpiles_total, "included": stockpile_rows.len(), "truncated": stockpiles_total > stockpile_rows.len()}
+            },
+            "notes": "signals restate factual DF flags and delivery progress; they are not proof of a complete root cause. Job requirements and reaction inputs are measured in material dimensions, not item counts. Stockpile filters and directional links are evidence, not an evaluation that a specific pile can satisfy a job. Source lists are capped at 50 rows, and each workshop reports when its queued jobs or requirements are truncated."
         }))
     }
 
