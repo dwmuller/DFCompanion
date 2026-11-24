@@ -10,12 +10,20 @@ Lua RPC and plugin scripts.
 
 ### Tool use during development
 
+- Always prefer using available MCP tools over shell commands.
+  - Examples:
+    - Language Server Protocol (LSP) tools over string searches for
+      finding usages and references in the code.
+    - git tools over shell-based git commands.
+    - For DFHack CLI tasks, use the DFHack MCP tool when
+      available; otherwise use shell commands.
+  - Known exceptions:
+    - Use shell commands for cargo and CMake tasks when no MCP equivalents
+      are available. 
 - Rust tooling: `cargo` for building, checking, linting, and testing.
 - DFHack CLI and Lua scripting for interacting with the game.
 - HTTP client tools for testing the web interface.
 - Git for version control and collaboration.
-- Strongly prefer Language Server Protocol (LSP) tools over string searches for
-  finding usages and references in the code. Minimize shell-based file searches.
 
 ### Key files and directories
 
@@ -41,8 +49,11 @@ Lua RPC and plugin scripts.
 
 - Files in `notes/` are more recent and more up to date. You'll find more
   architecture discussion there.
-  - `notes/current-status.md` contains notes about immediately ongoing work.
-    Keep this up to date with the latest developments.
+  - `notes/current-status.md` contains notes about *current* work. This includes
+    tasks that are incomplete or about to be started. It should not contain
+    notes about completed work -- notes of this sort should be recorded in
+    architecture.md if they're significant enough to warrant explicit mention
+    outside of the code. Keep this up to date.
   - `notes/TODO.md` contains a list of tasks and planned improvements for the
     project. Remove items from here when they've been completed.
   - `notes/architecture.md` contains notes on the overarching design
@@ -69,9 +80,9 @@ external resources, these resources may be useful.
 - [DFHack usage and basic development information](https://docs.dfhack.org/en/stable/)
 - [DFHack source code](https://github.com/DFHack/dfhack)
   - A local workspace of a private fork can be found at `~/projects/dfhack`.
-- With a game running, you can use DFHack's dfhack-run CLI and Lua scripting
-  capabilities to explore the capabilities of DFHack to supplement ambiguous
-  documentation.
+- With a game running, you may use DFHack's dfhack-run CLI and Lua scripting to
+  check ambiguous documentation; if the result is still unclear, ask the user
+  for direction.
 
 ## Core Engineering & Privacy Rules
 - **Localhost & credential security:** Keep network bindings restricted to
@@ -85,11 +96,17 @@ external resources, these resources may be useful.
   queues and fail without hanging Dwarf Fortress or losing pending user context.
 - **Lua script installation:** After editing Lua scripts, use the PowerShell
   command `cmake --build build --config Debug --target install-dfhack-script` to
-  copy them to the DFHack installation for live testing.
+  copy them to the DFHack installation for live testing. If the command fails,
+  show the full error output, state that the Lua scripts were not copied, and
+  ask the user for direction before attempting any other fix or retry. Do not
+  modify the DFHack installation manually.
 - **Rust verification:** After editing Rust files in `src/` or `tests/`, run
   `cargo fmt`, `cargo check`, `cargo clippy`, and `cargo test` to verify
   changes. If any of these commands fails, fix the reported issues and rerun
-  the failed command until it passes. If a fix is unclear, ask the user for
-  direction before continuing. Report the final result of each command.
+  the failed command. Attempt at most 3 fix-and-rerun cycles per failing
+  command. If the command still fails after 3 cycles, show the final error
+  output, state which command failed, and ask the user for direction before
+  making further changes. If a fix is unclear, ask the user for direction
+  before continuing. Report the final result of each command.
 
 
