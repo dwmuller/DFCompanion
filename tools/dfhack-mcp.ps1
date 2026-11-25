@@ -40,6 +40,8 @@ function Send-McpResponse {
     [Console]::Out.Flush()
 }
 
+[Console]::Error.WriteLine("DFHack MCP server starting...")   
+
 while ($null -ne ($line = [Console]::In.ReadLine())) {
     if ([string]::IsNullOrWhiteSpace($line)) { continue }
 

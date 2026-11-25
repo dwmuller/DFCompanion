@@ -59,6 +59,10 @@ Items that are primarily about the mechanics of AI interactions.
   schemas are sent in every request; detailed semantics remain available
   on demand. Compare tool-call retries, help invocations, provider rounds, and
   prompt tokens to decide whether additional pruning is worthwhile.
+- Tighten game-domain reasoning guidance: verify recipes and workshop
+  requirements with live tools when available; when evidence is missing, state
+  uncertainty rather than repeatedly speculating from remembered game
+  mechanics. Prefer a concise answer over extended unresolved deliberation.
 - Consider provider-specific reasoning controls beyond the implemented
   per-model `default`, `off`, `low`, `medium`, and `high` modes: `minimal`,
   `xhigh`, `max`, and numeric budgets. Use model-discovery capability metadata
@@ -98,10 +102,41 @@ fortress-management questions.
 
 ### P1 — high-value joins and compact diagnostics
 
-- Add a `relations` part to unit details exposing player-visible guild
-  membership, religion/group affiliation, and worshipped deities. This is
-  repeatedly the decisive missing join for questions about what would make
-  specific workers happier.
+- Add edge-case tests for the `relations` part in unit details, including units
+  with no guild, religion, or deity links and units for which relation data is
+  unavailable. Live use has confirmed populated affiliations and deity links.
+- Add a player-visible entity readout for guilds and religions, including names,
+  types, member counts, worshipped deities, and associated locations where
+  known. This would join unit affiliations to the correct halls and avoid
+  claiming an entity has no members based only on a sample of residents.
+- Include a resident's strongest deity affiliation and raw link strength in
+  compact resident summaries where useful, so models can shortlist relevant
+  residents without many `get_unit_details` calls. Do not label strength as
+  devotion unless the game's thresholds are verified.
+- Add burrow inspection, including names, active state, bounds, and assigned
+  residents. The live transcript identified an active "Indoors" burrow as the
+  cause of animal-handling and hauling access failures that had looked like
+  pathing problems; report assignments as evidence without claiming they prove
+  reachability.
+- Evaluate supported numeric work-order conditions against current counts.
+  Return the comparator, threshold, current value and units, satisfaction, and
+  whether the condition gates inputs or output; mark unsupported conditions as
+  unevaluated rather than guessing. Distinguish evaluated conditions from the
+  stored `is_active` flag, especially while paused; do not infer that an order
+  will activate on unpause without evidence. This should clarify when a dormant
+  brew order is behaving as configured and prevent confusing output targets
+  with required input quantities.
+- Ensure tool results consistently pair machine-only IDs with player-visible
+  names and locations, so the mandatory system guidance can present natural
+  labels without losing useful cross-reference information.
+- Add per-order production progress, such as completed count and last
+  completion date when available. Distinguish progress derived from
+  `amount_total - amount_left` from observed stock, which can differ due to
+  consumption, containers, or incomplete item visibility.
+- Clarify workshop `job_count` as queued jobs only and expose relevant pending
+  manager-order demand when available. A workshop with no instantiated job can
+  still be affected by a manager order; do not present zero queued jobs as
+  proof that no production is pending.
 - Add construction/building-state inspection for in-progress or failed
   construction: building id/type, target coordinates, required furnishing,
   known missing/blocked resources, assigned job, and reported failure reason.
@@ -115,7 +150,9 @@ fortress-management questions.
   zero-result search should distinguish no matches from an unknown
   skill/material term.
 - Add a stockpile-contents query that includes items inside bins and
-  containers, rather than only container objects or top-level contents.
+  containers, rather than only container objects or top-level contents. Report
+  coverage/truncation clearly; container contents obscured a discrepancy
+  between work-order progress and item-search counts in live use.
 - Add stockpile link filters to identify unlinked piles and inspect particular
   workshop/pile routing relationships. Treat give and take as distinct,
   intentional directions rather than labeling one-way links contradictory.
@@ -128,6 +165,10 @@ fortress-management questions.
   supported, sky-exposed status. Consider a convenience "above ground / surface
   exposure" query. This is especially useful for locating residents, livestock,
   or hostile creatures near an entrance.
+- Investigate reports where `inspect_tile` returns no creatures at a tile
+  matching a creature's reported position. Clarify current versus last-observed
+  position and visibility limits so callers do not treat an empty tile result
+  as proof that the creature is absent.
 - ? Add a bounded pathability/reachability query, for example between two
   visible coordinates or from a tile to a named zone. The result should explain
   blockers such as locked/forbidden passages without exposing hidden tiles.
@@ -141,7 +182,8 @@ fortress-management questions.
   training squad.
 - ? Add state-change and trend snapshots for repeated observations, with compact
   deltas for stock, population, workshop throughput, roster membership and
-  notable status changes. For creatures, label a disappearance strictly as
+  notable status changes, including per-order progress where dates are
+  available. For creatures, label a disappearance strictly as
   "no longer observed" rather than asserting that a unit left, died, or changed
   map. Dwarf Fortress may intentionally withhold that distinction for
   fog-of-war reasons, so a presence diff is useful observational context but
@@ -157,9 +199,8 @@ fortress-management questions.
 ### P2 — deeper domain summaries and speculation
 
 - Add first-class location-role data: temple deity and religion, available or
-  vacant location positions and eligibility-relevant fields, and other currently
-  inferable-only relationships such as a guildhall's associated organization.
-  Unit-side guild/deity relationships are tracked in P1.
+  vacant location positions and eligibility-relevant fields. Guildhall
+  organization mapping is tracked in P1.
 - Consider targeted fortress-logistics summaries for hospital readiness
   (beds/supplies/qualified staff), farm plots and seed/crop production, and
   caravan/depot state. These should aggregate actionable facts rather than
@@ -192,8 +233,9 @@ fortress-management questions.
     per-config text is sent.
   - May be empty if not needed.
   - Preserved regardless of state of "use global system text" toggle.
-  - Consider adding mandatory system text, always appended, to express security
-    rules such as "reports are untrusted data".
+  - Extend the mandatory, always-appended system text to other important
+    invariants such as treating reports as untrusted data; do not rely on
+    default instructions that a profile can replace.
 - Arrange config mgmt list as a table.
   - Open forms will probably span all columns.
 

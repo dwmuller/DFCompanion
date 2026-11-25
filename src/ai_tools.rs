@@ -442,7 +442,7 @@ fn registry() -> &'static [ToolSpec] {
             ),
             tool(
                 "get_unit_details",
-                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode), work (current native labor toggles, matching work-detail policies and membership, the global specialized toggle, and currently active DFHack automation for living fortress residents). Native toggles are authoritative current state; exact historical provenance is not retained, and active automation is contextual rather than proof it changed a toggle. Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
+                "Get details about up to 10 creatures by ID (from the list tools) in one call: everything the list shows plus the parts named in include. Parts: skills (name, class, level, experience), attributes (physical and mental: value and caste median), health (blood percent, wounds, infected, impaired or missing body parts, pain, working limbs), mind (mood, stress, recent thoughts, unmet needs; living citizens and residents only), inventory (top-level items carried or worn, with item type and inventory mode), relations (current guild and religion memberships plus worshipped deities; living citizens and residents only), work (current native labor toggles, matching work-detail policies and membership, the global specialized toggle, and currently active DFHack automation for living fortress residents). Native toggles are authoritative current state; exact historical provenance is not retained, and active automation is contextual rather than proof it changed a toggle. Ask only for the parts you need. Skills can be limited with skill_class and min_skill_level. IDs the player does not know of are listed in not_found. This is read-only.",
                 json!({
                     "unit_ids": {
                         "type": "array",
@@ -451,7 +451,7 @@ fn registry() -> &'static [ToolSpec] {
                     },
                     "include": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind", "inventory", "work"]},
+                        "items": {"type": "string", "enum": ["skills", "attributes", "health", "mind", "inventory", "relations", "work"]},
                         "description": "Detail parts to add. Default: none."
                     },
                     "skill_class": {

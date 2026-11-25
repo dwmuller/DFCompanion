@@ -383,9 +383,73 @@ local function inventory_of(unit)
     }
 end
 
+local function relations_of(unit)
+    if U.isDead(unit) or not (U.isCitizen(unit) or U.isResident(unit)) then
+        return {error = 'Only living citizens and residents have relation data.'}
+    end
+    local histfig_id = unit.hist_figure_id
+    local figure = histfig_id and histfig_id >= 0 and df.historical_figure.find(histfig_id)
+    if not figure then
+        return {error = 'This unit has no historical figure data.'}
+    end
+
+    local affiliations = {}
+    for _, link in ipairs(figure.entity_links) do
+        if df.histfig_entity_link_memberst:is_instance(link) then
+            local entity = df.historical_entity.find(link.entity_id)
+            if entity and (entity.type == df.historical_entity_type.Guild
+                    or entity.type == df.historical_entity_type.Religion) then
+                local entry = {
+                    entity_id = link.entity_id,
+                    entity_type = snake(df.historical_entity_type[entity.type]),
+                    link_strength = link.link_strength,
+                }
+                local name = text(dfhack.translation.translateName(entity.name, true))
+                if name ~= '' then
+                    entry.name = name
+                end
+                table.insert(affiliations, entry)
+            end
+        end
+    end
+    table.sort(affiliations, function(a, b)
+        if a.entity_type ~= b.entity_type then return a.entity_type < b.entity_type end
+        if a.name ~= b.name then return (a.name or '') < (b.name or '') end
+        return a.entity_id < b.entity_id
+    end)
+
+    local worshipped_deities = {}
+    for _, link in ipairs(figure.histfig_links) do
+        if df.histfig_hf_link_deityst:is_instance(link) and link.target_hf ~= nil then
+            local deity = df.historical_figure.find(link.target_hf)
+            local entry = {
+                historical_figure_id = link.target_hf,
+                link_strength = link.link_strength,
+            }
+            if deity then
+                local name = text(dfhack.translation.translateName(
+                    dfhack.units.getVisibleName(deity), false))
+                if name ~= '' then
+                    entry.name = name
+                end
+            end
+            table.insert(worshipped_deities, entry)
+        end
+    end
+    table.sort(worshipped_deities, function(a, b)
+        if a.name ~= b.name then return (a.name or '') < (b.name or '') end
+        return a.historical_figure_id < b.historical_figure_id
+    end)
+
+    return {
+        affiliations = affiliations,
+        worshipped_deities = worshipped_deities,
+    }
+end
+
 -- Adds the detail parts the caller asked for (options.parts is a set of
--- skills, attributes, health, mind, inventory, and work). Skills can be
--- limited to one class and a minimum level.
+-- skills, attributes, health, mind, inventory, relations, and work). Skills
+-- can be limited to one class and a minimum level.
 local function add_details(row, unit, options, active_automation, automation_error)
     local parts = options.parts
     if parts.skills then
@@ -409,6 +473,9 @@ local function add_details(row, unit, options, active_automation, automation_err
     end
     if parts.inventory then
         row.inventory = inventory_of(unit)
+    end
+    if parts.relations then
+        row.relations = relations_of(unit)
     end
     if parts.work then
         row.work = unit_work(unit, active_automation, automation_error)

@@ -182,9 +182,12 @@ enabled and are off by default.
 
 Each model profile configures its total context window and reserved output
 budget. Prompt construction subtracts the output reservation and accounts for
-the configured system text, tool
-definitions, history, and pending content, then includes a fitting contiguous
-prefix of user requests or reports; content that does not fit remains queued.
+the configured system text, mandatory game-entity ID guidance, tool definitions,
+history, and pending content, then includes a fitting contiguous prefix of user
+requests or reports; content that does not fit remains queued. The mandatory
+guidance applies even when a profile replaces the default system text: game
+entities should be identified by player-visible names and locations, with
+internal numeric IDs only as clearly labeled secondary references.
 Large completed histories are compacted before another turn by replacing older
 messages with an AI-written rolling summary while retaining four recent
 messages verbatim. Compaction uses a smaller output cap and permits two
@@ -206,6 +209,10 @@ that do not fit are omitted explicitly and the model receives a structured error
 for that tool, so it can answer from the remaining evidence without blocking the
 conversation. Tool calls are also bounded in number; tools should still return
 compact data to preserve useful evidence within the available budget.
+
+If a response exhausts the output budget without producing text, the runtime
+retries once with tools disabled and reasoning explicitly turned off, asking for
+a concise answer from the evidence already gathered.
 
 Turns run sequentially. A failed turn or compaction blocks further AI
 processing, pauses the game when possible, and retains pending inputs plus the

@@ -57,12 +57,13 @@ pub struct CandidateQuery {
     pub sort_by: Option<String>,
     pub limit: Option<usize>,
 }
-pub const DETAIL_PARTS: [&str; 6] = [
+pub const DETAIL_PARTS: [&str; 7] = [
     "skills",
     "attributes",
     "health",
     "mind",
     "inventory",
+    "relations",
     "work",
 ];
 pub const SKILL_CLASSES: [&str; 10] = [
@@ -177,6 +178,8 @@ fn restore_empty_lists(details: &mut Value) {
         &["mind", "recent_thoughts"],
         &["mind", "unmet_needs"],
         &["inventory", "items"],
+        &["relations", "affiliations"],
+        &["relations", "worshipped_deities"],
         &["work", "work_details"],
     ] {
         let mut node = Some(&mut *details);

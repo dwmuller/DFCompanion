@@ -309,6 +309,18 @@ fn get_unit_details_schema_advertises_work() {
 }
 
 #[test]
+fn get_unit_details_schema_advertises_relations() {
+    let spec = registry()
+        .iter()
+        .find(|spec| spec.name == "get_unit_details")
+        .unwrap();
+    let include_parts = spec.schema["properties"]["include"]["items"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(include_parts.contains(&json!("relations")));
+}
+
+#[test]
 fn list_work_details_schema_is_strict_and_has_expected_arguments() {
     let spec = registry()
         .iter()

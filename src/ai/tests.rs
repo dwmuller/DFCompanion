@@ -133,6 +133,32 @@ fn should_mark_restored_history_and_include_both_game_dates_in_prompt() {
 }
 
 #[test]
+fn mandatory_system_text_is_included_and_counted_even_with_custom_instructions() {
+    let mut configuration = prompt_configuration();
+    configuration.system_text = "Custom system instructions.".to_owned();
+    let prompt = build_prompt(
+        &History::default(),
+        &VecDeque::from([AiInput::UserRequest {
+            text: "Where is the forge?".to_owned(),
+            id: None,
+        }]),
+        &configuration,
+        false,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        prompt.token_estimates.system_text_tokens,
+        estimate_token_count(&effective_system_text(&configuration))
+    );
+    assert!(
+        prompt.token_estimates.system_text_tokens
+            > estimate_token_count(&configuration.system_text)
+    );
+}
+
+#[test]
 fn a_turn_returns_a_new_history_and_leaves_the_snapshot_untouched() {
     let before = History::default();
     let prompt = test_prompt(PromptKind::UserRequest, "question");
@@ -560,6 +586,7 @@ async fn genai_dispatches_to_each_configured_protocol_and_url() {
         assert!(request_body
             .to_string()
             .contains("Custom system instructions."));
+        assert!(request_body.to_string().contains(MANDATORY_SYSTEM_TEXT));
     }
 }
 
@@ -837,7 +864,7 @@ async fn max_tokens_without_text_should_retry_once_without_tools() {
     server.abort();
 
     assert_eq!(result.answer, "Concise answer.");
-    assert_eq!(recovery_request["reasoning"]["effort"], "low");
+    assert_eq!(recovery_request["reasoning"]["effort"], "none");
     assert_eq!(recovery_request["tool_choice"], "none");
 }
 

@@ -9,7 +9,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}/tools/dfhack-mcp.ps1"
+        "tools/dfhack-mcp.ps1"
       ]
     }
   }

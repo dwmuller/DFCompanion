@@ -52,6 +52,7 @@ fn empty_detail_lists_are_restored() {
         "skills": {},
         "mind": {"recent_thoughts": {}, "unmet_needs": [1]},
         "inventory": {"items": {}},
+        "relations": {"affiliations": {}, "worshipped_deities": {}},
         "work": {"work_details": {}}
     });
     restore_empty_lists(&mut details);
@@ -59,6 +60,8 @@ fn empty_detail_lists_are_restored() {
     assert_eq!(details["mind"]["recent_thoughts"], json!([]));
     assert_eq!(details["mind"]["unmet_needs"], json!([1]));
     assert_eq!(details["inventory"]["items"], json!([]));
+    assert_eq!(details["relations"]["affiliations"], json!([]));
+    assert_eq!(details["relations"]["worshipped_deities"], json!([]));
     assert_eq!(details["work"]["work_details"], json!([]));
     let mut plain = json!({"id": 1});
     restore_empty_lists(&mut plain);
@@ -75,6 +78,13 @@ fn inventory_is_a_supported_detail_part_and_unknown_parts_are_rejected() {
 #[test]
 fn work_is_a_supported_detail_part_and_unknown_parts_are_rejected() {
     assert!(validate_detail_parts(&["work".to_owned()]).is_ok());
+    let error = validate_detail_parts(&["unknown".to_owned()]).unwrap_err();
+    assert!(error.contains("Unknown part \"unknown\""));
+}
+
+#[test]
+fn relations_is_a_supported_detail_part_and_unknown_parts_are_rejected() {
+    assert!(validate_detail_parts(&["relations".to_owned()]).is_ok());
     let error = validate_detail_parts(&["unknown".to_owned()]).unwrap_err();
     assert!(error.contains("Unknown part \"unknown\""));
 }
