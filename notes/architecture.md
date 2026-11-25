@@ -188,6 +188,9 @@ requests or reports; content that does not fit remains queued. The mandatory
 guidance applies even when a profile replaces the default system text: game
 entities should be identified by player-visible names and locations, with
 internal numeric IDs only as clearly labeled secondary references.
+Profiles also configure provider reasoning effort (`default`, `off`, `low`,
+`medium`, or `high`). Normal turns use the selected effort; compaction uses low
+when the profile selects the provider default.
 Large completed histories are compacted before another turn by replacing older
 messages with an AI-written rolling summary while retaining four recent
 messages verbatim. Compaction uses a smaller output cap and permits two
@@ -209,6 +212,9 @@ that do not fit are omitted explicitly and the model receives a structured error
 for that tool, so it can answer from the remaining evidence without blocking the
 conversation. Tool calls are also bounded in number; tools should still return
 compact data to preserve useful evidence within the available budget.
+Tool definitions include concise descriptions and argument schemas in each
+request. Detailed semantics, caveats, and argument guidance are available
+through `tool_help`, which remains usable when no fortress is loaded.
 
 If a response exhausts the output budget without producing text, the runtime
 retries once with tools disabled and reasoning explicitly turned off, asking for

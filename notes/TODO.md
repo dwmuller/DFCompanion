@@ -226,16 +226,28 @@ fortress-management questions.
   setting active config to "None", without changing selected config.
 - Move API key morphing button into edit/create forms.
   - Make API key optional per configuration with a toggle.
-- Provide a method of editing global system text.
-- Provide a per-config toggle to use global system text.
 - Provide per-config system text.
   - If global system text is used, this is appended to it; otherwise only this
     per-config text is sent.
-  - May be empty if not needed.
-  - Preserved regardless of state of "use global system text" toggle.
+  - May be empty if not wanted.
   - Extend the mandatory, always-appended system text to other important
     invariants such as treating reports as untrusted data; do not rely on
     default instructions that a profile can replace.
+- ? Consider arranging configuration differently:
+  - Provider - api-key, url, available models, etc.
+  - "Agent" or "Persona" - user-provided system text (see above), no longer
+    optional.
+  - Add quick selectors on main page for, separately: Provider & model,
+    Agent/Persona, Effort
+    - Requires either reliable model retrieval or the ability to edit a list of
+      models.
+  - Consider whether the Agent/Persona items should be stored in-game or perhaps
+    in a file in sharable DF directory.
+- ? Provide a method of editing global system text.
+  - And a method of restoring it to its hard-coded default.
+- ? Provide a per-config toggle to use global system text.
+  - Mostly useful for development & testing.
+  - User system text is preserved regardless of state of this toggle.
 - Arrange config mgmt list as a table.
   - Open forms will probably span all columns.
 
