@@ -17,14 +17,21 @@ function field(form, selector) {
 }
 
 function setModelSuggestions(form, models) {
-  const datalist = field(form, "[data-configuration-models]");
-  datalist.replaceChildren(
+  const select = field(form, "[data-configuration-models]");
+  const modelInput = field(form, "[data-configuration-model]");
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Choose a suggested model";
+  select.replaceChildren(
+    placeholder,
     ...models.map((model) => {
       const option = document.createElement("option");
       option.value = model;
+      option.textContent = model;
       return option;
     }),
   );
+  select.value = modelInput.value;
 }
 
 function applyProvider(form, provider) {
@@ -44,6 +51,21 @@ document.addEventListener("change", async (event) => {
   if (!form) {
     return;
   }
+  if (target.matches("[data-configuration-models]")) {
+    const modelInput = field(form, "[data-configuration-model]");
+    if (target.value) {
+      modelInput.value = target.value;
+    }
+    return;
+  }
+  if (
+    !target.matches(
+      "[data-configuration-provider], [data-configuration-method]",
+    )
+  ) {
+    return;
+  }
+
   let providers;
   try {
     providers = await loadProviders();
@@ -72,4 +94,13 @@ document.addEventListener("change", async (event) => {
         .flatMap((provider) => provider.models),
     );
   }
+});
+
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  const form = target.closest?.("[data-configuration-form]");
+  if (!form || !target.matches("[data-configuration-model]")) {
+    return;
+  }
+  field(form, "[data-configuration-models]").value = target.value;
 });

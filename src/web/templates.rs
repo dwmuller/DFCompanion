@@ -952,20 +952,33 @@ mod test {
     }
 
     #[test]
-    fn model_discovery_result_should_replace_datalist_out_of_band() {
+    fn model_configuration_should_keep_manual_entry_alongside_suggestion_select() {
+        let rendered = render_edit_form(&editable_configuration(), "").expect("form should render");
+
+        assert!(rendered.contains("name=\"model_id\""));
+        assert!(rendered.contains("type=\"text\""));
+        assert!(rendered.contains("autocomplete=\"off\""));
+        assert!(rendered.contains("data-configuration-model"));
+        assert!(rendered.contains("data-configuration-models"));
+        assert!(!rendered.contains("list=\""));
+    }
+
+    #[test]
+    fn model_discovery_result_should_render_selectable_model_suggestions() {
         let models = vec!["alpha".to_owned(), "beta".to_owned()];
 
         let rendered =
             render_model_discovery_result("profile", &models, "").expect("result should render");
 
         assert!(rendered.contains("Refreshed 2 model suggestions."));
+        assert!(rendered.contains("<select"));
         assert!(rendered.contains("id=\"profile-configuration-models\""));
-        assert!(rendered.contains("hx-swap-oob=\"outerHTML\""));
-        assert!(rendered.contains("value=\"alpha\""));
+        assert!(rendered.contains("hx-swap-oob=\"innerHTML\""));
+        assert!(rendered.contains("<option value=\"alpha\">alpha</option>"));
     }
 
     #[test]
-    fn model_discovery_error_should_keep_existing_datalist() {
+    fn model_discovery_error_should_keep_existing_model_suggestions() {
         let rendered = render_model_discovery_result("profile", &[], "Discovery failed.")
             .expect("result should render");
 

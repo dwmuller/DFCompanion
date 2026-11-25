@@ -46,16 +46,20 @@
   name="model_id"
   type="text"
   maxlength="256"
-  list="{{ values.id }}-configuration-models"
+  autocomplete="off"
   value="{{ values.model_id }}"
   data-configuration-model
   required>
-<datalist
+<label for="{{ values.id }}-configuration-models">Suggested models</label>
+<select
   id="{{ values.id }}-configuration-models"
   data-configuration-models>
-</datalist>
+</select>
 
-<p>Suggested models are editable and may vary by account or region.</p>
+<p>
+  Select a suggestion to fill the model ID, or enter any model ID manually.
+  Suggestions may vary by account or region.
+</p>
 <button
   type="button"
   hx-post="/fragments/ai-configurations/{{ values.id }}/models"
