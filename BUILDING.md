@@ -116,6 +116,17 @@ After a Debug build:
 
 The HTTP UI and Lua event endpoint listen on `127.0.0.1:3000`.
 
+To also write tracing output to a file, specify `--trace-file <path>`. The file
+is created or overwritten at startup; console tracing is unchanged. Set
+`RUST_LOG` to enable the desired tracing targets, for example:
+
+```powershell
+$env:RUST_LOG = "dfcompanion=debug"
+.\build\cargo\debug\dfcompanion.exe --trace-file .\dfcompanion-trace.log
+```
+
+The file may contain sensitive diagnostic information; review it before sharing.
+
 ## VS Code
 
 The workspace includes a **Build and Install DFCompanion (Debug)** task. After configuring CMake with `DFHACK_INSTALL_DIR`, press **F5** with **Debug DFCompanion** selected. The pre-launch task builds the service and installs the Lua script; the debugger then starts the service and VS Code opens the web UI in the default browser when it detects the ready message.

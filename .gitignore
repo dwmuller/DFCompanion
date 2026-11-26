@@ -5,3 +5,4 @@
 /deps.svg
 # Generated from .luarc.json.in by CMake.
 /.luarc.json
+*.log

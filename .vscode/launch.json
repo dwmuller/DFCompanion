@@ -7,11 +7,11 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/cargo/debug/dfcompanion.exe",
       "cwd": "${workspaceFolder}",
-      "args": ["--trace-http"],
+      "args": ["--trace-http", "--trace-file", "trace.log"],
       "preLaunchTask": "Build and Install DFCompanion (Debug)",
       "terminal": "integrated",
       "env": {
-        "RUST_LOG": "info,dfcompanion::game_state=trace",
+        "RUST_LOG": "info,dfcompanion=debug,dfcompanion::game_state=trace",
         "RUST_BACKTRACE": "1"
       }
     }
