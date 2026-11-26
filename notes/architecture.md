@@ -141,8 +141,10 @@ after responding, avoiding a deadlock with the plugin's synchronous HTTP calls.
 The plugin retries mismatches on later frames, preserving and pausing for a
 failed game report. Queued reports are checked again against the current
 session before processing. The ID is not a credential and is not saved with
-the fortress. RPC operations other than lifecycle discovery are not yet
-session-guarded.
+the fortress. Chat persistence RPC calls (`load_chat_state`, `save_chat_state`)
+take the session ID instead of a site ID, and Lua rejects a call whose session
+is no longer current, so a late save cannot reach a reloaded fortress. Other RPC
+operations are not yet session-guarded.
 
 ## Semantic inference
 

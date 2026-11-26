@@ -692,15 +692,16 @@ impl GameState {
         Ok(snapshot)
     }
 
-    /// Loads the raw DFCompanion chat state associated with `site_id`.
-    #[tracing::instrument(level = "trace", skip(self), fields(site_id), err)]
-    pub fn load_chat_state(&self, site_id: i64) -> Result<Option<String>, String> {
+    /// Loads the raw DFCompanion chat state of the fortress session `session_id`.
+    /// Lua fails the call if that session is no longer the loaded one.
+    #[tracing::instrument(level = "trace", skip(self), err)]
+    pub fn load_chat_state(&self, session_id: &str) -> Result<Option<String>, String> {
         let reply = self
             .with_client("Could not load saved chat history", |client| {
                 client.core().run_lua(CoreRunLuaRequest {
                     module: LUA_MODULE.to_owned(),
                     function: "load_chat_state".to_owned(),
-                    arguments: vec![site_id.to_string()],
+                    arguments: vec![session_id.to_owned()],
                 })
             })?
             .reply
@@ -709,24 +710,26 @@ impl GameState {
         decode_chat_state(&reply)
     }
 
-    /// Replaces the raw DFCompanion chat state associated with `site_id`.
+    /// Replaces the raw DFCompanion chat state of the fortress session
+    /// `session_id`.
     ///
-    /// The Lua side checks the site again immediately before writing so a
-    /// delayed request cannot save one fortress's state into another.
+    /// The Lua side checks the session again immediately before writing so a
+    /// delayed request cannot save one fortress activation's state into
+    /// another, even for the same site.
     #[tracing::instrument(
         level = "trace",
         skip(self, state),
-        fields(site_id, state_bytes = state.len()),
+        fields(session_id, state_bytes = state.len()),
         err
     )]
-    pub fn save_chat_state(&self, site_id: i64, state: &str) -> Result<(), String> {
+    pub fn save_chat_state(&self, session_id: &str, state: &str) -> Result<(), String> {
         let state = format!("zstd:{}", encode_chat_state(state)?);
         let result = self
             .with_client("Could not save chat history", |client| {
                 client.core().run_lua(CoreRunLuaRequest {
                     module: LUA_MODULE.to_owned(),
                     function: "save_chat_state".to_owned(),
-                    arguments: vec![site_id.to_string(), state.clone()],
+                    arguments: vec![session_id.to_owned(), state.clone()],
                 })
             })?
             .reply

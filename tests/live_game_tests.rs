@@ -73,13 +73,13 @@ fn should_load_saved_chat_history_from_the_current_fortress() {
     })
     .1;
     let game_state = GameState::new(Notifier::new(NotificationHistory::new()), lifecycle);
-    let site_id = game_state
+    let snapshot = game_state
         .query_lifecycle()
-        .expect("Could not query the fortress")
-        .site_id
-        .expect("No fortress site is loaded");
+        .expect("Could not query the fortress");
+    let site_id = snapshot.site_id.expect("No fortress site is loaded");
+    let session_id = snapshot.session_id.expect("No fortress session is loaded");
     if let Some(state) = game_state
-        .load_chat_state(site_id)
+        .load_chat_state(&session_id)
         .expect("Could not load saved chat history")
     {
         dfcompanion::ai::History::from_snapshot_json(&state, site_id)

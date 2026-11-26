@@ -54,25 +54,30 @@ local lifecycle = load_with_env(lifecycle_path, {
     end,
 })
 
+local session = assert(lifecycle.current_session())
+assert(not pcall(lifecycle.load_chat_state, 'stale'))
+assert(not pcall(lifecycle.load_chat_state))
+assert(not pcall(lifecycle.save_chat_state, 'stale', 'zstd:no'))
+assert(raw_by_site[1] == nil)
 assert(lifecycle.load_enabled_state() == nil)
 lifecycle.save_enabled_state(false)
 assert(lifecycle.load_enabled_state() == false)
-assert(lifecycle.load_chat_state('1') == '')
-assert(lifecycle.save_chat_state('1', 'zstd:abc') == 'true')
+assert(lifecycle.load_chat_state(session) == '')
+assert(lifecycle.save_chat_state(session, 'zstd:abc') == 'true')
 assert(lifecycle.load_enabled_state() == false)
-assert(lifecycle.load_chat_state('1') == 'zstd:abc')
+assert(lifecycle.load_chat_state(session) == 'zstd:abc')
 lifecycle.save_enabled_state(true)
-assert(lifecycle.load_chat_state('1') == 'zstd:abc')
+assert(lifecycle.load_chat_state(session) == 'zstd:abc')
 
 site_id = 2
 raw_by_site[2] = '{"version":1,"site_id":2,"game_date":"250-01-01:0","summary":"","messages":[]}'
 assert(lifecycle.load_enabled_state() == true)
 lifecycle.save_enabled_state(false)
-local legacy = json.decode(lifecycle.load_chat_state('2'):sub(6))
+local legacy = json.decode(lifecycle.load_chat_state(session):sub(6))
 assert(legacy.enabled == nil and #legacy.messages == 0)
-lifecycle.save_chat_state('2', 'zstd:xyz')
+lifecycle.save_chat_state(session, 'zstd:xyz')
 assert(lifecycle.load_enabled_state() == false)
-assert(lifecycle.load_chat_state('2') == 'zstd:xyz')
+assert(lifecycle.load_chat_state(session) == 'zstd:xyz')
 
 site_id = 3
 raw_by_site[3] = '{"version":2,"enabled":"false","chat_history":"abc"}'
@@ -88,7 +93,7 @@ site_id = 5
 raw_by_site[5] = '{"version":2,"chat_history":"existing"}'
 assert(lifecycle.load_enabled_state() == true)
 lifecycle.save_enabled_state(true)
-assert(lifecycle.load_chat_state('5') == 'zstd:existing')
+assert(lifecycle.load_chat_state(session) == 'zstd:existing')
 
 local eventful = {
     eventType = {REPORT = 1},
@@ -224,7 +229,8 @@ assert(env.enabled == nil and env.pending_event == nil)
 site_id = 2
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
 assert(not env.isEnabled() and not eventful.onReport.dfcompanion)
-assert(lifecycle.load_chat_state('2') == 'zstd:xyz')
+assert(lifecycle.load_chat_state(lifecycle.current_session()) == 'zstd:xyz')
+assert(not pcall(lifecycle.load_chat_state, session))
 
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_UNLOADED)
 site_id = 3

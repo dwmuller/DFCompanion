@@ -2,10 +2,10 @@
 
 ## Current Focus
 
-- Extend fortress session IDs to RPC and MCP interactions; HTTP plugin
-  interactions now use session headers, but chat persistence and other RPC
-  operations still need game-side session checks. Revisit lifecycle polling
-  after those guards are in place.
+- Extend fortress session IDs to the remaining RPC and MCP interactions;
+  HTTP plugin interactions and chat persistence are session-guarded, but game
+  queries are not. Then review the remaining uses of the site ID and
+  revisit lifecycle polling.
 - AI note recording is planned. The first step stores chat history as a
   Zstandard-compressed, base64-encoded JSON snapshot in a versioned DFHack
   site-data table; notes and their tools remain to be implemented. Reading a

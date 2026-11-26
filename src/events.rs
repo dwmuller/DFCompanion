@@ -94,6 +94,7 @@ pub struct LoadedChatState {
 pub struct ChatSaveRequest {
     pub generation: u64,
     pub site_id: i64,
+    pub session_id: String,
     pub history: History,
 }
 

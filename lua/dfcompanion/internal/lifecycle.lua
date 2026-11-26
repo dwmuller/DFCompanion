@@ -70,7 +70,9 @@ local function fortress_name()
     return native .. ', "' .. english .. '"'
 end
 
-local function require_chat_site(expected_site_id)
+-- Returns the loaded site. When `expected_session` is given, it must match the
+-- current fortress session, which also covers reloads of the same site.
+local function require_chat_site(expected_session)
     if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
         error('Cannot access saved chat state because no fortress site is loaded.')
     end
@@ -78,8 +80,8 @@ local function require_chat_site(expected_site_id)
     if not site then
         error('Cannot identify the loaded fortress site.')
     end
-    if expected_site_id ~= nil and tostring(site.id) ~= tostring(expected_site_id) then
-        error('The loaded fortress site changed before chat state could be accessed.')
+    if expected_session ~= nil and expected_session ~= current_session() then
+        error('session mismatch: the fortress session changed before chat state could be accessed.')
     end
     return site
 end
@@ -112,8 +114,8 @@ local function read_saved_state()
     return state
 end
 
-local function load_chat_state(expected_site_id)
-    require_chat_site(expected_site_id)
+local function load_chat_state(expected_session)
+    require_chat_site(expected_session or '')
     local state, legacy = read_saved_state()
     if not state then return '' end
     if legacy then
@@ -143,8 +145,8 @@ local function save_enabled_state(enabled)
     dfhack.persistent.saveSiteData(CHAT_STATE_KEY, saved)
 end
 
-local function save_chat_state(expected_site_id, state)
-    require_chat_site(expected_site_id)
+local function save_chat_state(expected_session, state)
+    require_chat_site(expected_session or '')
     if type(state) ~= 'string' or state:sub(1, 5) ~= 'zstd:' then
         error('Chat state must use the zstd encoding.')
     end
