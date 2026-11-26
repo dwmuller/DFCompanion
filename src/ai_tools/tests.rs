@@ -8,7 +8,6 @@ fn game_state_with(state: LifecycleState) -> GameState {
     let lifecycle = tokio::sync::watch::channel(LifecycleStatus {
         state,
         fortress_name: None,
-        site_id: None,
         session_id: None,
     })
     .1;

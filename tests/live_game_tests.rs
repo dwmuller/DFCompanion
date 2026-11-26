@@ -68,7 +68,6 @@ fn should_load_saved_chat_history_from_the_current_fortress() {
     let lifecycle = tokio::sync::watch::channel(LifecycleStatus {
         state: LifecycleState::MapLoaded,
         fortress_name: None,
-        site_id: None,
         session_id: None,
     })
     .1;
@@ -76,13 +75,12 @@ fn should_load_saved_chat_history_from_the_current_fortress() {
     let snapshot = game_state
         .query_lifecycle()
         .expect("Could not query the fortress");
-    let site_id = snapshot.site_id.expect("No fortress site is loaded");
     let session_id = snapshot.session_id.expect("No fortress session is loaded");
     if let Some(state) = game_state
         .load_chat_state(&session_id)
         .expect("Could not load saved chat history")
     {
-        dfcompanion::ai::History::from_snapshot_json(&state, site_id)
+        dfcompanion::ai::History::from_snapshot_json(&state)
             .expect("Saved chat history is invalid");
     }
 }
@@ -102,7 +100,6 @@ async fn should_resynchronize_http_when_the_fortress_session_differs() {
         .await
         .expect("Could not query the fortress");
     let session_id = snapshot.session_id.expect("No fortress session is loaded");
-    let site_id = snapshot.site_id.expect("No fortress site is loaded");
     let stale_session = if session_id == "a" { "b" } else { "a" };
 
     let (app, receiver) = CompanionApp::new();
@@ -110,7 +107,6 @@ async fn should_resynchronize_http_when_the_fortress_session_differs() {
         true,
         true,
         Some(snapshot.fortress_name),
-        Some(site_id),
         Some(stale_session.to_owned()),
     );
     let mut lifecycle = app.subscribe_lifecycle();
@@ -292,7 +288,6 @@ async fn ai_tools_end_to_end() {
     let lifecycle = tokio::sync::watch::channel(dfcompanion::game_state::LifecycleStatus {
         state: dfcompanion::game_state::LifecycleState::MapLoaded,
         fortress_name: None,
-        site_id: None,
         session_id: None,
     })
     .1;

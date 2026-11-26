@@ -169,16 +169,13 @@ local function lifecycle_state()
         and dfhack.world.isFortressMode()
         and dfhack.isSiteLoaded()
     local name = ''
-    local site_id = nil
     if map_loaded then
         name = fortress_name()
-        site_id = require_chat_site().id
     end
     return json.encode({
         world_loaded = dfhack.isWorldLoaded(),
         map_loaded = map_loaded,
         fortress_name = name,
-        site_id = site_id,
         session_id = map_loaded and current_session() or nil,
     })
 end

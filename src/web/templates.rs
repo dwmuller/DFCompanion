@@ -749,7 +749,6 @@ mod test {
         let lifecycle = LifecycleStatus {
             state: LifecycleState::MapLoaded,
             fortress_name: Some("<Bridgedmine>".to_owned()),
-            site_id: Some(41),
             session_id: Some("a".to_owned()),
         };
 
@@ -768,7 +767,6 @@ mod test {
         let lifecycle = LifecycleStatus {
             state: LifecycleState::WorldLoaded,
             fortress_name: Some("Bridgedmine".to_owned()),
-            site_id: Some(41),
             session_id: Some("a".to_owned()),
         };
 
@@ -787,7 +785,6 @@ mod test {
         let no_world = render_lifecycle_state_content(&LifecycleStatus {
             state: LifecycleState::Initialized,
             fortress_name: None,
-            site_id: None,
             session_id: None,
         })
         .unwrap();

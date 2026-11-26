@@ -106,7 +106,6 @@ struct PluginLifecycle {
     world_loaded: bool,
     map_loaded: bool,
     fortress_name: String,
-    site_id: Option<i64>,
     session_id: Option<String>,
 }
 
@@ -361,7 +360,6 @@ async fn plugin_lifecycle(
     };
     let session_id = (session != NO_PLUGIN_SESSION).then(|| session.to_owned());
     if payload.map_loaded != session_id.is_some()
-        || payload.map_loaded != payload.site_id.is_some()
         || payload.session_id != session_id
         || payload.map_loaded && !payload.world_loaded
     {
@@ -378,7 +376,6 @@ async fn plugin_lifecycle(
                 world_loaded: payload.world_loaded,
                 map_loaded: payload.map_loaded,
                 fortress_name: payload.fortress_name,
-                site_id: payload.site_id,
                 session_id,
             },
         )) {

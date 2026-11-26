@@ -245,7 +245,6 @@ async fn lifecycle_state_streams_initial_and_changed_fortress_status() {
         true,
         true,
         Some("Bridgedmine".to_owned()),
-        Some(41),
         Some("a".to_owned()),
     );
     let updated = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
@@ -291,7 +290,6 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
         true,
         true,
         Some("Bridgedmine".to_owned()),
-        Some(41),
         Some("a".to_owned()),
     );
 
@@ -304,7 +302,7 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-dfcompanion-session", "a")
                 .body(Body::from(
-                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","site_id":41,"session_id":"a"}"#,
+                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","session_id":"a"}"#,
                 ))
                 .unwrap(),
         )
@@ -322,7 +320,7 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
         app.lifecycle().fortress_name.as_deref(),
         Some("Bridgedmine")
     );
-    assert_eq!(app.lifecycle().site_id, Some(41));
+    assert_eq!(app.lifecycle().session_id.as_deref(), Some("a"));
 
     let rejected = router(app.clone())
         .oneshot(
@@ -333,7 +331,7 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
                 .header(header::ORIGIN, HTTP_ORIGIN)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"world_loaded":false,"map_loaded":false,"fortress_name":"","site_id":null}"#,
+                    r#"{"world_loaded":false,"map_loaded":false,"fortress_name":"","session_id":null}"#,
                 ))
                 .unwrap(),
         )
@@ -347,7 +345,7 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
 #[tokio::test]
 async fn should_reject_lifecycle_when_body_and_header_sessions_differ() {
     let (app, mut queue_rx) = CompanionApp::new();
-    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
+    app.update_lifecycle(true, true, None, Some("a".to_owned()));
     let response = router(app)
         .oneshot(
             Request::builder()
@@ -357,7 +355,7 @@ async fn should_reject_lifecycle_when_body_and_header_sessions_differ() {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-dfcompanion-session", "a")
                 .body(Body::from(
-                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","site_id":41,"session_id":"b"}"#,
+                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","session_id":"b"}"#,
                 ))
                 .unwrap(),
         )

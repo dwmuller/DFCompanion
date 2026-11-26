@@ -54,16 +54,16 @@ pub enum ExternalEvent {
     },
     /// A high-priority observation of the game's loading state.
     Lifecycle(LifecycleEvent),
-    /// Completion of a site-bound chat restore operation.
+    /// Completion of a session-bound chat restore operation.
     ChatStateLoaded {
         generation: u64,
-        site_id: i64,
+        session_id: String,
         result: Result<Option<LoadedChatState>, String>,
     },
     /// Lifecycle recheck associated with a failed restore.
     ChatRestoreLifecycle {
         generation: u64,
-        site_id: i64,
+        session_id: String,
         snapshot: LifecycleSnapshot,
     },
     /// A committed history snapshot that should be coalesced with other
@@ -73,7 +73,7 @@ pub enum ExternalEvent {
     ChatStateSaved {
         save_id: u64,
         generation: u64,
-        site_id: i64,
+        session_id: String,
         result: Result<(), String>,
     },
 }
@@ -93,7 +93,6 @@ pub struct LoadedChatState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatSaveRequest {
     pub generation: u64,
-    pub site_id: i64,
     pub session_id: String,
     pub history: History,
 }
@@ -201,12 +200,12 @@ impl EventQueue {
     pub(crate) fn try_send_chat_state_loaded(
         &self,
         generation: u64,
-        site_id: i64,
+        session_id: String,
         result: Result<Option<LoadedChatState>, String>,
     ) -> Result<(), String> {
         self.try_send_priority(ExternalEvent::ChatStateLoaded {
             generation,
-            site_id,
+            session_id,
             result,
         })
     }
@@ -214,12 +213,12 @@ impl EventQueue {
     pub(crate) fn try_send_chat_restore_lifecycle(
         &self,
         generation: u64,
-        site_id: i64,
+        session_id: String,
         snapshot: LifecycleSnapshot,
     ) -> Result<(), String> {
         self.try_send_priority(ExternalEvent::ChatRestoreLifecycle {
             generation,
-            site_id,
+            session_id,
             snapshot,
         })
     }
@@ -235,13 +234,13 @@ impl EventQueue {
         &self,
         save_id: u64,
         generation: u64,
-        site_id: i64,
+        session_id: String,
         result: Result<(), String>,
     ) -> Result<(), String> {
         self.try_send_priority(ExternalEvent::ChatStateSaved {
             save_id,
             generation,
-            site_id,
+            session_id,
             result,
         })
     }

@@ -8,7 +8,7 @@ local plugin_path = installed_root
     or root .. '\\lua\\plugin\\dfcompanion.lua'
 local json = require('json')
 local raw_by_site = {}
-local site_id = 1
+local current_site_id = 1
 local site_loaded = true
 local random_value = 0
 local scheduled = {}
@@ -25,16 +25,16 @@ local fake_dfhack = {
     end,
     world = {
         isFortressMode = function() return site_loaded end,
-        getCurrentSite = function() return {id = site_id, name = {}} end,
+        getCurrentSite = function() return {id = current_site_id, name = {}} end,
     },
     isSiteLoaded = function() return site_loaded end,
     isMapLoaded = function() return site_loaded end,
     isWorldLoaded = function() return site_loaded end,
     translation = {translateName = function() return 'Test fortress' end},
     persistent = {
-        getSiteDataString = function() return raw_by_site[site_id] end,
+        getSiteDataString = function() return raw_by_site[current_site_id] end,
         saveSiteData = function(_, state)
-            raw_by_site[site_id] = json.encode(state, {pretty = false})
+            raw_by_site[current_site_id] = json.encode(state, {pretty = false})
         end,
     },
     onStateChange = {},
@@ -69,7 +69,7 @@ assert(lifecycle.load_chat_state(session) == 'zstd:abc')
 lifecycle.save_enabled_state(true)
 assert(lifecycle.load_chat_state(session) == 'zstd:abc')
 
-site_id = 2
+current_site_id = 2
 raw_by_site[2] = '{"version":1,"site_id":2,"game_date":"250-01-01:0","summary":"","messages":[]}'
 assert(lifecycle.load_enabled_state() == true)
 lifecycle.save_enabled_state(false)
@@ -79,7 +79,7 @@ lifecycle.save_chat_state(session, 'zstd:xyz')
 assert(lifecycle.load_enabled_state() == false)
 assert(lifecycle.load_chat_state(session) == 'zstd:xyz')
 
-site_id = 3
+current_site_id = 3
 raw_by_site[3] = '{"version":2,"enabled":"false","chat_history":"abc"}'
 assert(not pcall(lifecycle.load_enabled_state))
 assert(not pcall(lifecycle.save_enabled_state, true))
@@ -89,7 +89,7 @@ assert(not pcall(lifecycle.load_enabled_state))
 assert(not pcall(lifecycle.save_enabled_state, true))
 assert(raw_by_site[3] == '{"version":1,"enabled":"false","messages":[]}')
 
-site_id = 5
+current_site_id = 5
 raw_by_site[5] = '{"version":2,"chat_history":"existing"}'
 assert(lifecycle.load_enabled_state() == true)
 lifecycle.save_enabled_state(true)
@@ -171,7 +171,7 @@ site_loaded = false
 run_plugin()
 assert(env.enabled == nil and env.isEnabled() == false)
 site_loaded = true
-site_id = 4
+current_site_id = 4
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
 local first_session = assert(lifecycle.current_session())
 local reloaded_lifecycle = load_with_env(lifecycle_path, {
@@ -226,14 +226,14 @@ assert(env.isEnabled() and lifecycle.load_enabled_state() == true)
 env.pending_event = {text = 'undelivered'}
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_UNLOADED)
 assert(env.enabled == nil and env.pending_event == nil)
-site_id = 2
+current_site_id = 2
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
 assert(not env.isEnabled() and not eventful.onReport.dfcompanion)
 assert(lifecycle.load_chat_state(lifecycle.current_session()) == 'zstd:xyz')
 assert(not pcall(lifecycle.load_chat_state, session))
 
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_UNLOADED)
-site_id = 3
+current_site_id = 3
 local error_message
 fake_dfhack.printerr = function(message) error_message = message end
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
@@ -243,7 +243,7 @@ assert(error_message and error_message:find('could not restore enabled state', 1
 assert(raw_by_site[3] == '{"version":1,"enabled":"false","messages":[]}')
 
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_UNLOADED)
-site_id = 6
+current_site_id = 6
 service_available = false
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
 assert(env.enabled == nil and raw_by_site[6] == nil)
@@ -261,7 +261,7 @@ facade_env = {
     end,
 }
 local facade = load_with_env(facade_path, facade_env)
-assert(json.decode(facade.lifecycle_state()).site_id == 6)
+assert(json.decode(facade.lifecycle_state()).site_id == nil)
 assert(env.isEnabled() and lifecycle.load_enabled_state() == true)
 
 env.dfhack_flags = {enable = true, enable_state = false}
@@ -271,7 +271,7 @@ facade.lifecycle_state()
 assert(not env.isEnabled() and lifecycle.load_enabled_state() == false)
 
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_UNLOADED)
-site_id = 7
+current_site_id = 7
 service_available = true
 count = #sent_events
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)

@@ -126,7 +126,8 @@ the Companion's own lifecycle gate.
 
 The current lifecycle state is maintained by pushes from the DFHack plugin and
 by a 20-second polling fallback. Both paths enter through the worker. Lifecycle
-snapshots carry the stable site ID as well as the name and loaded flags. States
+snapshots carry the session ID (below) as well as the name and loaded flags;
+they do not report the site ID. States
 distinguish DFHack unreachable, no world, world loaded, and fortress map loaded.
 Both sources share the same readiness check: a loaded map, fortress mode, and a
 loaded site are all required before reporting a loaded fortress.
@@ -281,8 +282,11 @@ when a different fortress activation begins.
 Durable AI history is stored in DFHack persistent site data, so it travels with
 the Dwarf Fortress save for that fortress. A versioned Lua table stores the chat
 history as a JSON snapshot compressed with Zstandard and encoded as base64 for
-the string-only RPC. The snapshot contains the site ID, save-time game date,
-rolling summary, and retained recent user/assistant messages. It excludes AI
+the string-only RPC. The snapshot contains the save-time game date,
+rolling summary, and retained recent user/assistant messages. Snapshots saved
+by earlier versions also carry a `site_id`, which is ignored on load and not
+written again; the site data slot itself already binds history to a fortress.
+It excludes AI
 configuration, credentials, pending/in-flight inputs, tool results, rollback
 checkpoints, and the visible status/usage/event log. Existing uncompressed
 snapshots are read and migrated on the next save. Decompression is bounded by
@@ -292,7 +296,7 @@ After a successful user turn, successful compaction, or rollback, `ChatSession`
 emits a persistence effect. The worker serializes saves, keeping at most one in
 flight and replacing a single pending request with the newest committed
 snapshot. The save operation rereads the game date and the Lua layer verifies
-the expected site ID immediately before calling
+the expected session ID immediately before calling
 `dfhack.persistent.saveSiteData`.
 
 On each fortress activation, the worker clears the old session and transcript,

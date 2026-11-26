@@ -105,7 +105,9 @@ enum ChatRole {
 #[serde(deny_unknown_fields)]
 pub struct ChatHistorySnapshot {
     pub version: u32,
-    pub site_id: i64,
+    /// Written by earlier versions; ignored on load and no longer saved.
+    #[serde(default, skip_serializing)]
+    pub site_id: Option<i64>,
     pub game_date: String,
     pub summary: String,
     pub messages: Vec<ChatHistoryMessage>,
@@ -157,13 +159,13 @@ impl History {
         self.0.messages.len()
     }
 
-    /// Serializes the durable history for the current fortress and game date.
-    pub fn to_snapshot_json(&self, site_id: i64, game_date: &str) -> Result<String, String> {
+    /// Serializes the durable history for the current game date.
+    pub fn to_snapshot_json(&self, game_date: &str) -> Result<String, String> {
         crate::game_state::validate_game_date(game_date)
             .map_err(|error| format!("Cannot persist chat history: {error}"))?;
         let snapshot = ChatHistorySnapshot {
             version: CHAT_HISTORY_SNAPSHOT_VERSION,
-            site_id,
+            site_id: None,
             game_date: game_date.to_owned(),
             summary: self.0.summary.clone(),
             messages: self
@@ -176,7 +178,7 @@ impl History {
                 })
                 .collect(),
         };
-        validate_snapshot(&snapshot, site_id)?;
+        validate_snapshot(&snapshot)?;
         let json = serde_json::to_string(&snapshot)
             .map_err(|error| format!("Could not serialize chat history: {error}"))?;
         if json.len() > MAX_SNAPSHOT_BYTES {
@@ -187,9 +189,9 @@ impl History {
         Ok(json)
     }
 
-    /// Restores durable history for `site_id`, rejecting incompatible or
+    /// Restores durable history, rejecting incompatible or
     /// malformed data before it can reach prompt construction.
-    pub fn from_snapshot_json(json: &str, site_id: i64) -> Result<(Self, String), String> {
+    pub fn from_snapshot_json(json: &str) -> Result<(Self, String), String> {
         if json.len() > MAX_SNAPSHOT_BYTES {
             return Err(format!(
                 "Saved chat history exceeds the {MAX_SNAPSHOT_BYTES}-byte limit."
@@ -197,7 +199,7 @@ impl History {
         }
         let snapshot: ChatHistorySnapshot = serde_json::from_str(json)
             .map_err(|error| format!("Could not parse saved chat history: {error}"))?;
-        validate_snapshot(&snapshot, site_id)?;
+        validate_snapshot(&snapshot)?;
         let saved_game_date = snapshot.game_date.clone();
         let messages = snapshot
             .messages
@@ -255,19 +257,13 @@ impl History {
     }
 }
 
-fn validate_snapshot(snapshot: &ChatHistorySnapshot, expected_site_id: i64) -> Result<(), String> {
+fn validate_snapshot(snapshot: &ChatHistorySnapshot) -> Result<(), String> {
     // Future schema migrations should be implemented here: recognize an older
     // supported version, upgrade it, then validate the current representation.
     if snapshot.version != CHAT_HISTORY_SNAPSHOT_VERSION {
         return Err(format!(
             "Saved chat history uses unsupported version {}; expected {}.",
             snapshot.version, CHAT_HISTORY_SNAPSHOT_VERSION
-        ));
-    }
-    if snapshot.site_id != expected_site_id {
-        return Err(format!(
-            "Saved chat history belongs to site {}, not the loaded site {}.",
-            snapshot.site_id, expected_site_id
         ));
     }
     crate::game_state::validate_game_date(&snapshot.game_date)

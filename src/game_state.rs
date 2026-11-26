@@ -612,8 +612,6 @@ pub struct LifecycleStatus {
     /// The last non-empty fortress name observed, kept across an unload so the
     /// UI can still name the fortress the player was in.
     pub fortress_name: Option<String>,
-    /// Stable identity of the last loaded fortress site.
-    pub site_id: Option<i64>,
     /// Identity of the last observed fortress activation.
     pub session_id: Option<String>,
 }
@@ -625,7 +623,6 @@ pub struct LifecycleSnapshot {
     pub world_loaded: bool,
     pub map_loaded: bool,
     pub fortress_name: String,
-    pub site_id: Option<i64>,
     pub session_id: Option<String>,
 }
 
@@ -639,11 +636,11 @@ impl LifecycleSnapshot {
                     .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
         });
         if self.map_loaded {
-            if !self.world_loaded || self.site_id.is_none() || !valid_session {
-                return Err("Loaded fortress lifecycle is missing a valid site or session.".into());
+            if !self.world_loaded || !valid_session {
+                return Err("Loaded fortress lifecycle is missing a valid session.".into());
             }
-        } else if self.site_id.is_some() || self.session_id.is_some() {
-            return Err("Unloaded fortress lifecycle contains a site or session.".into());
+        } else if self.session_id.is_some() {
+            return Err("Unloaded fortress lifecycle contains a session.".into());
         }
         Ok(())
     }

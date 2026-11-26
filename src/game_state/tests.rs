@@ -76,12 +76,11 @@ fn should_parse_lifecycle_snapshot_when_fortress_site_is_loaded() {
         "world_loaded": true,
         "map_loaded": true,
         "fortress_name": "Bridgedmine",
-        "site_id": 41,
         "session_id": "a"
     }))
     .unwrap();
 
-    assert_eq!(snapshot.site_id, Some(41));
+    assert_eq!(snapshot.session_id.as_deref(), Some("a"));
 }
 
 #[test]
@@ -93,7 +92,7 @@ fn should_parse_lifecycle_snapshot_when_no_fortress_site_is_loaded() {
     }))
     .unwrap();
 
-    assert_eq!(snapshot.site_id, None);
+    assert_eq!(snapshot.session_id, None);
 }
 
 #[test]
@@ -102,7 +101,6 @@ fn should_reject_loaded_lifecycle_when_session_is_missing() {
         world_loaded: true,
         map_loaded: true,
         fortress_name: "Bridgedmine".to_owned(),
-        site_id: Some(41),
         session_id: None,
     };
     assert!(snapshot.validate().is_err());
