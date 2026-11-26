@@ -19,8 +19,9 @@ use tracing::instrument;
 
 use crate::{
     ai::{
-        build_prompt, history_exceeds_hard_limit, is_no_comment, should_compact, AiInput,
-        CompactionOutput, History, Prompt, TurnError, TurnOutput,
+        build_prompt, history_exceeds_hard_limit, history_exceeds_snapshot_budget,
+        history_exceeds_snapshot_limit, is_no_comment, should_compact, AiInput, CompactionOutput,
+        History, Prompt, TurnError, TurnOutput,
     },
     ai_config::AiConfiguration,
     events::GameEvent,
@@ -612,10 +613,10 @@ impl ChatSession {
                     usage.iter().map(|u| u.summary()).join("\n"),
                 )));
                 effects.extend(finish_inputs(InputState::Done));
-                if is_user_interaction {
+                if is_user_interaction && !history_exceeds_snapshot_limit(&self.history) {
                     effects.push(ChatEffect::PersistChatState(self.history.clone()));
                 }
-                if !self.queue.is_empty() {
+                if !self.queue.is_empty() || history_exceeds_snapshot_budget(&self.history) {
                     self.try_start_turn(context, effects);
                 }
             }

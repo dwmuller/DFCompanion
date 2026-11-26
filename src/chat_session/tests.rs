@@ -25,6 +25,17 @@ fn context(now: Instant) -> Context {
     }
 }
 
+fn context_with_large_input_budget(now: Instant) -> Context {
+    let mut configuration = configuration();
+    configuration.context_window_tokens = 2_000_000;
+    Context {
+        now,
+        configuration: Ok(Some(configuration)),
+        event_turns: true,
+        periodic_turns: true,
+    }
+}
+
 fn report(text: &str) -> GameEvent {
     GameEvent {
         id: None,
@@ -995,6 +1006,31 @@ fn a_large_history_triggers_compaction_before_the_next_turn() {
 }
 
 #[test]
+fn a_turn_compacts_when_its_snapshot_exceeds_the_byte_limit() {
+    let now = Instant::now();
+    let context = context_with_large_input_budget(now);
+    let large_text = "\0".repeat(100_000);
+    let mut seed_session = ChatSession::new(now);
+    let effects = seed_session.handle(&context, user(&large_text, 1));
+    let (_, prompt, history, _) = started_turn(&effects).unwrap();
+    let history = crate::ai::history_after_turn(&history, &prompt, "seed");
+    assert!(!history_exceeds_snapshot_budget(&history));
+
+    let mut session = ChatSession::new(now);
+    session.restore_history(history, "250-01-01:0".to_owned(), "250-01-01:1".to_owned());
+    let effects = session.handle(&context, user(&large_text, 2));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    let effects = session.handle(
+        &context,
+        finished(turn_id, answer(&history, &prompt, "done")),
+    );
+
+    assert!(history_exceeds_snapshot_limit(session.history()));
+    assert!(started_compaction(&effects).is_some());
+    assert!(persisted(&effects).is_empty());
+}
+
+#[test]
 fn a_successful_compaction_replaces_history_and_resumes_the_turn() {
     let now = Instant::now();
     let mut session = ChatSession::new(now);
@@ -1022,20 +1058,36 @@ fn a_successful_compaction_should_allow_two_growing_turns_before_soft_compaction
     let mut session = ChatSession::new(now);
     let mut context = context(now);
     let mut configuration = configuration();
-    configuration.context_window_tokens = 16_384;
-    configuration.max_output_tokens = 8_192;
+    configuration.context_window_tokens = 32_768;
+    configuration.max_output_tokens = 4_096;
     context.configuration = Ok(Some(configuration.clone()));
     drive_past_compaction_threshold(&mut session, now);
     let before = session.history().clone();
-    let summary = (0..2_300).map(|i| format!("item{i} ")).collect::<String>();
-    let candidate = History::with_test_summary(&summary, &before);
     let first_queue = VecDeque::from([AiInput::UserRequest {
         text: "next".to_owned(),
         id: None,
     }]);
-    let first_prompt = build_prompt(&candidate, &first_queue, &configuration, false, None).unwrap();
-    let after_first = crate::ai::history_after_turn(&candidate, &first_prompt, "answer");
+    let mut item_count: usize = 2_300;
+    let (summary, after_first) = loop {
+        let summary = (0..item_count)
+            .map(|i| format!("item{i} "))
+            .collect::<String>();
+        let candidate = History::with_test_summary(&summary, &before);
+        let first_prompt =
+            build_prompt(&candidate, &first_queue, &configuration, false, None).unwrap();
+        let after_first = crate::ai::history_after_turn(&candidate, &first_prompt, "answer");
+        let hard_limit_reached = history_exceeds_hard_limit(&after_first, &configuration);
+        if should_compact(&after_first, &configuration) && !hard_limit_reached {
+            break (summary, after_first);
+        }
+        item_count = if hard_limit_reached {
+            item_count.saturating_sub(100)
+        } else {
+            item_count + 100
+        };
+    };
     assert!(should_compact(&after_first, &configuration));
+    assert!(!history_exceeds_hard_limit(&after_first, &configuration));
 
     let effects = session.handle(&context, user("next", 500));
     let (compaction_id, _, _) = started_compaction(&effects).expect("compaction starts");

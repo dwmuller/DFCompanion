@@ -220,6 +220,23 @@ fn should_round_trip_summary_and_recent_messages_when_history_was_compacted() {
 }
 
 #[test]
+fn should_measure_serialized_snapshot_size_with_json_escaping() {
+    let history = history_after_turn(
+        &History::default(),
+        &test_prompt(PromptKind::UserRequest, "a \"quoted\" message"),
+        "a response with a newline\n",
+    );
+
+    assert_eq!(
+        history.snapshot_size_bytes(),
+        history
+            .to_snapshot_json(MAX_GAME_DATE_FOR_SIZE_ESTIMATE)
+            .unwrap()
+            .len()
+    );
+}
+
+#[test]
 fn should_reject_snapshot_when_schema_version_is_unsupported() {
     let json = r#"{
         "version": 999,
@@ -352,6 +369,30 @@ fn should_compact_triggers_on_token_estimate() {
         history = history_after_turn(&history, &prompt, &big);
     }
     assert!(should_compact(&history, &prompt_configuration()));
+}
+
+#[test]
+fn should_compact_on_snapshot_bytes_with_a_large_context_budget() {
+    let prompt = test_prompt(PromptKind::UserRequest, &"\0".repeat(100_000));
+    let mut history = History::default();
+    for _ in 0..2 {
+        history = history_after_turn(&history, &prompt, "a");
+    }
+
+    let mut configuration = prompt_configuration();
+    configuration.context_window_tokens = 2_000_000;
+    let available_history_tokens = configuration.input_token_budget().saturating_sub(
+        estimate_token_count(&effective_system_text(&configuration))
+            + tools_tokens_estimate()
+            + MIN_CURRENT_PROMPT_TOKENS,
+    );
+    assert!(history_tokens_estimate(&history) < available_history_tokens);
+    assert!(history.snapshot_size_bytes() > HISTORY_SNAPSHOT_BUDGET);
+    assert!(should_compact(&history, &configuration));
+
+    let (older, recent) = split_for_compaction(&history).unwrap();
+    assert_eq!(older.len(), history.messages().len());
+    assert!(recent.is_empty());
 }
 
 #[test]

@@ -223,7 +223,11 @@ messages verbatim. Compaction uses a smaller output cap and permits two
 history-growing turns after compaction before applying the soft threshold again;
 hard exhaustion can override that cooldown. The summary is carried into
 subsequent requests and is treated as untrusted conversation data, not as
-instructions.
+instructions. Compaction also monitors the serialized snapshot size: the
+history budget is 768 KiB, below the 1 MiB raw snapshot limit, and overrides the
+cooldown. When this byte budget triggers, all messages are summarized so large
+recent messages cannot keep the snapshot oversized. If a successful turn would
+exceed the raw snapshot limit, its history is compacted before it is persisted.
 
 Within a turn, `AiRuntime` repeatedly sends the growing `ChatRequest` until the
 provider returns a final text response. Each tool-use round appends the
@@ -300,7 +304,7 @@ It excludes AI
 configuration, credentials, pending/in-flight inputs, tool results, rollback
 checkpoints, and the visible status/usage/event log. Existing uncompressed
 snapshots are read and migrated on the next save. Decompression is bounded by
-the uncompressed snapshot limit.
+the 1 MiB uncompressed snapshot limit.
 
 After a successful user turn, successful compaction, or rollback, `ChatSession`
 emits a persistence effect. The worker serializes saves, keeping at most one in
