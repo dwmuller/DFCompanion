@@ -12,11 +12,13 @@
 //! Creatures screen. Queries fail rather than fall back to the unfiltered unit
 //! list when that module is unavailable.
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use dfhack_remote::{BlockRequest, Client, CoreRunLuaRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Read,
     sync::{Arc, Mutex},
 };
 use tokio::sync::watch;
@@ -37,8 +39,55 @@ pub const MAX_DETAIL_UNITS: usize = 10;
 pub const MAX_CANDIDATES: usize = 25;
 const MAX_WORK_DETAIL_OFFSET: usize = 5_000;
 const MAX_WORK_ORDER_OFFSET: usize = 5_000;
-const MAX_CHAT_STATE_BYTES: usize = 1024 * 1024;
+const MAX_ENCODED_CHAT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_GEOMETRY_REPLY_BYTES: usize = 24 * 1024;
+
+fn encode_chat_state(state: &str) -> Result<String, String> {
+    if state.len() > crate::ai::MAX_SNAPSHOT_BYTES {
+        return Err("Chat history snapshot exceeds the supported size limit.".to_owned());
+    }
+    let compressed = zstd::stream::encode_all(state.as_bytes(), 0)
+        .map_err(|error| format!("Could not compress chat history: {error}"))?;
+    let encoded = BASE64.encode(compressed);
+    if encoded.len() > MAX_ENCODED_CHAT_BYTES {
+        return Err("Encoded chat history exceeds the supported size limit.".to_owned());
+    }
+    Ok(encoded)
+}
+
+fn decode_chat_state(reply: &str) -> Result<Option<String>, String> {
+    if reply.is_empty() {
+        return Ok(None);
+    }
+    if let Some(json) = reply.strip_prefix("json:") {
+        if json.len() > crate::ai::MAX_SNAPSHOT_BYTES {
+            return Err("Saved chat history exceeds the supported size limit.".to_owned());
+        }
+        return Ok(Some(json.to_owned()));
+    }
+    let encoded = reply
+        .strip_prefix("zstd:")
+        .ok_or_else(|| "Saved chat history has an unsupported encoding.".to_owned())?;
+    if encoded.len() > MAX_ENCODED_CHAT_BYTES {
+        return Err("Encoded chat history exceeds the supported size limit.".to_owned());
+    }
+    let compressed = BASE64
+        .decode(encoded)
+        .map_err(|error| format!("Could not decode saved chat history: {error}"))?;
+    let decoder = zstd::stream::read::Decoder::new(compressed.as_slice())
+        .map_err(|error| format!("Could not decompress saved chat history: {error}"))?;
+    let mut bytes = Vec::new();
+    decoder
+        .take((crate::ai::MAX_SNAPSHOT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not decompress saved chat history: {error}"))?;
+    if bytes.len() > crate::ai::MAX_SNAPSHOT_BYTES {
+        return Err("Saved chat history exceeds the supported size limit.".to_owned());
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| format!("Saved chat history is not UTF-8: {error}"))
+}
 
 /// Filters for `find_candidates`; all are optional and combined with AND.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -636,7 +685,7 @@ impl GameState {
             .reply
             .value
             .concat();
-        Ok((!reply.is_empty()).then_some(reply))
+        decode_chat_state(&reply)
     }
 
     /// Replaces the raw DFCompanion chat state associated with `site_id`.
@@ -650,12 +699,7 @@ impl GameState {
         err
     )]
     pub fn save_chat_state(&self, site_id: i64, state: &str) -> Result<(), String> {
-        if state.len() > MAX_CHAT_STATE_BYTES {
-            return Err(format!(
-                "Chat history snapshot exceeds the {MAX_CHAT_STATE_BYTES}-byte limit."
-            ));
-        }
-        let state = state.to_owned();
+        let state = format!("zstd:{}", encode_chat_state(state)?);
         let result = self
             .with_client("Could not save chat history", |client| {
                 client.core().run_lua(CoreRunLuaRequest {

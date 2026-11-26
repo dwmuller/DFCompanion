@@ -661,6 +661,7 @@ dependencies = [
  "anyhow",
  "askama",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "dfhack-remote",
  "directories",
@@ -685,6 +686,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zstd",
 ]
 
 [[package]]

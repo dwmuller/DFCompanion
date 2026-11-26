@@ -9,7 +9,27 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
+- **P0:** Preserve the DFCompanion plugin's enabled/disabled state across
+  fortress unload and reload instead of disabling it on map unload. Verify
+  DFHack's state persistence across game restarts and handle pending events
+  safely without forwarding them into a different fortress.
+  - Note that this merely requires saving the enabled state with the plugin's
+    site data. Thus the enabled state is per fortress.
+  - ? Consider automatically enabling when contact with a DFC process is
+    evident.
+- Reviewing game state polling. In general it should be unnecessary: On DFC
+  startup it can be directly requested, and on fortress load DFC will be told by
+  the plugin.
+  - ? There might be some value in polling only when contact with the plugin has
+    been lost.
+- Continue investigating "AI history compaction failed" events, they're
+  happening much too easily. Need better instrumentation.
+- Add functionality to the plugin to remove history (including notes). The
+  plugin disables itself in this state, and persists this state.
 - Add info, trace, and debug events to instrument critical program activity.
+- Emit user events directly to tracing when generated, rather than routing them
+  through the chat session's `ChatEffect` mechanism. Delayed emission loses
+  some of tracing's value.
 - Revisit the game time representation. Consider a machine-readable form of year
   plus ticks since the start of that year, and/or a fixed-width, zero-padded
   string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as

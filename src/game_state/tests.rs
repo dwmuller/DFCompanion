@@ -3,6 +3,55 @@ use crate::notifications::NotificationHistory;
 use super::*;
 
 #[test]
+fn should_round_trip_chat_state_when_compressed_for_rpc() {
+    let state = "{\"message\":\"Dwarves: \u{00e5}, \u{2603}, \\u0000\"}".repeat(64);
+    let encoded = encode_chat_state(&state).unwrap();
+    assert!(encoded.len() < state.len());
+    assert_eq!(
+        decode_chat_state(&format!("zstd:{encoded}")).unwrap(),
+        Some(state)
+    );
+}
+
+#[test]
+fn should_restore_legacy_chat_state_without_compression() {
+    let state = r#"{"version":1,"messages":[]}"#;
+    assert_eq!(
+        decode_chat_state(&format!("json:{state}")).unwrap(),
+        Some(state.to_owned())
+    );
+}
+
+#[test]
+fn should_report_no_chat_state_when_reply_is_empty() {
+    assert_eq!(decode_chat_state("").unwrap(), None);
+}
+
+#[test]
+fn should_reject_corrupt_or_unrecognized_chat_state_encoding() {
+    for reply in ["unknown:data", "zstd:!!!!", "zstd:YWJj"] {
+        assert!(decode_chat_state(reply).is_err(), "{reply}");
+    }
+}
+
+#[test]
+fn should_reject_chat_state_when_decompressed_data_is_not_utf8() {
+    let encoded = BASE64.encode(zstd::stream::encode_all(&[0xff][..], 0).unwrap());
+    assert!(decode_chat_state(&format!("zstd:{encoded}"))
+        .unwrap_err()
+        .contains("not UTF-8"));
+}
+
+#[test]
+fn should_reject_chat_state_when_decompressed_size_exceeds_limit() {
+    let state = "a".repeat(crate::ai::MAX_SNAPSHOT_BYTES + 1);
+    let encoded = BASE64.encode(zstd::stream::encode_all(state.as_bytes(), 0).unwrap());
+    assert!(decode_chat_state(&format!("zstd:{encoded}"))
+        .unwrap_err()
+        .contains("size limit"));
+}
+
+#[test]
 fn game_dates_are_validated() {
     for ok in ["254-07-05", "254-7-5:0", "1-12-28:1199"] {
         assert!(validate_game_date(ok).is_ok(), "{ok}");

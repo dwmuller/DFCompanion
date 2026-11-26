@@ -55,6 +55,12 @@ pub enum ExternalEvent {
         site_id: i64,
         result: Result<Option<LoadedChatState>, String>,
     },
+    /// Lifecycle recheck associated with a failed restore.
+    ChatRestoreLifecycle {
+        generation: u64,
+        site_id: i64,
+        snapshot: LifecycleSnapshot,
+    },
     /// A committed history snapshot that should be coalesced with other
     /// pending saves and written to the current fortress.
     ChatStateSaveRequested(ChatSaveRequest),
@@ -154,6 +160,7 @@ impl EventQueue {
         match item {
             ExternalEvent::Lifecycle(event) => self.try_send_lifecycle(event),
             item @ (ExternalEvent::ChatStateLoaded { .. }
+            | ExternalEvent::ChatRestoreLifecycle { .. }
             | ExternalEvent::ChatStateSaveRequested(_)
             | ExternalEvent::ChatStateSaved { .. }) => self.try_send_priority(item),
             item => self.try_send_normal(item),
@@ -195,6 +202,19 @@ impl EventQueue {
             generation,
             site_id,
             result,
+        })
+    }
+
+    pub(crate) fn try_send_chat_restore_lifecycle(
+        &self,
+        generation: u64,
+        site_id: i64,
+        snapshot: LifecycleSnapshot,
+    ) -> Result<(), String> {
+        self.try_send_priority(ExternalEvent::ChatRestoreLifecycle {
+            generation,
+            site_id,
+            snapshot,
         })
     }
 

@@ -946,6 +946,149 @@ async fn compaction_summarizes_older_messages_and_keeps_recent_ones() {
 }
 
 #[tokio::test]
+async fn should_retry_compaction_without_reasoning_when_output_limit_produces_no_text() {
+    let runtime = make_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![
+        json!({
+            "id": "resp-truncated",
+            "object": "response",
+            "created_at": 1,
+            "status": "incomplete",
+            "model": "test-model",
+            "output": [],
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 10, "output_tokens": 2560, "total_tokens": 2570}
+        }),
+        json!({
+            "id": "resp-recovered",
+            "object": "response",
+            "created_at": 2,
+            "status": "completed",
+            "model": "test-model",
+            "output": [{
+                "id": "msg-test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Recovered summary.", "annotations": []}]
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}
+        }),
+    ])
+    .await;
+    let mut configuration = compaction_configuration(url);
+    configuration.interaction_method = genai::adapter::AdapterKind::OpenAIResp;
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let (_, _, _, initial_request) = requests.recv().await.unwrap();
+    let (_, _, _, recovery_request) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert_eq!(result.history.summary(), "Recovered summary.");
+    assert_eq!(result.history.messages(), recent);
+    assert_eq!(result.usage.len(), 2);
+    assert_eq!(result.usage[1].purpose, "history compaction recovery");
+    assert_eq!(initial_request["input"], recovery_request["input"]);
+    assert_eq!(recovery_request["reasoning"]["effort"], "none");
+    assert_eq!(
+        initial_request["max_output_tokens"],
+        COMPACTION_MAX_OUTPUT_TOKENS
+    );
+    assert_eq!(
+        recovery_request["max_output_tokens"],
+        configuration.max_output_tokens
+    );
+}
+
+#[tokio::test]
+async fn should_reject_partial_summary_when_compaction_retry_also_hits_output_limit() {
+    let runtime = make_test_runtime();
+    let truncated = json!({
+        "id": "chatcmpl-truncated",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test-model",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "Incomplete summary"},
+            "finish_reason": "length"
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 8192, "total_tokens": 8202}
+    });
+    let (url, mut requests, server) = start_mock_provider(vec![truncated.clone(), truncated]).await;
+    let configuration = compaction_configuration(url);
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await;
+    let _ = requests.recv().await.unwrap();
+    let _ = requests.recv().await.unwrap();
+    server.abort();
+
+    assert!(matches!(
+        result,
+        Err(TurnError::Failed(message))
+            if message.contains("output token limit")
+                && message.contains("limit: 8192")
+                && message.contains("reported output tokens: 8192")
+                && message.contains("estimated visible summary tokens:")
+    ));
+}
+
+#[tokio::test]
+async fn should_keep_compaction_recovery_within_configured_output_limit() {
+    let runtime = make_test_runtime();
+    let mut truncated = summary_response("Incomplete summary");
+    truncated["choices"][0]["finish_reason"] = json!("length");
+    let (url, mut requests, server) =
+        start_mock_provider(vec![truncated, summary_response("Recovered summary.")]).await;
+    let mut configuration = compaction_configuration(url);
+    configuration.max_output_tokens = 1_024;
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let (_, _, _, initial_request) = requests.recv().await.unwrap();
+    let (_, _, _, recovery_request) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert_eq!(result.history.summary(), "Recovered summary.");
+    assert_eq!(initial_request["max_tokens"], 1_024);
+    assert_eq!(recovery_request["max_tokens"], 1_024);
+}
+
+#[tokio::test]
 async fn normal_turn_should_send_configured_reasoning_effort() {
     let runtime = make_test_runtime();
     let (url, mut requests, server) = start_mock_provider(vec![json!({

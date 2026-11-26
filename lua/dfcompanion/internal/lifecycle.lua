@@ -5,7 +5,8 @@ local z_offset = common.z_offset
 
 local ai_block_pause_reason
 local CHAT_STATE_KEY = 'dfcompanion/chat'
-local MAX_CHAT_STATE_BYTES = 1024 * 1024
+local SAVED_STATE_VERSION = 2
+local MAX_ENCODED_CHAT_BYTES = 2 * 1024 * 1024
 
 local function pause_for_ai_block(reason)
     if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
@@ -61,23 +62,59 @@ local function require_chat_site(expected_site_id)
     return site
 end
 
+local function read_saved_state()
+    local raw = dfhack.persistent.getSiteDataString(CHAT_STATE_KEY)
+    if not raw then return nil end
+    local state = json.decode(raw)
+    if type(state) ~= 'table' then
+        error('Saved companion state is not a table.')
+    end
+    if state.version == 1 then
+        return state, raw
+    end
+    if state.version ~= SAVED_STATE_VERSION then
+        error('Saved companion state has an unsupported version: ' .. tostring(state.version))
+    end
+    if type(state.chat_history) ~= 'string' or state.chat_history == '' then
+        error('Saved companion state has invalid chat history.')
+    end
+    if #state.chat_history > MAX_ENCODED_CHAT_BYTES then
+        error('Saved encoded chat state exceeds the supported size limit.')
+    end
+    return state
+end
+
 local function load_chat_state(expected_site_id)
     require_chat_site(expected_site_id)
-    return dfhack.persistent.getSiteDataString(CHAT_STATE_KEY) or ''
+    local state, legacy = read_saved_state()
+    if not state then return '' end
+    if legacy then return 'json:' .. legacy end
+    return 'zstd:' .. state.chat_history
 end
 
 local function save_chat_state(expected_site_id, state)
     require_chat_site(expected_site_id)
-    state = tostring(state or '')
-    if #state > MAX_CHAT_STATE_BYTES then
-        error('Chat state exceeds the supported size limit.')
+    if type(state) ~= 'string' or state:sub(1, 5) ~= 'zstd:' then
+        error('Chat state must use the zstd encoding.')
     end
-    dfhack.persistent.saveSiteDataString(CHAT_STATE_KEY, state)
+    state = state:sub(6)
+    if state == '' then error('Encoded chat state must not be empty.') end
+    if #state > MAX_ENCODED_CHAT_BYTES then
+        error('Encoded chat state exceeds the supported size limit.')
+    end
+    local saved, legacy = read_saved_state()
+    if not saved or legacy then
+        saved = {version = SAVED_STATE_VERSION}
+    end
+    saved.chat_history = state
+    dfhack.persistent.saveSiteData(CHAT_STATE_KEY, saved)
     return 'true'
 end
 
 local function lifecycle_state()
     local map_loaded = dfhack.isMapLoaded()
+        and dfhack.world.isFortressMode()
+        and dfhack.isSiteLoaded()
     local name = ''
     local site_id = nil
     if map_loaded then

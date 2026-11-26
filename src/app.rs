@@ -25,8 +25,16 @@ const EVENT_QUEUE_CAPACITY: usize = 50;
 /// How often to re-check the game's loading state when no state-change push
 /// arrives, so the state stays current even if the companion starts mid-game.
 const LIFECYCLE_POLL_INTERVAL: Duration = Duration::from_secs(20);
+const CHAT_RESTORE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 const ORIENT_MESSAGE: &str = "[Automatic session start] You are now connected to the player's Dwarf Fortress game. Use the read-only game-state tools to get your bearings on the fortress, then give the player a brief greeting and summary of its situation.";
+
+struct PendingChatRestore {
+    generation: u64,
+    site_id: i64,
+    retry_at: Option<Instant>,
+    warned: bool,
+}
 
 /// Main companion application structure, managing the AI, game state, and event
 /// queue.
@@ -414,7 +422,7 @@ impl CompanionApp {
     /// message, so a broken configuration cannot flood the chat or burn
     /// requests.
     pub async fn run_companion_worker(self: Arc<CompanionApp>, mut queue_rx: EventReceiver) {
-        let mut restoring_chat = false;
+        let mut restoring_chat: Option<PendingChatRestore> = None;
         let mut next_save_id = 0;
         let mut save_in_flight: Option<u64> = None;
         let mut pending_save: Option<ChatSaveRequest> = None;
@@ -427,18 +435,58 @@ impl CompanionApp {
                 biased;
                 item = queue_rx.lifecycle.recv(), if !queue_rx.lifecycle.is_closed() => match item {
                     Some(item) => {
+                        let item = match item {
+                            ExternalEvent::ChatRestoreLifecycle { generation, site_id, snapshot } => {
+                                if !restoring_chat.as_ref().is_some_and(|restore|
+                                    restore.generation == generation && restore.site_id == site_id
+                                ) {
+                                    continue;
+                                }
+                                ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(snapshot))
+                            }
+                            item => item,
+                        };
                         if self.is_new_fortress_event(&item) {
-                            let dropped = queue_rx.drain_normal();
-                            debug!("Dropped {dropped} queued external events for a new fortress.");
-                            restoring_chat = true;
+                            let ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(snapshot)) = &item else {
+                                unreachable!()
+                            };
+                            let site_id = snapshot.site_id.expect("new fortress has a site ID");
+                            if !restoring_chat.as_ref().is_some_and(|restore| restore.site_id == site_id) {
+                                let dropped = queue_rx.drain_normal();
+                                debug!("Dropped {dropped} queued external events for a new fortress.");
+                            }
+                            restoring_chat = Some(PendingChatRestore {
+                                generation: self.lifecycle_generation.load(Ordering::Relaxed) + 1,
+                                site_id,
+                                retry_at: None,
+                                warned: false,
+                            });
                             pending_save = None;
                         }
-                        if self.is_current_chat_load_completion(&item) {
-                            restoring_chat = false;
-                        }
                         match item {
+                            ExternalEvent::ChatStateLoaded { generation, site_id, result } => {
+                                if let Some(restore) = restoring_chat.as_mut().filter(|restore|
+                                    restore.generation == generation && restore.site_id == site_id
+                                ) {
+                                    let lifecycle = self.lifecycle.borrow();
+                                    let current = lifecycle.state == LifecycleState::MapLoaded
+                                        && lifecycle.site_id == Some(site_id);
+                                    drop(lifecycle);
+                                    if self.finish_chat_restore(generation, site_id, result, !restore.warned) {
+                                        restoring_chat = None;
+                                    } else {
+                                        restore.warned |= current;
+                                        restore.retry_at = Some(Instant::now() + CHAT_RESTORE_RETRY_INTERVAL);
+                                    }
+                                }
+                            }
                             ExternalEvent::ChatStateSaveRequested(request) => {
-                                if self.chat_save_request_is_current(&request) {
+                                if restoring_chat.is_some() && self.chat_save_request_is_current(&request) {
+                                    self.notifier.notify(DisplayMessage::new(
+                                        DisplayMessageKind::Warning,
+                                        "Companion chat state was not saved because the previous state has not been restored yet.",
+                                    ));
+                                } else if self.chat_save_request_is_current(&request) {
                                     if save_in_flight.is_some() {
                                         pending_save = Some(request);
                                     } else {
@@ -487,15 +535,27 @@ impl CompanionApp {
                     },
                     None => break,
                 },
-                item = queue_rx.normal.recv(), if !restoring_chat => match item {
+                item = queue_rx.normal.recv(), if restoring_chat.is_none() => match item {
                     Some(item) => self.handle_external_event(item).await,
                     None => break,
                 },
-                _ = sleep_until(flush_at.unwrap_or(check_at)), if !restoring_chat && flush_at.is_some() => {
+                _ = sleep_until(flush_at.unwrap_or(check_at)), if restoring_chat.is_none() && flush_at.is_some() => {
                     self.dispatch(chat_session::ChatEvent::FlushDue);
                 }
-                _ = sleep_until(check_at), if !restoring_chat => {
+                _ = sleep_until(check_at), if restoring_chat.is_none() => {
                     self.dispatch(chat_session::ChatEvent::CheckDue);
+                }
+                _ = sleep_until(restoring_chat.as_ref().and_then(|restore| restore.retry_at).unwrap_or(check_at)),
+                    if restoring_chat.as_ref().is_some_and(|restore| restore.retry_at.is_some()) => {
+                    if let Some(restore) = restoring_chat.as_mut() {
+                        let lifecycle = self.lifecycle.borrow();
+                        if lifecycle.state == LifecycleState::MapLoaded && lifecycle.site_id == Some(restore.site_id) {
+                            restore.retry_at = None;
+                            self.start_chat_restore(restore.generation, restore.site_id);
+                        } else {
+                            restore.retry_at = Some(Instant::now() + CHAT_RESTORE_RETRY_INTERVAL);
+                        }
+                    }
                 }
             }
         }
@@ -518,14 +578,6 @@ impl CompanionApp {
                 lifecycle.state,
                 LifecycleState::Initialized | LifecycleState::WorldLoaded
             )
-    }
-
-    fn is_current_chat_load_completion(&self, item: &ExternalEvent) -> bool {
-        matches!(
-            item,
-            ExternalEvent::ChatStateLoaded { generation, .. }
-                if *generation == self.lifecycle_generation.load(Ordering::Relaxed)
-        )
     }
 
     fn chat_save_request_is_current(&self, request: &ChatSaveRequest) -> bool {
@@ -567,11 +619,9 @@ impl CompanionApp {
                     self.start_chat_restore(generation, site_id);
                 }
             }
-            ExternalEvent::ChatStateLoaded {
-                generation,
-                site_id,
-                result,
-            } => self.finish_chat_restore(generation, site_id, result),
+            ExternalEvent::ChatStateLoaded { .. } | ExternalEvent::ChatRestoreLifecycle { .. } => {
+                unreachable!("chat restore events are coordinated by the worker loop")
+            }
             ExternalEvent::Orient => {
                 self.orient();
             }
@@ -610,19 +660,45 @@ impl CompanionApp {
     fn start_chat_restore(self: &Arc<Self>, generation: u64, site_id: i64) {
         let this = self.clone();
         tokio::spawn(async move {
-            let result = this
+            let outcome = this
                 .game_state
                 .run(move |game| {
-                    let Some(state) = game.load_chat_state(site_id)? else {
-                        return Ok(None);
-                    };
-                    let current_game_date = game.game_date()?;
-                    Ok(Some(LoadedChatState {
-                        state,
-                        current_game_date,
-                    }))
+                    let result = (|| {
+                        let Some(state) = game.load_chat_state(site_id)? else {
+                            return Ok(None);
+                        };
+                        let current_game_date = game.game_date()?;
+                        Ok(Some(LoadedChatState {
+                            state,
+                            current_game_date,
+                        }))
+                    })();
+                    let lifecycle = result.is_err().then(|| game.query_lifecycle());
+                    Ok((result, lifecycle))
                 })
                 .await;
+            let (result, lifecycle) = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => (Err(error), None),
+            };
+            if let Some(lifecycle) = lifecycle {
+                match lifecycle {
+                    Ok(snapshot) if !snapshot.map_loaded || snapshot.site_id != Some(site_id) => {
+                        if let Err(error) = this
+                            .queue_tx
+                            .try_send_chat_restore_lifecycle(generation, site_id, snapshot)
+                        {
+                            tracing::warn!(
+                                "Could not report lifecycle after chat restore failure: {error}"
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(
+                        "Could not recheck lifecycle after chat restore failure: {error}"
+                    ),
+                }
+            }
             let _ = this
                 .queue_tx
                 .try_send_chat_state_loaded(generation, site_id, result);
@@ -654,7 +730,8 @@ impl CompanionApp {
         generation: u64,
         site_id: i64,
         result: Result<Option<LoadedChatState>, String>,
-    ) {
+        notify_failure: bool,
+    ) -> bool {
         if generation != self.lifecycle_generation.load(Ordering::Relaxed)
             || self.lifecycle.borrow().site_id != Some(site_id)
             || self.lifecycle.borrow().state != LifecycleState::MapLoaded
@@ -662,15 +739,16 @@ impl CompanionApp {
             debug!(
                 "Ignoring stale chat restore completion for site {site_id}, generation {generation}."
             );
-            return;
+            return false;
         }
 
-        match result {
+        let result = match result {
             Ok(None) => {
                 self.notifier.notify(DisplayMessage::new(
                     DisplayMessageKind::Status,
                     "No saved companion chat state was found for this fortress.",
                 ));
+                Ok(())
             }
             Ok(Some(saved)) => match ai::History::from_snapshot_json(&saved.state, site_id) {
                 Ok((history, saved_game_date)) => {
@@ -686,26 +764,30 @@ impl CompanionApp {
                                 saved.current_game_date
                             ),
                         ));
+                    Ok(())
                 }
-                Err(error) => {
-                    self.notifier.notify(DisplayMessage::new(
-                            DisplayMessageKind::Warning,
-                            format!(
-                                "Saved companion chat state could not be restored; starting fresh. {error}"
-                            ),
-                        ));
-                }
+                Err(error) => Err(format!(
+                    "Saved companion chat state could not be restored: {error}"
+                )),
             },
-            Err(error) => {
+            Err(error) => Err(format!(
+                "Saved companion chat state could not be loaded: {error}"
+            )),
+        };
+        if let Err(error) = result {
+            tracing::warn!("{error}");
+            if notify_failure {
                 self.notifier.notify(DisplayMessage::new(
                     DisplayMessageKind::Warning,
                     format!(
-                        "Saved companion chat state could not be loaded; starting fresh. {error}"
+                        "{error} AI processing is waiting; DFCompanion will retry automatically."
                     ),
                 ));
             }
+            return false;
         }
         self.orient();
+        true
     }
 
     fn orient(self: &Arc<Self>) {

@@ -42,7 +42,10 @@ pending_event = pending_event or nil
 local function http_post(path, body)
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
     local ok, status_code, decoded = pcall(function()
-        client:setTimeout(RESPONSE_TIMEOUT_SECONDS, 0)
+        -- DFHack's socket timeout uses milliseconds on Windows, seconds elsewhere.
+        local timeout = dfhack.getOSType() == 'windows'
+            and RESPONSE_TIMEOUT_SECONDS * 1000 or RESPONSE_TIMEOUT_SECONDS
+        client:setTimeout(timeout, 0)
         client:setBlocking()
 
         local request = table.concat({
@@ -56,13 +59,9 @@ local function http_post(path, body)
         }, '\r\n')
         client:send(request)
 
-        if not client:select(RESPONSE_TIMEOUT_SECONDS, 0) then
-            error('Timed out waiting for DFCompanion to begin its HTTP response. ' ..
-                'Check that the service is running and listening on 127.0.0.1:3000.')
-        end
         local status_line = client:receive('*l')
         if not status_line then
-            error('DFCompanion closed the connection without returning an HTTP status line.')
+            error('DFCompanion closed the connection or timed out before returning an HTTP status line.')
         end
         status_line = status_line:gsub('\r$', '')
         local response_status = tonumber(status_line:match('^HTTP/%d+%.%d+ (%d+)'))
@@ -86,16 +85,16 @@ local function http_post(path, body)
             end
         end
 
-        local response_body = ''
-        while #response_body < content_length do
-            local chunk = client:receive(content_length - #response_body)
-            if not chunk or #chunk == 0 then
-                error('Connection closed while reading the HTTP response body.')
+        local response_body = {}
+        for i = 1, content_length do
+            local byte = client:receive(1)
+            if not byte then
+                error('Connection closed or timed out while reading the HTTP response body.')
             end
-            response_body = response_body .. chunk
+            response_body[i] = byte
         end
 
-        return response_status, json.decode(response_body)
+        return response_status, json.decode(table.concat(response_body))
     end)
     local close_ok, close_error = pcall(function() client:close() end)
     if not ok then
@@ -126,7 +125,7 @@ end
 -- Reports the game's loading state to DFCompanion. Raises an error on failure;
 -- the caller decides whether that is worth surfacing.
 local function submit_lifecycle(payload)
-    local ok, status_code = pcall(http_post, '/api/plugin/lifecycle', json.encode(payload, {pretty = false}))
+    local ok, status_code = pcall(http_post, '/api/plugin/lifecycle', payload)
     if not ok then
         error('Could not report game state to DFCompanion: ' .. tostring(status_code), 0)
     end
@@ -186,19 +185,7 @@ end
 local LIFECYCLE_KEY = 'dfcompanion_lifecycle'
 
 local function push_lifecycle_state()
-    local map_loaded = dfhack.isMapLoaded()
-    local name = ''
-    local site_id = nil
-    if map_loaded then
-        name = rpc.fortress_name()
-        site_id = df.global.plotinfo.site_id
-    end
-    local ok, err = pcall(submit_lifecycle, {
-        world_loaded = dfhack.isWorldLoaded(),
-        map_loaded = map_loaded,
-        fortress_name = name,
-        site_id = site_id,
-    })
+    local ok, err = pcall(function() submit_lifecycle(rpc.lifecycle_state()) end)
     if not ok then
         dfhack.printerr(MESSAGE_PREFIX .. ' could not report game state: ' .. tostring(err))
     end
@@ -272,6 +259,11 @@ end
 
 function isEnabled()
     return enabled
+end
+
+if enabled then
+    eventful.onReport[STATE_KEY] = on_report
+    dfhack.onStateChange[STATE_KEY] = on_state_change
 end
 
 if dfhack_flags.module then

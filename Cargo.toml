@@ -31,6 +31,8 @@ chrono = "0.4.45"
 regex = "1.13.2"
 anyhow = "1.0.104"
 name-variant = "0.1.0"
+zstd = "0.13"
+base64 = "0.22"
 
 [dev-dependencies]
 # Same prost version that dfhack-proto generates its messages with.

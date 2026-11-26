@@ -128,6 +128,8 @@ The current lifecycle state is maintained by pushes from the DFHack plugin and
 by a 20-second polling fallback. Both paths enter through the worker. Lifecycle
 snapshots carry the stable site ID as well as the name and loaded flags. States
 distinguish DFHack unreachable, no world, world loaded, and fortress map loaded.
+Both sources share the same readiness check: a loaded map, fortress mode, and a
+loaded site are all required before reporting a loaded fortress.
 Fortress-data tools are gated until a fortress is loaded; ordinary conversation
 remains available at every loading state.
 
@@ -218,7 +220,11 @@ through `tool_help`, which remains usable when no fortress is loaded.
 
 If a response exhausts the output budget without producing text, the runtime
 retries once with tools disabled and reasoning explicitly turned off, asking for
-a concise answer from the evidence already gathered.
+a concise answer from the evidence already gathered. A compaction response
+that exhausts its output budget is also retried once with reasoning off and
+the profile's full configured output budget. Its summary size limit remains
+unchanged, and a truncated summary is never committed, even if it contains
+partial text.
 
 Turns run sequentially. A failed turn or compaction blocks further AI
 processing, pauses the game when possible, and retains pending inputs plus the
@@ -260,23 +266,29 @@ fortress save. The visible notification transcript is process-local and is reset
 when a different fortress activation begins.
 
 Durable AI history is stored in DFHack persistent site data, so it travels with
-the Dwarf Fortress save for that fortress. The versioned snapshot contains the
-site ID, save-time game date, rolling summary, and retained recent user/assistant
-messages. It excludes AI configuration, credentials, pending/in-flight inputs,
-tool results, rollback checkpoints, and the visible status/usage/event log.
+the Dwarf Fortress save for that fortress. A versioned Lua table stores the chat
+history as a JSON snapshot compressed with Zstandard and encoded as base64 for
+the string-only RPC. The snapshot contains the site ID, save-time game date,
+rolling summary, and retained recent user/assistant messages. It excludes AI
+configuration, credentials, pending/in-flight inputs, tool results, rollback
+checkpoints, and the visible status/usage/event log. Existing uncompressed
+snapshots are read and migrated on the next save. Decompression is bounded by
+the uncompressed snapshot limit.
 
 After a successful user turn, successful compaction, or rollback, `ChatSession`
 emits a persistence effect. The worker serializes saves, keeping at most one in
 flight and replacing a single pending request with the newest committed
 snapshot. The save operation rereads the game date and the Lua layer verifies
 the expected site ID immediately before calling
-`dfhack.persistent.saveSiteDataString`.
+`dfhack.persistent.saveSiteData`.
 
 On each fortress activation, the worker clears the old session and transcript,
 loads that site's snapshot asynchronously, and does not consume new normal
-events until loading finishes. Site and generation checks reject stale
-completions. Invalid or unavailable data produces a visible warning and leaves
-a fresh session. Restored history is conversation data, not system text; its
+events until loading succeeds or confirms no saved state exists. Site and
+generation checks reject stale completions. Invalid or unavailable data produces
+a visible warning; AI processing stays gated and loading is retried while the
+same fortress is loaded, preventing an unread snapshot from being overwritten.
+Restored history is conversation data, not system text; its
 saved and current game dates are inserted once in the next prompt so the model
 knows the context may be stale.
 

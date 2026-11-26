@@ -62,6 +62,32 @@ fn version_info() {
 
 #[test]
 #[ignore = "requires a running game"]
+fn should_load_saved_chat_history_from_the_current_fortress() {
+    use dfcompanion::game_state::{GameState, LifecycleState, LifecycleStatus};
+
+    let lifecycle = tokio::sync::watch::channel(LifecycleStatus {
+        state: LifecycleState::MapLoaded,
+        fortress_name: None,
+        site_id: None,
+    })
+    .1;
+    let game_state = GameState::new(Notifier::new(NotificationHistory::new()), lifecycle);
+    let site_id = game_state
+        .query_lifecycle()
+        .expect("Could not query the fortress")
+        .site_id
+        .expect("No fortress site is loaded");
+    if let Some(state) = game_state
+        .load_chat_state(site_id)
+        .expect("Could not load saved chat history")
+    {
+        dfcompanion::ai::History::from_snapshot_json(&state, site_id)
+            .expect("Saved chat history is invalid");
+    }
+}
+
+#[test]
+#[ignore = "requires a running game"]
 fn creature_raws() {
     let mut client = connect();
     let result = client.remote_fortress_reader().get_creature_raws();

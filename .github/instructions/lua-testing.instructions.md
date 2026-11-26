@@ -16,8 +16,9 @@ in the game's Lua environment. The fragment has access to all global variables
 and functions available in the game's Lua environment, including `df`, `dfhack`,
 and any installed modules.
 
-`dfhack_run` only works when a game is running with a fortress loaded. It does
-not start the game.
+`dfhack_run` requires a running game but can run commands at the main menu.
+Commands that inspect fortress data or enable `dfcompanion` require a loaded
+fortress. It does not start the game.
 
 
 # Probing DFHack behavior
@@ -100,34 +101,36 @@ install after editing before testing.
 
 ## Reload changed plugin scripts in the running game
 
-To reload a changed plugin script, use the `reload` function. Example:
+To load an updated plugin script, use `reqscript`. Example:
 
 ```text
-lua "reload('dfcompanion')"
+lua "reqscript('dfcompanion')"
 ```
 
-Reloading a plugin script disables it. To re-enable the plugin, use dfhack-run's
-built-in enable command::
+After reloading, ensure the plugin is enabled using dfhack-run's built-in
+enable command:
 
 ```text
 enable dfcompanion
 ```
 
-Always re-enable the `dfcompanion`plugin after reloading it.
+Enabling `dfcompanion` requires a loaded fortress and a running DFCompanion
+service. If either is unavailable, report that re-enabling remains pending.
 
 ## Reload changed Lua script modules in the running game
 
 DFHack caches script modules. A running game will keep using the
 old version of a module if it's updated while the game is running.
 
-To force a reload of a changed Lua script module, use dfhack-run to execute a
-call to reqscript(). This will work in most cases, unless another module has
-cached a reference to a function in the reloaded script, or a script location
-has changed. Example arguments:
+The modules in `hack/lua` are loaded with `require`, not `reqscript`. Clear
+the changed module from `package.loaded` and reload any dependent modules that
+cache its functions. For example, after changing the lifecycle module:
 
 ```text
-lua "reqscript('dfcompanion.internal.places')"
+lua "package.loaded['dfcompanion.internal.lifecycle'] = nil; reload('rpc.dfcompanion')"
 ```
+
+Reloading discards module-local state, so account for any state still in use.
 
 
 # Verification order
