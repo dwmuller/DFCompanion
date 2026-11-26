@@ -934,11 +934,9 @@ async fn ai_tools_end_to_end() {
             .as_array()
             .unwrap()
             .iter()
-            .any(
-                |workshop| !workshop["stockpile_links"]["take_from_stockpiles"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
+            .all(
+                |workshop| workshop["stockpile_links"]["take_from_stockpiles"].is_array()
+                    && workshop["stockpile_links"]["give_to_stockpiles"].is_array()
             ),
         "{smelters}"
     );
@@ -1065,19 +1063,31 @@ async fn ai_tools_end_to_end() {
         serde_json::json!({"name": "Coke bars", "limit": 5}),
     )
     .await;
-    // The named pile exists only in some fortresses, so check it when present.
     let coke_piles = coke["stockpiles"].as_array().unwrap();
-    assert!(
-        coke_piles.is_empty()
-            || coke_piles
-                .iter()
-                .any(|pile| !pile["stockpile_links"]["take_from_workshops"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
-                    && pile["subfilters"].get("bars_blocks").is_some()),
-        "{coke}"
-    );
+    for pile in coke_piles {
+        let accepts = pile["accepts"].as_array().unwrap();
+        if accepts.iter().any(|category| category == "bars_blocks") {
+            assert!(pile["subfilters"]["bars_blocks"].is_object(), "{pile}");
+        }
+        for (pile_direction, workshop_direction) in [
+            ("give_to_workshops", "take_from_stockpiles"),
+            ("take_from_workshops", "give_to_stockpiles"),
+        ] {
+            let links = pile["stockpile_links"][pile_direction].as_array().unwrap();
+            for workshop in smelters["workshops"].as_array().unwrap() {
+                if links.iter().any(|link| link["id"] == workshop["id"]) {
+                    assert!(
+                        workshop["stockpile_links"][workshop_direction]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|link| link["id"] == pile["id"]),
+                        "inconsistent links: {pile} {workshop}"
+                    );
+                }
+            }
+        }
+    }
     assert!(moods["moods"].is_array(), "{moods}");
     let automation = call("get_dfhack_automation", serde_json::json!({})).await;
     assert!(automation["enabled"].is_array(), "{automation}");
