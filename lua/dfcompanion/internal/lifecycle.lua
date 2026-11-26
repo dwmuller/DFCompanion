@@ -4,9 +4,31 @@ local ui_z = common.ui_z
 local z_offset = common.z_offset
 
 local ai_block_pause_reason
+dfhack.dfcompanion_session_state = dfhack.dfcompanion_session_state
+    or {rng = dfhack.random.new()}
+local session_state = dfhack.dfcompanion_session_state
 local CHAT_STATE_KEY = 'dfcompanion/chat'
 local SAVED_STATE_VERSION = 2
 local MAX_ENCODED_CHAT_BYTES = 2 * 1024 * 1024
+
+local function start_session()
+    session_state.id = ('%x-%08x%08x%08x%08x'):format(
+        os.time(), session_state.rng:random(), session_state.rng:random(),
+        session_state.rng:random(), session_state.rng:random())
+    return session_state.id
+end
+
+local function clear_session()
+    session_state.id = nil
+end
+
+local function current_session()
+    if not dfhack.isMapLoaded() or not dfhack.world.isFortressMode()
+        or not dfhack.isSiteLoaded() then
+        return nil
+    end
+    return session_state.id or start_session()
+end
 
 local function pause_for_ai_block(reason)
     if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
@@ -155,6 +177,7 @@ local function lifecycle_state()
         map_loaded = map_loaded,
         fortress_name = name,
         site_id = site_id,
+        session_id = map_loaded and current_session() or nil,
     })
 end
 
@@ -165,6 +188,9 @@ local function script_enabled()
 end
 
 return {
+    start_session = start_session,
+    clear_session = clear_session,
+    current_session = current_session,
     pause_for_ai_block = pause_for_ai_block,
     take_ai_block_pause_reason = take_ai_block_pause_reason,
     z_offset = z_offset,

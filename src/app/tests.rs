@@ -47,14 +47,20 @@ async fn lifecycle_transitions_map_to_states_and_keep_the_fortress_name() {
     let (app, _queue_rx) = CompanionApp::new();
     assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
 
-    app.update_lifecycle(false, false, Some(String::new()), None);
+    app.update_lifecycle(false, false, Some(String::new()), None, None);
     assert_eq!(app.lifecycle().state, LifecycleState::Initialized);
     assert_eq!(app.lifecycle().fortress_name, None);
 
-    app.update_lifecycle(true, false, None, None);
+    app.update_lifecycle(true, false, None, None, None);
     assert_eq!(app.lifecycle().state, LifecycleState::WorldLoaded);
 
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
     assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
     assert_eq!(
         app.lifecycle().fortress_name.as_deref(),
@@ -63,7 +69,7 @@ async fn lifecycle_transitions_map_to_states_and_keep_the_fortress_name() {
     assert_eq!(app.lifecycle().site_id, Some(41));
 
     // Unloading the map keeps the last fortress name.
-    app.update_lifecycle(true, false, None, None);
+    app.update_lifecycle(true, false, None, None, None);
     assert_eq!(app.lifecycle().state, LifecycleState::WorldLoaded);
     assert_eq!(
         app.lifecycle().fortress_name.as_deref(),
@@ -81,6 +87,41 @@ async fn lifecycle_transitions_map_to_states_and_keep_the_fortress_name() {
     assert_eq!(app.lifecycle().site_id, Some(41));
 }
 
+#[test]
+fn should_detect_a_new_session_when_the_same_site_is_reloaded() {
+    let (app, _) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
+    let mut snapshot = LifecycleSnapshot {
+        world_loaded: true,
+        map_loaded: true,
+        fortress_name: String::new(),
+        site_id: Some(41),
+        session_id: Some("a".to_owned()),
+    };
+    assert!(!app.snapshot_starts_new_session(&snapshot));
+    snapshot.session_id = Some("b".to_owned());
+    assert!(app.snapshot_starts_new_session(&snapshot));
+}
+
+#[tokio::test]
+async fn should_discard_a_queued_report_when_its_session_is_obsolete() {
+    let (app, _) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("b".to_owned()));
+    let event = GameEvent {
+        id: None,
+        date: "254-07-05:1061".to_owned(),
+        report_type: None,
+        category: "jobs".to_owned(),
+        text: "Old report".to_owned(),
+    };
+    app.handle_external_event(ExternalEvent::PluginGameEvent {
+        session_id: "a".to_owned(),
+        event,
+    })
+    .await;
+    assert_eq!(app.pending_report_count(), 0);
+}
+
 #[tokio::test]
 async fn a_new_fortress_event_preempts_and_clears_the_full_normal_queue() {
     let (app, queue_rx) = CompanionApp::new();
@@ -95,6 +136,7 @@ async fn a_new_fortress_event_preempts_and_clears_the_full_normal_queue() {
             map_loaded: true,
             fortress_name: "Bridgedmine".to_owned(),
             site_id: Some(41),
+            session_id: Some("a".to_owned()),
         }))
         .unwrap();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
@@ -135,6 +177,7 @@ async fn a_new_fortress_event_preempts_and_clears_the_full_normal_queue() {
             map_loaded: false,
             fortress_name: String::new(),
             site_id: None,
+            session_id: None,
         }))
         .unwrap();
     app.queue_tx
@@ -143,6 +186,7 @@ async fn a_new_fortress_event_preempts_and_clears_the_full_normal_queue() {
             map_loaded: true,
             fortress_name: "Bridgedmine".to_owned(),
             site_id: Some(41),
+            session_id: Some("a".to_owned()),
         }))
         .unwrap();
     for _ in 0..100 {
@@ -163,7 +207,13 @@ async fn a_new_fortress_event_preempts_and_clears_the_full_normal_queue() {
 #[test]
 fn a_chat_restore_installs_valid_history_for_the_current_site() {
     let (app, _queue_rx) = CompanionApp::new();
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
     app.lifecycle_generation.store(3, Ordering::Relaxed);
     let saved = ai::History::with_test_summary("Build a northern wall.", &ai::History::default())
         .to_snapshot_json(41, "250-01-01:600")
@@ -188,7 +238,13 @@ fn a_chat_restore_installs_valid_history_for_the_current_site() {
 #[test]
 fn should_start_fresh_without_warning_when_fortress_has_no_saved_chat() {
     let (app, _queue_rx) = CompanionApp::new();
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
     app.lifecycle_generation.store(1, Ordering::Relaxed);
 
     assert!(app.finish_chat_restore(1, 41, Ok(None), true));
@@ -206,7 +262,13 @@ fn should_start_fresh_without_warning_when_fortress_has_no_saved_chat() {
 #[test]
 fn a_stale_chat_restore_cannot_replace_the_current_sites_history() {
     let (app, _queue_rx) = CompanionApp::new();
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
     app.lifecycle_generation.store(4, Ordering::Relaxed);
     let saved = ai::History::with_test_summary("Old site context.", &ai::History::default())
         .to_snapshot_json(41, "250-01-01:600")
@@ -243,7 +305,7 @@ fn an_unloaded_site_restore_does_not_start_an_orientation_turn() {
         .configurations
         .set_active(Some(&configuration.id))
         .unwrap();
-    app.update_lifecycle(false, false, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(false, false, Some("Bridgedmine".to_owned()), Some(41), None);
     app.lifecycle_generation.store(3, Ordering::Relaxed);
 
     app.finish_chat_restore(3, 41, Err("RPC error: Failure".to_owned()), true);
@@ -262,6 +324,7 @@ async fn should_keep_inputs_queued_when_chat_restore_fails_until_retry_succeeds(
             map_loaded: true,
             fortress_name: "Bridgedmine".to_owned(),
             site_id: Some(41),
+            session_id: Some("a".to_owned()),
         }))
         .unwrap();
     app.queue_tx
@@ -307,6 +370,7 @@ async fn should_preserve_queued_inputs_when_same_fortress_reloads_during_restore
         map_loaded: true,
         fortress_name: "Bridgedmine".to_owned(),
         site_id: Some(41),
+        session_id: Some("a".to_owned()),
     };
     app.queue_tx
         .try_send_lifecycle(LifecycleEvent::Snapshot(loaded.clone()))
@@ -325,6 +389,7 @@ async fn should_preserve_queued_inputs_when_same_fortress_reloads_during_restore
             map_loaded: false,
             fortress_name: String::new(),
             site_id: None,
+            session_id: None,
         }))
         .unwrap();
     app.queue_tx
@@ -349,6 +414,7 @@ async fn should_not_warn_about_restore_failure_when_lifecycle_recheck_finds_unlo
             map_loaded: true,
             fortress_name: "Bridgedmine".to_owned(),
             site_id: Some(41),
+            session_id: Some("a".to_owned()),
         }))
         .unwrap();
     app.queue_tx
@@ -360,6 +426,7 @@ async fn should_not_warn_about_restore_failure_when_lifecycle_recheck_finds_unlo
                 map_loaded: false,
                 fortress_name: String::new(),
                 site_id: None,
+                session_id: None,
             },
         )
         .unwrap();
@@ -392,6 +459,7 @@ async fn should_ignore_lifecycle_recheck_from_an_older_fortress_restore() {
                 map_loaded: true,
                 fortress_name: name.to_owned(),
                 site_id: Some(site_id),
+                session_id: Some(format!("{site_id:x}")),
             }))
             .unwrap();
     }
@@ -404,6 +472,7 @@ async fn should_ignore_lifecycle_recheck_from_an_older_fortress_restore() {
                 map_loaded: false,
                 fortress_name: String::new(),
                 site_id: None,
+                session_id: None,
             },
         )
         .unwrap();
@@ -426,7 +495,13 @@ async fn should_ignore_lifecycle_recheck_from_an_older_fortress_restore() {
 #[test]
 fn should_reject_invalid_saved_history_without_starting_a_fresh_session() {
     let (app, _queue_rx) = CompanionApp::new();
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
     app.lifecycle_generation.store(1, Ordering::Relaxed);
 
     let restored = app.finish_chat_restore(
@@ -1052,6 +1127,7 @@ async fn post_plugin_event(app: Arc<CompanionApp>, body: &'static str) -> axum::
                 .uri("/api/plugin/events")
                 .header(header::HOST, "127.0.0.1:3000")
                 .header(header::CONTENT_TYPE, "application/json")
+                .header("x-dfcompanion-session", "a")
                 .body(Body::from(body))
                 .unwrap(),
         )
@@ -1150,18 +1226,22 @@ async fn htmx_scripts_are_served() {
 #[tokio::test]
 async fn lua_http_event_is_enqueued() {
     let (app, mut queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
     let response = post_plugin_event(app, EVENT_BODY).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         queue_rx.recv().await.unwrap(),
-        ExternalEvent::GameEvent(GameEvent {
-            id: Some(42),
-            date: "254-07-05:1061".to_owned(),
-            report_type: Some("CANCEL_JOB".to_owned()),
-            category: "jobs".to_owned(),
-            text: "Make ash cancelled.".to_owned(),
-        })
+        ExternalEvent::PluginGameEvent {
+            session_id: "a".to_owned(),
+            event: GameEvent {
+                id: Some(42),
+                date: "254-07-05:1061".to_owned(),
+                report_type: Some("CANCEL_JOB".to_owned()),
+                category: "jobs".to_owned(),
+                text: "Make ash cancelled.".to_owned(),
+            },
+        }
     );
 }
 
@@ -1187,8 +1267,50 @@ async fn lua_http_event_rejects_browser_requests() {
 }
 
 #[tokio::test]
+async fn should_reject_a_plugin_report_when_its_session_differs() {
+    let (app, mut queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
+    let response = crate::web::router(app)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugin/events")
+                .header(header::HOST, "127.0.0.1:3000")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-dfcompanion-session", "b")
+                .body(Body::from(EVENT_BODY))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.headers()["x-dfcompanion-session"], "a");
+    assert!(queue_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn should_reject_a_plugin_report_when_its_session_header_is_missing() {
+    let (app, mut queue_rx) = CompanionApp::new();
+    let response = crate::web::router(app)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugin/events")
+                .header(header::HOST, "127.0.0.1:3000")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(EVENT_BODY))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(queue_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn lua_http_event_rejects_invalid_events() {
     let (app, mut queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
     for body in [
         r#"{"date":"nope","category":"jobs","text":"bad date"}"#,
         r#"{"date":"254-07-05:1061","category":"","text":"no category"}"#,
@@ -1204,6 +1326,7 @@ async fn lua_http_event_rejects_invalid_events() {
 #[tokio::test]
 async fn lua_http_event_reports_full_queue_without_accepting_event() {
     let (app, queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
     for i in 0..EVENT_QUEUE_CAPACITY {
         app.queue_tx
             .try_send(ExternalEvent::UserInput(format!("filler {i}")))

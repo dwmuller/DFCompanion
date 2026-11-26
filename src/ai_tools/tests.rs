@@ -9,6 +9,7 @@ fn game_state_with(state: LifecycleState) -> GameState {
         state,
         fortress_name: None,
         site_id: None,
+        session_id: None,
     })
     .1;
     GameState::new(Notifier::new(NotificationHistory::new()), lifecycle)

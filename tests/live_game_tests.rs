@@ -69,6 +69,7 @@ fn should_load_saved_chat_history_from_the_current_fortress() {
         state: LifecycleState::MapLoaded,
         fortress_name: None,
         site_id: None,
+        session_id: None,
     })
     .1;
     let game_state = GameState::new(Notifier::new(NotificationHistory::new()), lifecycle);
@@ -84,6 +85,71 @@ fn should_load_saved_chat_history_from_the_current_fortress() {
         dfcompanion::ai::History::from_snapshot_json(&state, site_id)
             .expect("Saved chat history is invalid");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires a running game"]
+async fn should_resynchronize_http_when_the_fortress_session_differs() {
+    use axum::{body::Body, http::Request, http::StatusCode};
+    use dfcompanion::app::CompanionApp;
+    use dfcompanion::game_state::{GameState, LifecycleStatus};
+    use tower::ServiceExt;
+
+    let lifecycle = tokio::sync::watch::channel(LifecycleStatus::default()).1;
+    let game = GameState::new(Notifier::new(NotificationHistory::new()), lifecycle);
+    let snapshot = game
+        .run(|game| game.query_lifecycle())
+        .await
+        .expect("Could not query the fortress");
+    let session_id = snapshot.session_id.expect("No fortress session is loaded");
+    let site_id = snapshot.site_id.expect("No fortress site is loaded");
+    let stale_session = if session_id == "a" { "b" } else { "a" };
+
+    let (app, receiver) = CompanionApp::new();
+    app.update_lifecycle(
+        true,
+        true,
+        Some(snapshot.fortress_name),
+        Some(site_id),
+        Some(stale_session.to_owned()),
+    );
+    let mut lifecycle = app.subscribe_lifecycle();
+    let worker = tokio::spawn(app.clone().run_companion_worker(receiver));
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/plugin/events")
+            .header("host", "127.0.0.1:3000")
+            .header("content-type", "application/json")
+            .header("x-dfcompanion-session", &session_id)
+            .body(Body::from(
+                r#"{"date":"254-07-05:0","category":"test","text":"Session test"}"#,
+            ))
+            .unwrap()
+    };
+
+    let response = dfcompanion::web::router(app.clone())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if lifecycle.borrow_and_update().session_id.as_deref() == Some(&session_id) {
+                break;
+            }
+            lifecycle.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("Fortress session was not resynchronized");
+    let response = dfcompanion::web::router(app)
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-dfcompanion-session"], session_id);
+    worker.abort();
 }
 
 #[test]
@@ -227,6 +293,7 @@ async fn ai_tools_end_to_end() {
         state: dfcompanion::game_state::LifecycleState::MapLoaded,
         fortress_name: None,
         site_id: None,
+        session_id: None,
     })
     .1;
     let game_state = dfcompanion::game_state::GameState::new(Notifier::new(history), lifecycle);

@@ -133,6 +133,17 @@ loaded site are all required before reporting a loaded fortress.
 Fortress-data tools are gated until a fortress is loaded; ordinary conversation
 remains available at every loading state.
 
+The Lua lifecycle module also creates an ephemeral session ID for each loaded
+fortress activation. Plugin HTTP requests and responses carry this ID in the
+`X-DFCompanion-Session` header; `none` represents no loaded fortress. A
+mismatch rejects the request and starts a DFHack lifecycle resynchronization
+after responding, avoiding a deadlock with the plugin's synchronous HTTP calls.
+The plugin retries mismatches on later frames, preserving and pausing for a
+failed game report. Queued reports are checked again against the current
+session before processing. The ID is not a credential and is not saved with
+the fortress. RPC operations other than lifecycle discovery are not yet
+session-guarded.
+
 ## Semantic inference
 
 Local code should avoid interpreting strategic implications. It should report

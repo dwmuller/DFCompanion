@@ -614,6 +614,8 @@ pub struct LifecycleStatus {
     pub fortress_name: Option<String>,
     /// Stable identity of the last loaded fortress site.
     pub site_id: Option<i64>,
+    /// Identity of the last observed fortress activation.
+    pub session_id: Option<String>,
 }
 
 /// A single reading of the game's loading state, as returned by the Lua module.
@@ -624,6 +626,27 @@ pub struct LifecycleSnapshot {
     pub map_loaded: bool,
     pub fortress_name: String,
     pub site_id: Option<i64>,
+    pub session_id: Option<String>,
+}
+
+impl LifecycleSnapshot {
+    fn validate(&self) -> Result<(), String> {
+        let valid_session = self.session_id.as_ref().is_some_and(|session| {
+            !session.is_empty()
+                && session.len() <= 64
+                && session
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+        });
+        if self.map_loaded {
+            if !self.world_loaded || self.site_id.is_none() || !valid_session {
+                return Err("Loaded fortress lifecycle is missing a valid site or session.".into());
+            }
+        } else if self.site_id.is_some() || self.session_id.is_some() {
+            return Err("Unloaded fortress lifecycle contains a site or session.".into());
+        }
+        Ok(())
+    }
 }
 
 /// Cheaply cloneable handle to the shared DFHack connection.
@@ -663,8 +686,10 @@ impl GameState {
             })?
             .reply
             .value;
-        serde_json::from_str(&reply.concat())
-            .map_err(|error| format!("Could not parse the game state reply: {error}"))
+        let snapshot: LifecycleSnapshot = serde_json::from_str(&reply.concat())
+            .map_err(|error| format!("Could not parse the game state reply: {error}"))?;
+        snapshot.validate()?;
+        Ok(snapshot)
     }
 
     /// Loads the raw DFCompanion chat state associated with `site_id`.

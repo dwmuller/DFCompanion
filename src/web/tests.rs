@@ -241,7 +241,13 @@ async fn lifecycle_state_streams_initial_and_changed_fortress_status() {
         .unwrap();
     assert!(String::from_utf8_lossy(&initial).contains("DFHack unavailable"));
 
-    app.update_lifecycle(true, true, Some("Bridgedmine".to_owned()), Some(41));
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
     let updated = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
         .await
         .expect("changed lifecycle state should be sent")
@@ -281,6 +287,13 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
     let (app, queue_rx) = CompanionApp::new();
     let worker = tokio::spawn(app.clone().run_companion_worker(queue_rx));
     assert_eq!(app.lifecycle().state, LifecycleState::Unreachable);
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Bridgedmine".to_owned()),
+        Some(41),
+        Some("a".to_owned()),
+    );
 
     let accepted = router(app.clone())
         .oneshot(
@@ -289,8 +302,9 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
                 .uri("/api/plugin/lifecycle")
                 .header(header::HOST, HTTP_HOST)
                 .header(header::CONTENT_TYPE, "application/json")
+                .header("x-dfcompanion-session", "a")
                 .body(Body::from(
-                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","site_id":41}"#,
+                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","site_id":41,"session_id":"a"}"#,
                 ))
                 .unwrap(),
         )
@@ -328,6 +342,29 @@ async fn lifecycle_pushes_update_the_state_and_reject_browser_origins() {
     assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
     assert_eq!(app.lifecycle().state, LifecycleState::MapLoaded);
     worker.abort();
+}
+
+#[tokio::test]
+async fn should_reject_lifecycle_when_body_and_header_sessions_differ() {
+    let (app, mut queue_rx) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some(41), Some("a".to_owned()));
+    let response = router(app)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/plugin/lifecycle")
+                .header(header::HOST, HTTP_HOST)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-dfcompanion-session", "a")
+                .body(Body::from(
+                    r#"{"world_loaded":true,"map_loaded":true,"fortress_name":"Bridgedmine","site_id":41,"session_id":"b"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(queue_rx.try_recv().is_err());
 }
 
 async fn get_events_body(app: &Arc<CompanionApp>, last_event_id: Option<&str>) -> String {

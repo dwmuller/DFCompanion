@@ -750,6 +750,7 @@ mod test {
             state: LifecycleState::MapLoaded,
             fortress_name: Some("<Bridgedmine>".to_owned()),
             site_id: Some(41),
+            session_id: Some("a".to_owned()),
         };
 
         let rendered = render_lifecycle_state_content(&lifecycle).unwrap();
@@ -768,6 +769,7 @@ mod test {
             state: LifecycleState::WorldLoaded,
             fortress_name: Some("Bridgedmine".to_owned()),
             site_id: Some(41),
+            session_id: Some("a".to_owned()),
         };
 
         let rendered = render_lifecycle_state_content(&lifecycle).unwrap();
@@ -786,6 +788,7 @@ mod test {
             state: LifecycleState::Initialized,
             fortress_name: None,
             site_id: None,
+            session_id: None,
         })
         .unwrap();
 

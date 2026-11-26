@@ -10,7 +10,19 @@ local json = require('json')
 local raw_by_site = {}
 local site_id = 1
 local site_loaded = true
+local random_value = 0
+local scheduled = {}
 local fake_dfhack = {
+    random = {new = function()
+        return {random = function()
+            random_value = random_value + 1
+            return random_value
+        end}
+    end},
+    timeout = function(_, _, callback)
+        table.insert(scheduled, callback)
+        return #scheduled
+    end,
     world = {
         isFortressMode = function() return site_loaded end,
         getCurrentSite = function() return {id = site_id, name = {}} end,
@@ -90,17 +102,24 @@ local rpc = {
 }
 local service_available = false
 local sent_events = {}
+local sent_sessions = {}
+local response_session
 local function last_status()
     local last = sent_events[#sent_events]
     return last and json.decode(last).text or ''
 end
 local socket = {tcp = {connect = function()
     if not service_available then error('service unavailable') end
-    local replies = {'HTTP/1.1 200 OK', 'Content-Length: 21', '', '{"status":"accepted"}'}
+    local replies
     return {
         setTimeout = function() end,
         setBlocking = function() end,
         send = function(_, request)
+            local session = assert(request:match('\r\nx%-dfcompanion%-session: ([^\r]+)'))
+            table.insert(sent_sessions, session)
+            local body = '{"status":"accepted"}'
+            replies = {'HTTP/1.1 200 OK', 'x-dfcompanion-session: ' .. (response_session or session),
+                'Content-Length: ' .. #body, '', body}
             if request:find('/api/plugin/events', 1, true) then
                 table.insert(sent_events, request:match('\r\n\r\n(.*)$'))
             end
@@ -116,7 +135,8 @@ local socket = {tcp = {connect = function()
     }
 end}}
 fake_dfhack.getOSType = function() return 'windows' end
-fake_dfhack.world.SetPauseState = function() error('unexpected pause') end
+local paused = false
+fake_dfhack.world.SetPauseState = function(value) paused = value end
 local env = {
     dfhack = fake_dfhack,
     df = {report = {find = function()
@@ -148,6 +168,15 @@ assert(env.enabled == nil and env.isEnabled() == false)
 site_loaded = true
 site_id = 4
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
+local first_session = assert(lifecycle.current_session())
+local reloaded_lifecycle = load_with_env(lifecycle_path, {
+    dfhack = fake_dfhack,
+    require = function(name)
+        assert(name == 'dfcompanion.internal.common')
+        return {json = json, z_offset = function() end}
+    end,
+})
+assert(reloaded_lifecycle.current_session() == first_session)
 assert(env.enabled == nil and not env.isEnabled() and eventful.onReport.dfcompanion)
 assert(lifecycle.load_enabled_state() == nil and raw_by_site[4] == nil)
 eventful.onReport.dfcompanion(1)
@@ -155,7 +184,15 @@ assert(env.enabled == nil and env.pending_event == nil and raw_by_site[4] == nil
 service_available = true
 eventful.onReport.dfcompanion(1)
 assert(env.isEnabled() and lifecycle.load_enabled_state() == true)
+assert(sent_sessions[#sent_sessions] == first_session)
 assert(last_status():find('is enabled', 1, true))
+
+response_session = 'other'
+eventful.onReport.dfcompanion(1)
+assert(paused and env.pending_event and #scheduled > 0)
+response_session = nil
+while #scheduled > 0 do table.remove(scheduled, 1)() end
+assert(env.pending_event == nil)
 
 env.dfhack_flags = {enable = true, enable_state = false}
 run_plugin()
@@ -173,6 +210,8 @@ fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_UNLOADED)
 assert(env.enabled == nil and env.isEnabled() == false)
 count = #sent_events
 fake_dfhack.onStateChange.dfcompanion_lifecycle(env.SC_MAP_LOADED)
+assert(lifecycle.current_session() ~= first_session)
+assert(reloaded_lifecycle.current_session() == lifecycle.current_session())
 assert(not env.isEnabled() and not eventful.onReport.dfcompanion)
 assert(#sent_events == count + 1 and last_status():find('is disabled', 1, true))
 

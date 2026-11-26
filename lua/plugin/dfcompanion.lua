@@ -33,6 +33,11 @@ local lifecycle = require('dfcompanion.internal.lifecycle')
 local COMPANION_HOST = '127.0.0.1'
 local COMPANION_PORT = 3000
 local RESPONSE_TIMEOUT_SECONDS = 3
+local SESSION_HEADER = 'x-dfcompanion-session'
+local NO_SESSION = 'none'
+local SESSION_MISMATCH = 'session_mismatch'
+local SESSION_RETRY_FRAMES = 30
+local MAX_SESSION_RETRIES = 10
 local STATE_KEY = 'dfcompanion'
 -- Prefix of this script's own announcements, so they are never forwarded.
 local MESSAGE_PREFIX = 'DFCompanion:'
@@ -42,6 +47,7 @@ local site_state_loaded = false
 local on_companion_contact
 
 local function http_post(path, body)
+    local session = lifecycle.current_session() or NO_SESSION
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
     local ok, status_code, decoded = pcall(function()
         -- DFHack's socket timeout uses milliseconds on Windows, seconds elsewhere.
@@ -54,6 +60,7 @@ local function http_post(path, body)
             'POST ' .. path .. ' HTTP/1.1',
             'Host: 127.0.0.1:3000',
             'Content-Type: application/json',
+            SESSION_HEADER .. ': ' .. session,
             'Content-Length: ' .. #body,
             'Connection: close',
             '',
@@ -72,6 +79,7 @@ local function http_post(path, body)
         end
 
         local content_length = 0
+        local response_session
         while true do
             local line = client:receive('*l')
             if not line then
@@ -84,6 +92,8 @@ local function http_post(path, body)
             local name, value = line:match('^([^:]+):%s*(.*)$')
             if name and name:lower() == 'content-length' then
                 content_length = tonumber(value) or 0
+            elseif name and name:lower() == SESSION_HEADER then
+                response_session = value
             end
         end
 
@@ -96,7 +106,14 @@ local function http_post(path, body)
             response_body[i] = byte
         end
 
-        return response_status, json.decode(table.concat(response_body))
+        local response = json.decode(table.concat(response_body))
+        if not response_session then
+            error('DFCompanion did not return a fortress session header.')
+        end
+        if response_session ~= session then
+            response.status = SESSION_MISMATCH
+        end
+        return response_status, response
     end)
     local close_ok, close_error = pcall(function() client:close() end)
     if not ok then
@@ -118,9 +135,10 @@ local function submit_event(event)
     if not result or type(result.status) ~= 'string' then
         error('DFCompanion returned an invalid response (HTTP ' .. tostring(status_code) .. ').', 0)
     end
-    on_companion_contact()
+    if result.status ~= SESSION_MISMATCH then on_companion_contact() end
     if result.status ~= 'accepted' then
-        error('DFCompanion did not accept an event (HTTP ' .. tostring(status_code) .. '): ' ..
+        error('DFCompanion did not accept an event (HTTP ' .. tostring(status_code) .. ', ' ..
+            result.status .. '): ' ..
             tostring(result.message), 0)
     end
 end
@@ -135,11 +153,16 @@ local function submit_lifecycle(payload)
     if not result or type(result.status) ~= 'string' then
         error('DFCompanion returned an invalid lifecycle response (HTTP ' .. tostring(status_code) .. ').', 0)
     end
-    on_companion_contact()
+    if result.status ~= SESSION_MISMATCH then on_companion_contact() end
     if result.status ~= 'accepted' then
-        error('DFCompanion did not accept game state (HTTP ' .. tostring(status_code) .. '): ' ..
+        error('DFCompanion did not accept game state (HTTP ' .. tostring(status_code) .. ', ' ..
+            result.status .. '): ' ..
             tostring(result.message), 0)
     end
+end
+
+local function is_session_mismatch(err)
+    return tostring(err):find(SESSION_MISMATCH, 1, true) ~= nil
 end
 
 local function status_event(is_enabled)
@@ -154,10 +177,32 @@ end
 
 -- Like submit_event for a status message, but only logs a failure: it must not
 -- pause the game or retain a pending event.
+local status_retry_timer
+local status_retry_count = 0
+
 local function announce_status(is_enabled)
     local ok, err = pcall(submit_event, status_event(is_enabled))
     if not ok then
         dfhack.printerr(MESSAGE_PREFIX .. ' could not announce the plugin state: ' .. tostring(err))
+        if is_session_mismatch(err) and not status_retry_timer
+            and status_retry_count < MAX_SESSION_RETRIES then
+            status_retry_count = status_retry_count + 1
+            local session = lifecycle.current_session()
+            local timer
+            timer = dfhack.timeout(SESSION_RETRY_FRAMES, 'frames', function()
+                if status_retry_timer ~= timer then return end
+                status_retry_timer = nil
+                if lifecycle.current_session() == session and enabled == is_enabled then
+                    announce_status(is_enabled)
+                end
+            end)
+            status_retry_timer = timer
+            if not timer then
+                dfhack.printerr(MESSAGE_PREFIX .. ' could not schedule the plugin state retry.')
+            end
+        end
+    else
+        status_retry_count = 0
     end
 end
 
@@ -196,17 +241,46 @@ end
 
 -- Retries the report that caused the service-outage pause once the player
 -- unpauses. If the service is still unavailable, report_failure pauses again.
-local function retry_pending_event()
+local retry_pending_event
+local event_retry_timer
+local event_retry_count = 0
+
+local function schedule_event_retry()
+    if event_retry_timer then return end
+    if event_retry_count >= MAX_SESSION_RETRIES then
+        dfhack.printerr(MESSAGE_PREFIX .. ' could not synchronize the fortress session; unpause to retry.')
+        return
+    end
+    event_retry_count = event_retry_count + 1
+    local session = lifecycle.current_session()
+    local timer
+    timer = dfhack.timeout(SESSION_RETRY_FRAMES, 'frames', function()
+        if event_retry_timer ~= timer then return end
+        event_retry_timer = nil
+        if lifecycle.current_session() == session then retry_pending_event() end
+    end)
+    event_retry_timer = timer
+    if not timer then
+        dfhack.printerr(MESSAGE_PREFIX .. ' could not schedule the event retry; unpause to retry.')
+    end
+end
+
+retry_pending_event = function()
     if enabled == false or not pending_event then
         return
     end
     local event = pending_event
     local ok, err = pcall(submit_event, event)
     if not ok then
-        report_failure(err, event)
+        if is_session_mismatch(err) then
+            schedule_event_retry()
+        else
+            report_failure(err, event)
+        end
         return
     end
     pending_event = nil
+    event_retry_count = 0
     dfhack.printerr(MESSAGE_PREFIX .. ' resumed event forwarding.')
 end
 
@@ -222,10 +296,30 @@ end
 -- the companion also polls for state, so a missed push is not fatal.
 local LIFECYCLE_KEY = 'dfcompanion_lifecycle'
 
+local lifecycle_retry_timer
+local lifecycle_retry_count = 0
+
 local function push_lifecycle_state()
     local ok, err = pcall(function() submit_lifecycle(lifecycle.lifecycle_state()) end)
     if not ok then
         dfhack.printerr(MESSAGE_PREFIX .. ' could not report game state: ' .. tostring(err))
+        if is_session_mismatch(err) and not lifecycle_retry_timer
+            and lifecycle_retry_count < MAX_SESSION_RETRIES then
+            lifecycle_retry_count = lifecycle_retry_count + 1
+            local session = lifecycle.current_session()
+            local timer
+            timer = dfhack.timeout(SESSION_RETRY_FRAMES, 'frames', function()
+                if lifecycle_retry_timer ~= timer then return end
+                lifecycle_retry_timer = nil
+                if lifecycle.current_session() == session then push_lifecycle_state() end
+            end)
+            lifecycle_retry_timer = timer
+            if not timer then
+                dfhack.printerr(MESSAGE_PREFIX .. ' could not schedule the game state retry.')
+            end
+        end
+    else
+        lifecycle_retry_count = 0
     end
 end
 
@@ -253,7 +347,11 @@ local function on_report(report_id)
     local event = rpc.report_entry(report)
     local ok, err = pcall(submit_event, event)
     if not ok then
-        if enabled == nil then
+        if is_session_mismatch(err) then
+            event_retry_count = 0
+            report_failure(err, event)
+            schedule_event_retry()
+        elseif enabled == nil then
             dfhack.printerr(MESSAGE_PREFIX .. ' could not send an event while unconfigured: ' .. tostring(err))
         else
             report_failure(err, event)
@@ -306,6 +404,13 @@ end
 
 local function on_lifecycle_change(state)
     if state == SC_MAP_UNLOADED then
+        lifecycle.clear_session()
+        event_retry_timer = nil
+        lifecycle_retry_timer = nil
+        status_retry_timer = nil
+        event_retry_count = 0
+        lifecycle_retry_count = 0
+        status_retry_count = 0
         if pending_event then
             dfhack.printerr(MESSAGE_PREFIX .. ' discarded an undelivered event on fortress unload.')
         end
@@ -315,6 +420,9 @@ local function on_lifecycle_change(state)
         dfhack.onStateChange[STATE_KEY] = nil
         eventful.onReport[STATE_KEY] = nil
     elseif state == SC_MAP_LOADED then
+        lifecycle.start_session()
+        event_retry_count = 0
+        lifecycle_retry_count = 0
         restore_enabled_state()
     end
     if state == SC_WORLD_LOADED or state == SC_WORLD_UNLOADED

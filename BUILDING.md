@@ -62,6 +62,12 @@ end
 
 The service tracks how far the game has loaded—DFHack reachable, world loaded, fortress loaded, and the fortress name—so its AI game tools stay inert until a fortress is ready; this avoids querying fort data while a fortress is loading, which can crash the game. The state is kept current two ways. `lua/plugin/dfcompanion.lua` pushes it to the service on DFHack's world/map load and unload events, and the service also polls DFHack for it (about every 20 seconds), so the state converges even if no push arrives, such as when the service starts while a fortress is already loaded.
 
+Plugin HTTP requests and responses carry an ephemeral fortress session ID. On a
+mismatch, the request is rejected, the service queries DFHack to resynchronize,
+and the plugin retries on a later frame. A failed game report is retained and
+the game is paused; the player can unpause after delivery. RPC operations are
+not yet session-guarded.
+
 The push is registered when the script runs, independently of the `enable dfcompanion` event-forwarding toggle. Once loaded, the script restores the forwarding setting from fortress site data on map load. A fortress with no companion site data remains unconfigured until it contacts the service, then enables forwarding and saves the setting; older site data without an enabled field defaults to enabled. Failed announcements while unconfigured are logged and skipped without pausing. `enable dfcompanion` and `disable dfcompanion` save the setting for the current fortress. The service's lifecycle poll loads the script; to load it at DFHack startup, add `dfcompanion status` to a `dfhack-config/init/dfhack*.init` file (it works with no fortress loaded). When forwarding is enabled, a delivery failure retains the failed report and pauses the game; restarting the service and unpausing retries that report. Pending reports are discarded with a warning on fortress unload rather than sent to a different fortress.
 
 For a release build:

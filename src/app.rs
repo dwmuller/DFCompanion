@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::time::Duration;
@@ -10,7 +10,8 @@ use tracing::debug;
 
 use crate::chat_session::{self, ChatEffect, ChatSession, Context};
 use crate::events::{
-    ChatSaveRequest, EventQueue, EventReceiver, ExternalEvent, LifecycleEvent, LoadedChatState,
+    ChatSaveRequest, EventQueue, EventReceiver, ExternalEvent, GameEvent, LifecycleEvent,
+    LoadedChatState,
 };
 use crate::game_state::{GameState, LifecycleSnapshot, LifecycleState, LifecycleStatus};
 use crate::notifications::{
@@ -47,6 +48,7 @@ pub struct CompanionApp {
     session: Mutex<ChatSession>,
     /// Distinguishes restore completions from later fortress activations.
     lifecycle_generation: AtomicU64,
+    lifecycle_resync_in_flight: AtomicBool,
     /// Whether the AI gets a turn shortly after game events arrive. Off by
     /// default because automatic turns spend tokens without the player asking.
     pub event_turns: std::sync::atomic::AtomicBool,
@@ -100,6 +102,7 @@ impl CompanionApp {
                 ai,
                 session: Mutex::new(ChatSession::new(Instant::now())),
                 lifecycle_generation: AtomicU64::new(0),
+                lifecycle_resync_in_flight: AtomicBool::new(false),
                 event_turns: Default::default(),
                 periodic_turns: Default::default(),
                 game_state,
@@ -158,6 +161,7 @@ impl CompanionApp {
         map_loaded: bool,
         fortress_name: Option<String>,
         site_id: Option<i64>,
+        session_id: Option<String>,
     ) {
         let state = if map_loaded {
             LifecycleState::MapLoaded
@@ -166,13 +170,13 @@ impl CompanionApp {
         } else {
             LifecycleState::Initialized
         };
-        self.set_lifecycle(state, fortress_name, site_id);
+        self.set_lifecycle(state, fortress_name, site_id, session_id);
     }
 
     /// Records that DFHack could not be reached, keeping the last fortress
     /// name so the UI can still name it.
     pub fn mark_lifecycle_unreachable(&self) {
-        self.set_lifecycle(LifecycleState::Unreachable, None, None);
+        self.set_lifecycle(LifecycleState::Unreachable, None, None, None);
     }
 
     fn set_lifecycle(
@@ -180,6 +184,7 @@ impl CompanionApp {
         state: LifecycleState,
         fortress_name: Option<String>,
         site_id: Option<i64>,
+        session_id: Option<String>,
     ) {
         // Only touch the watch value when something actually changed, so
         // subscribers are not woken by every poll that sees the same state.
@@ -202,7 +207,14 @@ impl CompanionApp {
                 }
                 _ => false,
             };
-            lifecycle_changed = state_changed || name_changed || site_changed;
+            let session_changed = match &session_id {
+                Some(session_id) if status.session_id.as_ref() != Some(session_id) => {
+                    status.session_id = Some(session_id.clone());
+                    true
+                }
+                _ => false,
+            };
+            lifecycle_changed = state_changed || name_changed || site_changed || session_changed;
             lifecycle_changed
         });
         if lifecycle_changed {
@@ -232,6 +244,7 @@ impl CompanionApp {
                         .queue_tx
                         .try_send_lifecycle(LifecycleEvent::Snapshot(snapshot));
                 }
+
                 Err(_) => {
                     let _ = self
                         .queue_tx
@@ -240,6 +253,29 @@ impl CompanionApp {
             }
             tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
         }
+    }
+
+    /// Reconcile a mismatched plugin session after the HTTP response is sent.
+    pub fn request_lifecycle_resync(self: &Arc<Self>) {
+        if self.lifecycle_resync_in_flight.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let this = self.clone();
+        tokio::spawn(async move {
+            match this.game_state.run(|game| game.query_lifecycle()).await {
+                Ok(snapshot) => {
+                    if let Err(error) = this
+                        .queue_tx
+                        .try_send_lifecycle(LifecycleEvent::Snapshot(snapshot))
+                    {
+                        tracing::warn!("Could not report resynchronized lifecycle: {error}");
+                    }
+                }
+                Err(error) => tracing::warn!("Could not resynchronize lifecycle: {error}"),
+            }
+            this.lifecycle_resync_in_flight
+                .store(false, Ordering::Release);
+        });
     }
 
     /// What the session needs to know about the world to handle an event.
@@ -574,6 +610,7 @@ impl CompanionApp {
         };
         let lifecycle = self.lifecycle.borrow();
         lifecycle.site_id != Some(site_id)
+            || lifecycle.session_id != snapshot.session_id
             || matches!(
                 lifecycle.state,
                 LifecycleState::Initialized | LifecycleState::WorldLoaded
@@ -613,6 +650,7 @@ impl CompanionApp {
                     snapshot.map_loaded,
                     Some(snapshot.fortress_name),
                     snapshot.site_id,
+                    snapshot.session_id,
                 );
                 if let Some(site_id) = snapshot.site_id.filter(|_| is_new_fortress) {
                     let generation = self.lifecycle_generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -639,22 +677,36 @@ impl CompanionApp {
                 self.dispatch(chat_session::ChatEvent::UserRequest { text, id: Some(id) });
             }
             ExternalEvent::GameEvent(event) => {
-                let id = self.notifier.notify(
-                    DisplayMessage::new(
-                        DisplayMessageKind::GameEvent,
-                        format!("{} [{}] {}", event.date, event.category, event.text),
-                    )
-                    .with_input_state(InputState::Pending),
-                );
-                self.dispatch(chat_session::ChatEvent::Report {
-                    event,
-                    id: Some(id),
-                });
+                self.handle_game_event(event);
+            }
+            ExternalEvent::PluginGameEvent { session_id, event } => {
+                let lifecycle = self.lifecycle.borrow().clone();
+                if lifecycle.state == LifecycleState::MapLoaded
+                    && lifecycle.session_id.as_deref() == Some(&session_id)
+                {
+                    self.handle_game_event(event);
+                } else {
+                    tracing::warn!("Discarded a game report from an obsolete fortress session.");
+                }
             }
             ExternalEvent::ChatStateSaveRequested(_) | ExternalEvent::ChatStateSaved { .. } => {
                 unreachable!("chat save events are coordinated by the worker loop")
             }
         }
+    }
+
+    fn handle_game_event(self: &Arc<Self>, event: GameEvent) {
+        let id = self.notifier.notify(
+            DisplayMessage::new(
+                DisplayMessageKind::GameEvent,
+                format!("{} [{}] {}", event.date, event.category, event.text),
+            )
+            .with_input_state(InputState::Pending),
+        );
+        self.dispatch(chat_session::ChatEvent::Report {
+            event,
+            id: Some(id),
+        });
     }
 
     fn start_chat_restore(self: &Arc<Self>, generation: u64, site_id: i64) {

@@ -47,6 +47,11 @@ pub enum ExternalEvent {
     /// An AI configuration was just selected: give the AI a turn to look around.
     Orient,
     GameEvent(GameEvent),
+    /// A plugin report bound to the fortress activation that produced it.
+    PluginGameEvent {
+        session_id: String,
+        event: GameEvent,
+    },
     /// A high-priority observation of the game's loading state.
     Lifecycle(LifecycleEvent),
     /// Completion of a site-bound chat restore operation.

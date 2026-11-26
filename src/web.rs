@@ -33,6 +33,8 @@ use crate::{
 
 const HTTP_ORIGIN: &str = "http://127.0.0.1:3000";
 const HTTP_HOST: &str = "127.0.0.1:3000";
+const PLUGIN_SESSION_HEADER: &str = "x-dfcompanion-session";
+const NO_PLUGIN_SESSION: &str = "none";
 
 #[derive(Deserialize)]
 struct ChatForm {
@@ -105,6 +107,7 @@ struct PluginLifecycle {
     map_loaded: bool,
     fortress_name: String,
     site_id: Option<i64>,
+    session_id: Option<String>,
 }
 
 /// Logs every HTTP request and response to stdout. Enabled by `--trace-http`.
@@ -173,11 +176,21 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
         )
         .route(
             "/api/plugin/events",
-            post(plugin_event).layer(DefaultBodyLimit::max(16_384)),
+            post(plugin_event)
+                .layer(DefaultBodyLimit::max(16_384))
+                .layer(middleware::from_fn_with_state(
+                    app.clone(),
+                    validate_plugin_session,
+                )),
         )
         .route(
             "/api/plugin/lifecycle",
-            post(plugin_lifecycle).layer(DefaultBodyLimit::max(4_096)),
+            post(plugin_lifecycle)
+                .layer(DefaultBodyLimit::max(4_096))
+                .layer(middleware::from_fn_with_state(
+                    app.clone(),
+                    validate_plugin_session,
+                )),
         )
         .route("/events", get(events))
         .route("/api/automatic-turns", put(set_automatic_turns))
@@ -188,6 +201,76 @@ pub fn router(app: Arc<CompanionApp>) -> Router {
         .route("/assets/style.css", get(stylesheet))
         .layer(middleware::from_fn(validate_local_request))
         .with_state(app)
+}
+
+fn plugin_session(headers: &HeaderMap) -> Option<&str> {
+    let mut values = headers.get_all(PLUGIN_SESSION_HEADER).iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some()
+        || value.len() > 64
+        || value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+            && value != NO_PLUGIN_SESSION
+    {
+        return None;
+    }
+    Some(value)
+}
+
+async fn validate_plugin_session(
+    State(app): State<Arc<CompanionApp>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(error) = reject_browser_requests(request.headers()) {
+        return error;
+    }
+    let status = app.lifecycle();
+    let expected = if status.state == crate::game_state::LifecycleState::MapLoaded {
+        let Some(session_id) = status.session_id.as_deref() else {
+            app.request_lifecycle_resync();
+            return plugin_event_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "The loaded fortress has no session; resynchronization was requested.",
+            );
+        };
+        session_id
+    } else {
+        NO_PLUGIN_SESSION
+    };
+    let mut response = match plugin_session(request.headers()) {
+        None => plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "A valid DFCompanion session header is required.",
+        ),
+        Some(actual) if actual != expected => {
+            app.request_lifecycle_resync();
+            plugin_event_response(
+                StatusCode::CONFLICT,
+                "session_mismatch",
+                "The fortress session is being resynchronized; retry this request.",
+            )
+        }
+        Some(_) => next.run(request).await,
+    };
+    match HeaderValue::from_str(expected) {
+        Ok(value) => {
+            response.headers_mut().insert(PLUGIN_SESSION_HEADER, value);
+        }
+        Err(error) => {
+            tracing::error!("Invalid current plugin session header: {error}");
+            return plugin_event_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "unavailable",
+                "The current fortress session is invalid.",
+            );
+        }
+    }
+    response
 }
 
 /// Handles POST requests for events from DFHack plugin.
@@ -218,7 +301,17 @@ async fn plugin_event(
 
     let event_date = event.date.clone();
     let event_category = event.category.clone();
-    match app.event_queue().try_send(ExternalEvent::GameEvent(event)) {
+    let Some(session_id) = plugin_session(&headers).filter(|id| *id != NO_PLUGIN_SESSION) else {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "Game reports require an active fortress session.",
+        );
+    };
+    match app.event_queue().try_send(ExternalEvent::PluginGameEvent {
+        session_id: session_id.to_owned(),
+        event,
+    }) {
         Ok(()) => {
             tracing::debug!(
                 date = event_date,
@@ -263,6 +356,21 @@ async fn plugin_lifecycle(
     if let Some(error) = reject_browser_requests(&headers) {
         return error;
     }
+    let Some(session) = plugin_session(&headers) else {
+        return plugin_event_response(StatusCode::BAD_REQUEST, "rejected", "Invalid session.");
+    };
+    let session_id = (session != NO_PLUGIN_SESSION).then(|| session.to_owned());
+    if payload.map_loaded != session_id.is_some()
+        || payload.map_loaded != payload.site_id.is_some()
+        || payload.session_id != session_id
+        || payload.map_loaded && !payload.world_loaded
+    {
+        return plugin_event_response(
+            StatusCode::BAD_REQUEST,
+            "rejected",
+            "Lifecycle state does not match the fortress session.",
+        );
+    }
     match app
         .event_queue()
         .try_send_lifecycle(crate::events::LifecycleEvent::Snapshot(
@@ -271,6 +379,7 @@ async fn plugin_lifecycle(
                 map_loaded: payload.map_loaded,
                 fortress_name: payload.fortress_name,
                 site_id: payload.site_id,
+                session_id,
             },
         )) {
         Ok(()) => plugin_event_response(StatusCode::OK, "accepted", "Game state accepted."),
