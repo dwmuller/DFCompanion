@@ -1,31 +1,7 @@
 # tools/dfhack-mcp.ps1
 $ErrorActionPreference = 'Stop'
 
-function Resolve-DfHackExe {
-    # Assumes this script lives in <workspace>/tools/dfhack-mcp.ps1
-    $workspaceRoot = Split-Path -Parent $PSScriptRoot
-    $cacheCandidates = @(
-        (Join-Path $workspaceRoot "build\CMakeCache.txt"),
-        (Join-Path $workspaceRoot "build\CmakeCache.txt")
-    )
-
-    foreach ($cacheFile in $cacheCandidates) {
-        if (Test-Path -LiteralPath $cacheFile) {
-            # Match: DFHACK_INSTALL_DIR:PATH=E:/SteamLibrary/steamapps/common/DFHack
-            $match = Select-String -LiteralPath $cacheFile -Pattern '^DFHACK_INSTALL_DIR:[^=]+=(.+)$' | Select-Object -First 1
-            if ($match) {
-                $installDir = $match.Matches[0].Groups[1].Value.Trim()
-                $exePath = Join-Path $installDir "hack\dfhack-run.exe"
-                if (Test-Path -LiteralPath $exePath) {
-                    return $exePath
-                }
-            }
-        }
-    }
-
-    # Fallback to PATH if CMakeCache.txt doesn't exist yet
-    return "dfhack-run.exe"
-}
+Import-Module (Join-Path $PSScriptRoot 'dfhack.psm1') -ErrorAction Stop
 
 $DfHackExe = Resolve-DfHackExe
 

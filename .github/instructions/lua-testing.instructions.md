@@ -107,15 +107,8 @@ To load an updated plugin script, use `reqscript`. Example:
 lua "reqscript('dfcompanion')"
 ```
 
-After reloading, ensure the plugin is enabled using dfhack-run's built-in
-enable command:
-
-```text
-enable dfcompanion
-```
-
-Enabling `dfcompanion` requires a loaded fortress and a running DFCompanion
-service. If either is unavailable, report that re-enabling remains pending.
+If a fortress is loaded, the reloaded plugin should receive an SC_MAP_LOADED
+event, which will adjust the plugin's internal state accordingly.
 
 ## Reload changed Lua script modules in the running game
 
