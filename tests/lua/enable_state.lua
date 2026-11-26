@@ -262,6 +262,13 @@ facade_env = {
 }
 local facade = load_with_env(facade_path, facade_env)
 assert(json.decode(facade.lifecycle_state()).site_id == nil)
+local facade_session = assert(lifecycle.current_session())
+assert(not pcall(facade.food_drink_summary))
+assert(not pcall(facade.pause_for_ai_block, 'stale', 'reason'))
+assert(pcall(facade.food_drink_summary, facade_session))
+site_loaded = false
+assert(not pcall(facade.food_drink_summary, facade_session))
+site_loaded = true
 assert(env.isEnabled() and lifecycle.load_enabled_state() == true)
 
 env.dfhack_flags = {enable = true, enable_state = false}

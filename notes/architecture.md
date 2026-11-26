@@ -144,8 +144,18 @@ failed game report. Queued reports are checked again against the current
 session before processing. The ID is not a credential and is not saved with
 the fortress. Chat persistence RPC calls (`load_chat_state`, `save_chat_state`)
 take the session ID instead of a site ID, and Lua rejects a call whose session
-is no longer current, so a late save cannot reach a reloaded fortress. Other RPC
-operations are not yet session-guarded.
+is no longer current, so a late save cannot reach a reloaded fortress. Game
+query and action RPCs (everything DFC calls except the lifecycle bootstrap and
+the functions the plugin uses in-process: `game_date`, `fortress_name`,
+`z_offset`, `script_enabled`, `report_entry`, `take_ai_block_pause_reason`)
+take the session as their first argument. `GameState` prepends its cached
+session, or an empty one when no fortress is loaded, and the `rpc.dfcompanion`
+facade rejects a mismatch before running the function. DFHack's `RunLua` reports
+such a rejection only as a generic RPC failure, so the tool sees an error
+without the reason; the lifecycle push or poll then corrects the cached
+session.
+Every AI tool first calls the guarded `check_session` RPC, so tools that read
+only DFHack's native fortress reader (such as `floor_plan`) are covered too.
 
 ## Semantic inference
 

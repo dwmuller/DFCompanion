@@ -285,12 +285,26 @@ async fn ai_tools_end_to_end() {
     use dfcompanion::ai_tools::execute_named;
     reload_lua_module();
     let history = NotificationHistory::new();
-    let lifecycle = tokio::sync::watch::channel(dfcompanion::game_state::LifecycleStatus {
+    let session_id = dfcompanion::game_state::GameState::new(
+        Notifier::new(NotificationHistory::new()),
+        tokio::sync::watch::channel(dfcompanion::game_state::LifecycleStatus::default()).1,
+    )
+    .query_lifecycle()
+    .expect("Could not query the fortress")
+    .session_id
+    .expect("No fortress session is loaded");
+    let status = |session_id: &str| dfcompanion::game_state::LifecycleStatus {
         state: dfcompanion::game_state::LifecycleState::MapLoaded,
         fortress_name: None,
-        session_id: None,
-    })
-    .1;
+        session_id: Some(session_id.to_owned()),
+    };
+    let stale_state = dfcompanion::game_state::GameState::new(
+        Notifier::new(NotificationHistory::new()),
+        tokio::sync::watch::channel(status("stale")).1,
+    );
+    let stale = execute_named(&stale_state, "get_fortress_overview", serde_json::json!({})).await;
+    assert!(stale.contains("\"error\""), "{stale}");
+    let lifecycle = tokio::sync::watch::channel(status(&session_id)).1;
     let game_state = dfcompanion::game_state::GameState::new(Notifier::new(history), lifecycle);
     let call = |name: &'static str, args: serde_json::Value| {
         let game_state = game_state.clone();

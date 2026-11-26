@@ -84,11 +84,12 @@ fn tool<A: DeserializeOwned>(
         handler: Box::new(move |game, arguments| {
             // Arguments are validated first so bad calls fail the same way
             // regardless of game state. Every current tool reads fort data, so
-            // the fortress gate applies to all of them.
+            // the fortress gate and session check apply to all of them.
             let parsed = parse_args(arguments)?;
             if !game.map_loaded() {
                 return Err(NO_FORTRESS_LOADED.to_owned());
             }
+            game.check_session()?;
             run(game, parsed)
         }),
     }

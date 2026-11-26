@@ -86,6 +86,29 @@ local function require_chat_site(expected_session)
     return site
 end
 
+-- Fails unless a fortress is loaded and `expected_session` is its current
+-- session, so a stale caller cannot read or change a different activation.
+local function require_session(expected_session)
+    local current = current_session()
+    if current == nil then
+        error('session mismatch: no fortress is loaded.')
+    end
+    if expected_session ~= current then
+        error('session mismatch: the fortress session changed.')
+    end
+end
+
+-- Probe for the session guard in rpc.dfcompanion: once the facade has verified
+-- the caller's session, this just succeeds. AI tools call it first so that
+-- every tool is session-checked, including those that use only DFHack's native
+-- fortress reader and make no other guarded call. It is preferred over
+-- `lifecycle_state` because it compares the session in Lua like every other
+-- guard, builds no snapshot, and skips that function's companion-contact side
+-- effect.
+local function check_session()
+    return 'true'
+end
+
 local function read_saved_state()
     local raw = dfhack.persistent.getSiteDataString(CHAT_STATE_KEY)
     if not raw then return nil end
@@ -190,6 +213,8 @@ return {
     start_session = start_session,
     clear_session = clear_session,
     current_session = current_session,
+    require_session = require_session,
+    check_session = check_session,
     pause_for_ai_block = pause_for_ai_block,
     take_ai_block_pause_reason = take_ai_block_pause_reason,
     z_offset = z_offset,

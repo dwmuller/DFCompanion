@@ -739,6 +739,20 @@ impl GameState {
         })
     }
 
+    /// Prepends the cached fortress session to the arguments of a
+    /// session-guarded Lua function. Without a loaded fortress it sends an
+    /// empty session, which Lua rejects, so a stale view of the game fails the
+    /// call instead of reading another activation's data.
+    fn with_session(&self, arguments: Vec<String>) -> Vec<String> {
+        let lifecycle = self.lifecycle.borrow();
+        let session = lifecycle
+            .session_id
+            .clone()
+            .filter(|_| lifecycle.state == LifecycleState::MapLoaded)
+            .unwrap_or_default();
+        std::iter::once(session).chain(arguments).collect()
+    }
+
     /// Runs a blocking query on the blocking thread pool.
     pub async fn run<T, F>(&self, query: F) -> Result<T, String>
     where
@@ -817,7 +831,9 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: "known_creatures".to_owned(),
-                        arguments: details.map(|options| vec![options.to_string()]).unwrap_or_default(),
+                        arguments: self.with_session(
+                            details.map(|options| vec![options.to_string()]).unwrap_or_default(),
+                        ),
                     })
                 },
             )?
@@ -925,7 +941,7 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: "pause_for_ai_block".to_owned(),
-                        arguments: vec![reason.to_owned()],
+                        arguments: self.with_session(vec![reason.to_owned()]),
                     })
                 },
             )?
@@ -1258,14 +1274,14 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: "recent_reports".to_owned(),
-                        arguments: vec![
+                        arguments: self.with_session(vec![
                             limit.to_string(),
                             from.unwrap_or_default().to_owned(),
                             to.unwrap_or_default().to_owned(),
                             category.unwrap_or_default().to_owned(),
                             since_id.map(|id| id.to_string()).unwrap_or_default(),
                             until_id.map(|id| id.to_string()).unwrap_or_default(),
-                        ],
+                        ]),
                     })
                 },
             )?
@@ -1285,7 +1301,7 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: "food_drink_summary".to_owned(),
-                        arguments: Vec::new(),
+                        arguments: self.with_session(Vec::new()),
                     })
                 },
             )?
@@ -1310,7 +1326,7 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: function.to_owned(),
-                        arguments: arguments.clone(),
+                        arguments: self.with_session(arguments.clone()),
                     })
                 },
             )?
@@ -1322,6 +1338,13 @@ impl GameState {
             Some(message) => Err(message.to_owned()),
             None => Ok(value),
         }
+    }
+
+    /// Fails unless the cached fortress session is still the one DFHack has
+    /// loaded. Used before tools that may not make a session-guarded call.
+    pub fn check_session(&self) -> Result<(), String> {
+        self.call_lua_json("verify the fortress session", "check_session", Vec::new())
+            .map(|_| ())
     }
 
     /// Residents matching all the filters in `query`, best first (see
@@ -1700,12 +1723,12 @@ impl GameState {
                     client.core().run_lua(CoreRunLuaRequest {
                         module: LUA_MODULE.to_owned(),
                         function: "search_items".to_owned(),
-                        arguments: vec![
+                        arguments: self.with_session(vec![
                             search.unwrap_or_default().to_owned(),
                             item_type.unwrap_or_default().to_owned(),
                             offset.to_string(),
                             limit.to_string(),
-                        ],
+                        ]),
                     })
                 },
             )?

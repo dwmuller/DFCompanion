@@ -17,6 +17,7 @@ local modules = {
 
 local exports = {
     pause_for_ai_block = modules.lifecycle,
+    check_session = modules.lifecycle,
     take_ai_block_pause_reason = modules.lifecycle,
     z_offset = modules.lifecycle,
     game_date = modules.lifecycle,
@@ -50,10 +51,35 @@ local exports = {
     inspect_tile = modules.tile,
 }
 
+-- Every export takes the expected fortress session as its first argument and
+-- fails if it is no longer current, unless it is listed here. New exports are
+-- therefore guarded by default.
+local session_exempt = {
+    -- Session bootstrap: DFC learns the session from this call.
+    lifecycle_state = true,
+    -- These check the session themselves.
+    load_chat_state = true,
+    save_chat_state = true,
+    -- Used in-process by the plugin, not by DFC over RPC.
+    game_date = true,
+    fortress_name = true,
+    z_offset = true,
+    script_enabled = true,
+    report_entry = true,
+    take_ai_block_pause_reason = true,
+}
+
 for name, module in pairs(exports) do
     local implementation = module[name]
     if implementation == nil then
         error('Missing rpc.dfcompanion export: ' .. name)
+    end
+    if not session_exempt[name] then
+        local unguarded = implementation
+        implementation = function(expected_session, ...)
+            modules.lifecycle.require_session(expected_session)
+            return unguarded(...)
+        end
     end
     _ENV[name] = implementation
 end
