@@ -17,13 +17,29 @@ pub fn tools_tokens_estimate() -> usize {
         .map(|def| {
             def.schema
                 .as_ref()
-                .map_or(0, |s| s.as_str().map_or(0, estimate_token_count))
+                .map_or(0, |schema| estimate_token_count(&schema.to_string()))
                 + def
                     .description
                     .as_ref()
                     .map_or(0, |d| estimate_token_count(d))
         })
         .sum::<usize>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_include_tool_schema_tokens_in_estimate() {
+        let description_tokens = definitions()
+            .iter()
+            .filter_map(|definition| definition.description.as_ref())
+            .map(|description| estimate_token_count(description))
+            .sum::<usize>();
+
+        assert!(tools_tokens_estimate() > description_tokens);
+    }
 }
 
 #[derive(Clone, Debug, Default)]
