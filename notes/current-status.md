@@ -6,11 +6,12 @@
   and all game query and action RPCs. Revisit lifecycle polling next. A future
   foreign MCP client bypasses `rpc.dfcompanion` and will need its own session
   check.
-- AI note recording is planned. The first step stores chat history as a
-  Zstandard-compressed, base64-encoded JSON snapshot in a versioned DFHack
-  site-data table; notes and their tools remain to be implemented. Reading a
-  live legacy snapshot and migration with a mocked store are verified; still
-  verify saving and restoring the new format with a live fortress.
+- Player notes are persisted with chat history in version-2 Zstandard-
+  compressed, base64-encoded JSON snapshots in DFHack site data. Version-1
+  snapshots migrate with an empty notebook. AI note tools remain to be
+  implemented. Reading a live legacy snapshot and migration with a mocked
+  store are verified; still verify saving and restoring the new format with a
+  live fortress.
 - Complete live DFHack acceptance testing for chat persistence: finish a user
   turn, save and reload, verify restored context and dates, repeat after a
   rollback, and switch between fortress saves. Review trace output for save

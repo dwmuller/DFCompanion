@@ -12,6 +12,14 @@ pub enum ChatCommand {
     ListTools,
     /// Describes one AI tool in full.
     DescribeTool { name: String },
+    /// Lists the saved player notebook.
+    ListNotes,
+    /// Displays one saved note.
+    ShowNote { id: String },
+    /// Adds a player-authored note.
+    Remember { text: String },
+    /// Deletes one saved note.
+    Forget { id: String },
 }
 
 impl ChatCommand {
@@ -39,6 +47,24 @@ impl ChatCommand {
                 })
             }
             "tool" => Err("Usage: /tool <tool name>".to_owned()),
+            "notes" if rest.is_empty() => Ok(ChatCommand::ListNotes),
+            "notes" => Err("Usage: /notes".to_owned()),
+            "note" if !rest.is_empty() && !rest.contains(char::is_whitespace) => {
+                Ok(ChatCommand::ShowNote {
+                    id: rest.to_owned(),
+                })
+            }
+            "note" => Err("Usage: /note <id>".to_owned()),
+            "remember" if !rest.is_empty() => Ok(ChatCommand::Remember {
+                text: rest.to_owned(),
+            }),
+            "remember" => Err("Usage: /remember <text>".to_owned()),
+            "forget" if !rest.is_empty() && !rest.contains(char::is_whitespace) => {
+                Ok(ChatCommand::Forget {
+                    id: rest.to_owned(),
+                })
+            }
+            "forget" => Err("Usage: /forget <id>".to_owned()),
             // Add more chat commands here as needed.
             _ => Err(format!("Unknown chat command: /{command}")),
         })
@@ -214,6 +240,41 @@ mod tests {
             "/call t =5",
             "/call t a=1 a=2",
             "/call t {oops",
+        ] {
+            assert!(ChatCommand::parse(text).unwrap().is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn note_commands_parse_and_validate_arguments() {
+        assert_eq!(
+            ChatCommand::parse("/notes"),
+            Some(Ok(ChatCommand::ListNotes))
+        );
+        assert_eq!(
+            ChatCommand::parse("/note n12"),
+            Some(Ok(ChatCommand::ShowNote {
+                id: "n12".to_owned()
+            }))
+        );
+        assert_eq!(
+            ChatCommand::parse("/remember  A reminder for later "),
+            Some(Ok(ChatCommand::Remember {
+                text: "A reminder for later".to_owned()
+            }))
+        );
+        assert_eq!(
+            ChatCommand::parse("/forget n12"),
+            Some(Ok(ChatCommand::Forget {
+                id: "n12".to_owned()
+            }))
+        );
+        for text in [
+            "/notes extra",
+            "/note",
+            "/note n1 extra",
+            "/remember",
+            "/forget",
         ] {
             assert!(ChatCommand::parse(text).unwrap().is_err(), "{text}");
         }

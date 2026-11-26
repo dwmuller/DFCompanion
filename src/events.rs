@@ -2,7 +2,7 @@ use serde::Serialize;
 use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError};
 
 use crate::{
-    ai::History,
+    ai::PersistedChatState,
     game_state::{validate_game_date, LifecycleSnapshot},
 };
 
@@ -66,7 +66,7 @@ pub enum ExternalEvent {
         session_id: String,
         snapshot: LifecycleSnapshot,
     },
-    /// A committed history snapshot that should be coalesced with other
+    /// A committed chat snapshot that should be coalesced with other
     /// pending saves and written to the current fortress.
     ChatStateSaveRequested(ChatSaveRequest),
     /// Completion of one serialized site-persistent save.
@@ -94,7 +94,7 @@ pub struct LoadedChatState {
 pub struct ChatSaveRequest {
     pub generation: u64,
     pub session_id: String,
-    pub history: History,
+    pub state: PersistedChatState,
 }
 
 /// Receives normal events in bounded FIFO order and control events (lifecycle

@@ -18,6 +18,7 @@ use crate::{
     diagnostics::write_ai_failure_dump,
     events::GameEvent,
     game_state::GameState,
+    notes::Notes,
     notifications::NotificationId,
 };
 
@@ -33,13 +34,13 @@ pub const COMPACTION_KEEP_RECENT_MESSAGES: usize = 4;
 pub const COMPACTION_SUMMARY_TOKEN_TARGET: usize = 1_536;
 /// A summarization result larger than this is rejected as a failure, leaving
 /// the previous history unchanged.
-pub const COMPACTION_SUMMARY_TOKEN_HARD_LIMIT: usize = 2_560;
+pub const COMPACTION_SUMMARY_TOKEN_HARD_LIMIT: usize = 5_120;
 const COMPACTION_MAX_OUTPUT_TOKENS: u32 = 2_560;
 const MIN_CURRENT_PROMPT_TOKENS: usize = 1_024;
 const COMPACTION_HISTORY_FRACTION_NUMERATOR: usize = 2;
 const COMPACTION_HISTORY_FRACTION_DENOMINATOR: usize = 3;
 const TOOL_RESULT_OVERHEAD_TOKENS: usize = 128;
-pub const CHAT_HISTORY_SNAPSHOT_VERSION: u32 = 1;
+pub const CHAT_HISTORY_SNAPSHOT_VERSION: u32 = 2;
 const MAX_SNAPSHOT_MESSAGES: usize = MAX_HISTORY_MESSAGES + 2;
 const MAX_SNAPSHOT_SUMMARY_BYTES: usize = 64 * 1024;
 const MAX_SNAPSHOT_MESSAGE_BYTES: usize = 128 * 1024;
@@ -115,6 +116,13 @@ pub struct ChatHistorySnapshot {
     pub game_date: String,
     pub summary: String,
     pub messages: Vec<ChatHistoryMessage>,
+    /// Omitted by version-1 snapshots and restored as an empty notebook.
+    #[serde(default)]
+    pub notes: Notes,
+    /// The next ID is persisted independently of rollback so deleted IDs are
+    /// never reused within a fortress's saved conversation.
+    #[serde(default = "first_note_id")]
+    pub next_note_id: u64,
 }
 
 /// One recent conversation message in a persisted chat snapshot.
@@ -123,6 +131,87 @@ pub struct ChatHistorySnapshot {
 pub struct ChatHistoryMessage {
     role: ChatRole,
     content: String,
+}
+
+fn first_note_id() -> u64 {
+    1
+}
+
+/// All durable chat data stored together in the fortress site-data slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedChatState {
+    pub history: History,
+    pub notes: Notes,
+    pub next_note_id: u64,
+}
+
+impl Default for PersistedChatState {
+    fn default() -> Self {
+        Self {
+            history: History::default(),
+            notes: Notes::default(),
+            next_note_id: first_note_id(),
+        }
+    }
+}
+
+impl PersistedChatState {
+    pub fn to_snapshot_json(&self, game_date: &str) -> Result<String, String> {
+        crate::game_state::validate_game_date(game_date)
+            .map_err(|error| format!("Cannot persist chat history: {error}"))?;
+        let snapshot = self
+            .history
+            .snapshot(game_date, self.notes.clone(), self.next_note_id);
+        validate_snapshot(&snapshot)?;
+        let json = serde_json::to_string(&snapshot)
+            .map_err(|error| format!("Could not serialize chat history: {error}"))?;
+        if json.len() > MAX_SNAPSHOT_BYTES {
+            return Err(format!(
+                "Chat history snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte limit."
+            ));
+        }
+        Ok(json)
+    }
+
+    pub fn from_snapshot_json(json: &str) -> Result<(Self, String), String> {
+        if json.len() > MAX_SNAPSHOT_BYTES {
+            return Err(format!(
+                "Saved chat history exceeds the {MAX_SNAPSHOT_BYTES}-byte limit."
+            ));
+        }
+        let snapshot: ChatHistorySnapshot = serde_json::from_str(json)
+            .map_err(|error| format!("Could not parse saved chat history: {error}"))?;
+        validate_snapshot(&snapshot)?;
+        let saved_game_date = snapshot.game_date.clone();
+        let messages = snapshot
+            .messages
+            .into_iter()
+            .map(|message| ChatMessage {
+                role: message.role,
+                content: message.content,
+            })
+            .collect();
+        Ok((
+            Self {
+                history: History::from_summary_and_recent(snapshot.summary, messages),
+                notes: snapshot.notes,
+                next_note_id: snapshot.next_note_id,
+            },
+            saved_game_date,
+        ))
+    }
+
+    pub(crate) fn exceeds_snapshot_limit(&self) -> bool {
+        let snapshot = self.history.snapshot(
+            MAX_GAME_DATE_FOR_SIZE_ESTIMATE,
+            self.notes.clone(),
+            self.next_note_id,
+        );
+        serde_json::to_vec(&snapshot)
+            .expect("chat history snapshot is serializable")
+            .len()
+            > MAX_SNAPSHOT_BYTES
+    }
 }
 
 /// The conversation history that is sent to the AI ahead of each prompt.
@@ -163,7 +252,7 @@ impl History {
         self.0.messages.len()
     }
 
-    fn snapshot(&self, game_date: &str) -> ChatHistorySnapshot {
+    fn snapshot(&self, game_date: &str, notes: Notes, next_note_id: u64) -> ChatHistorySnapshot {
         ChatHistorySnapshot {
             version: CHAT_HISTORY_SNAPSHOT_VERSION,
             site_id: None,
@@ -178,55 +267,36 @@ impl History {
                     content: message.content.clone(),
                 })
                 .collect(),
+            notes,
+            next_note_id,
         }
     }
 
     pub(crate) fn snapshot_size_bytes(&self) -> usize {
-        serde_json::to_vec(&self.snapshot(MAX_GAME_DATE_FOR_SIZE_ESTIMATE))
-            .expect("chat history snapshot is serializable")
-            .len()
+        serde_json::to_vec(&self.snapshot(
+            MAX_GAME_DATE_FOR_SIZE_ESTIMATE,
+            Notes::default(),
+            first_note_id(),
+        ))
+        .expect("chat history snapshot is serializable")
+        .len()
     }
 
     /// Serializes the durable history for the current game date.
     pub fn to_snapshot_json(&self, game_date: &str) -> Result<String, String> {
-        crate::game_state::validate_game_date(game_date)
-            .map_err(|error| format!("Cannot persist chat history: {error}"))?;
-        let snapshot = self.snapshot(game_date);
-        validate_snapshot(&snapshot)?;
-        let json = serde_json::to_string(&snapshot)
-            .map_err(|error| format!("Could not serialize chat history: {error}"))?;
-        if json.len() > MAX_SNAPSHOT_BYTES {
-            return Err(format!(
-                "Chat history snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte limit."
-            ));
+        PersistedChatState {
+            history: self.clone(),
+            notes: Notes::default(),
+            next_note_id: first_note_id(),
         }
-        Ok(json)
+        .to_snapshot_json(game_date)
     }
 
     /// Restores durable history, rejecting incompatible or
     /// malformed data before it can reach prompt construction.
     pub fn from_snapshot_json(json: &str) -> Result<(Self, String), String> {
-        if json.len() > MAX_SNAPSHOT_BYTES {
-            return Err(format!(
-                "Saved chat history exceeds the {MAX_SNAPSHOT_BYTES}-byte limit."
-            ));
-        }
-        let snapshot: ChatHistorySnapshot = serde_json::from_str(json)
-            .map_err(|error| format!("Could not parse saved chat history: {error}"))?;
-        validate_snapshot(&snapshot)?;
-        let saved_game_date = snapshot.game_date.clone();
-        let messages = snapshot
-            .messages
-            .into_iter()
-            .map(|message| ChatMessage {
-                role: message.role,
-                content: message.content,
-            })
-            .collect();
-        Ok((
-            History::from_summary_and_recent(snapshot.summary, messages),
-            saved_game_date,
-        ))
+        let (state, saved_game_date) = PersistedChatState::from_snapshot_json(json)?;
+        Ok((state.history, saved_game_date))
     }
 
     /// A history made of `summary` plus `messages`. Used by compaction, which
@@ -272,12 +342,29 @@ impl History {
 }
 
 fn validate_snapshot(snapshot: &ChatHistorySnapshot) -> Result<(), String> {
-    // Future schema migrations should be implemented here: recognize an older
-    // supported version, upgrade it, then validate the current representation.
-    if snapshot.version != CHAT_HISTORY_SNAPSHOT_VERSION {
+    if snapshot.version != 1 && snapshot.version != CHAT_HISTORY_SNAPSHOT_VERSION {
         return Err(format!(
             "Saved chat history uses unsupported version {}; expected {}.",
             snapshot.version, CHAT_HISTORY_SNAPSHOT_VERSION
+        ));
+    }
+    if snapshot.version == 1
+        && (snapshot.notes.iter().next().is_some() || snapshot.next_note_id != first_note_id())
+    {
+        return Err("Version-1 chat history cannot contain notes or a note ID.".to_owned());
+    }
+    snapshot
+        .notes
+        .validate()
+        .map_err(|error| format!("Saved chat history contains an invalid notebook: {error}"))?;
+    let minimum_next_id = snapshot
+        .notes
+        .next_id_floor()
+        .map_err(|error| format!("Saved chat history has an invalid notebook: {error}"))?;
+    if snapshot.next_note_id < minimum_next_id {
+        return Err(format!(
+            "Saved chat history's next note ID {} is below the notebook high-water mark {minimum_next_id}.",
+            snapshot.next_note_id
         ));
     }
     crate::game_state::validate_game_date(&snapshot.game_date)
@@ -549,6 +636,7 @@ pub(crate) fn history_exceeds_snapshot_budget(history: &History) -> bool {
     history.snapshot_size_bytes() > HISTORY_SNAPSHOT_BUDGET
 }
 
+#[cfg(test)]
 pub(crate) fn history_exceeds_snapshot_limit(history: &History) -> bool {
     history.snapshot_size_bytes() > MAX_SNAPSHOT_BYTES
 }
@@ -584,6 +672,45 @@ pub fn history_exceeds_hard_limit(history: &History, configuration: &AiConfigura
         > configuration
             .input_token_budget()
             .saturating_sub(fixed_tokens + MIN_CURRENT_PROMPT_TOKENS)
+}
+
+/// Logs the thresholds behind a compaction decision without logging chat text.
+pub(crate) fn trace_compaction_decision(
+    history: &History,
+    configuration: &AiConfiguration,
+    combined_snapshot_over_limit: bool,
+    cooldown_turns: usize,
+    queued_inputs: usize,
+) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    let history_tokens = history_tokens_estimate(history);
+    let fixed_tokens =
+        estimate_token_count(&effective_system_text(configuration)) + tools_tokens_estimate();
+    let history_budget = configuration
+        .input_token_budget()
+        .saturating_sub(fixed_tokens + MIN_CURRENT_PROMPT_TOKENS);
+    let soft_limit = history_budget * COMPACTION_HISTORY_FRACTION_NUMERATOR
+        / COMPACTION_HISTORY_FRACTION_DENOMINATOR;
+    let snapshot_bytes = history.snapshot_size_bytes();
+    tracing::debug!(
+        history_messages = history.len(),
+        history_tokens,
+        history_soft_limit = soft_limit,
+        history_hard_limit = history_budget,
+        history_snapshot_bytes = snapshot_bytes,
+        history_snapshot_budget = HISTORY_SNAPSHOT_BUDGET,
+        message_limit = MAX_HISTORY_MESSAGES,
+        over_message_limit = history.len() > MAX_HISTORY_MESSAGES,
+        over_soft_token_limit = history_tokens > soft_limit,
+        over_hard_token_limit = history_tokens > history_budget,
+        over_history_byte_budget = snapshot_bytes > HISTORY_SNAPSHOT_BUDGET,
+        combined_snapshot_over_limit,
+        cooldown_turns,
+        queued_inputs,
+        "Starting history compaction"
+    );
 }
 
 /// Splits a history into the older messages to summarize and the recent ones
@@ -712,11 +839,21 @@ impl AiRuntime {
         {
             (&[][..], history.messages())
         } else {
+            tracing::debug!(
+                history_messages = history.len(),
+                "History compaction skipped: nothing can be summarized"
+            );
             return Ok(CompactionOutput {
                 history: history.clone(),
                 usage: Vec::new(),
             });
         };
+        tracing::debug!(
+            older_messages = older.len(),
+            retained_messages = recent.len(),
+            previous_summary_bytes = history.summary().len(),
+            "Prepared history compaction"
+        );
         let key = self.configurations.get_api_key(&configuration.id)?;
         self.compact_history_with_key(
             configuration,
@@ -911,6 +1048,14 @@ impl AiRuntime {
         let request_text = compaction_request_text(summary, older);
         let estimated_input_tokens =
             estimate_token_count(COMPACTION_SYSTEM_TEXT) + estimate_token_count(&request_text);
+        tracing::debug!(
+            estimated_input_tokens,
+            input_token_budget = configuration.input_token_budget(),
+            initial_output_limit =
+                COMPACTION_MAX_OUTPUT_TOKENS.min(configuration.max_output_tokens),
+            recovery_output_limit = configuration.max_output_tokens,
+            "Prepared compaction provider request"
+        );
         if estimated_input_tokens > configuration.input_token_budget() {
             return Err(TurnError::Failed(format!(
                 "Compaction input would exceed the configured input budget (estimated {estimated_input_tokens} of {} tokens).",
@@ -961,12 +1106,27 @@ impl AiRuntime {
                 .iter()
                 .filter(|text| !text.trim().is_empty())
                 .join("\n\n");
+            let summary_tokens = estimate_token_count(&new_summary);
+            tracing::debug!(
+                recovery_attempted,
+                stop_reason = response.stop_reason.as_ref().map(|reason| reason.raw()),
+                reported_input_tokens = ?response.usage.prompt_tokens,
+                reported_output_tokens = ?response.usage.completion_tokens,
+                summary_bytes = new_summary.len(),
+                estimated_summary_tokens = summary_tokens,
+                summary_token_limit = COMPACTION_SUMMARY_TOKEN_HARD_LIMIT,
+                "Received compaction provider response"
+            );
             if matches!(
                 response.stop_reason,
                 Some(genai::chat::StopReason::MaxTokens(_))
             ) {
                 if !recovery_attempted {
                     recovery_attempted = true;
+                    tracing::debug!(
+                        recovery_output_limit = configuration.max_output_tokens,
+                        "Compaction hit output limit; retrying with reasoning disabled"
+                    );
                     options = options
                         .with_reasoning_effort(ReasoningEffort::Zero)
                         .with_max_tokens(configuration.max_output_tokens);
@@ -991,10 +1151,11 @@ impl AiRuntime {
                     "Compaction failed: provider returned no summary text (stop reason: {stop_reason})."
                 )));
             }
-            if estimate_token_count(&new_summary) > COMPACTION_SUMMARY_TOKEN_HARD_LIMIT {
-                return Err(TurnError::Failed(
-                    "Compaction failed: summary exceeded the size limit.".to_owned(),
-                ));
+            if summary_tokens > COMPACTION_SUMMARY_TOKEN_HARD_LIMIT {
+                return Err(TurnError::Failed(format!(
+                    "Compaction failed: summary exceeded the size limit (estimated {summary_tokens} tokens; limit {COMPACTION_SUMMARY_TOKEN_HARD_LIMIT}; provider-reported output tokens: {}).",
+                    response.usage.completion_tokens.map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string())
+                )));
             }
             if new_summary.len() > MAX_SNAPSHOT_SUMMARY_BYTES {
                 return Err(TurnError::Failed(format!(

@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     ai_config::AiConfiguration,
+    notes::{Note, NoteSource, Notes},
     notifications::{NotificationHistory, Notifier},
 };
 use axum::{
@@ -220,6 +221,34 @@ fn should_round_trip_summary_and_recent_messages_when_history_was_compacted() {
 }
 
 #[test]
+fn should_round_trip_notes_and_the_next_note_id_in_snapshot_version_two() {
+    let history = history_after_turn(
+        &History::default(),
+        &test_prompt(PromptKind::UserRequest, "What should I remember?"),
+        "The west wall is unfinished.",
+    );
+    let state = PersistedChatState {
+        history,
+        notes: Notes::from_records(vec![Note::new(
+            "n12".to_owned(),
+            "Finish the west wall.".to_owned(),
+            NoteSource::Player,
+        )
+        .unwrap()])
+        .unwrap(),
+        next_note_id: 19,
+    };
+
+    let json = state.to_snapshot_json("251-01-01:0").unwrap();
+    let (restored, date) = PersistedChatState::from_snapshot_json(&json).unwrap();
+
+    assert_eq!(restored, state);
+    assert_eq!(date, "251-01-01:0");
+    assert!(json.contains(r#""version":2"#));
+    assert!(json.contains(r#""next_note_id":19"#));
+}
+
+#[test]
 fn should_measure_serialized_snapshot_size_with_json_escaping() {
     let history = history_after_turn(
         &History::default(),
@@ -261,11 +290,33 @@ fn should_load_legacy_snapshot_with_site_id_and_omit_it_when_saving() {
     }"#;
 
     let (restored, date) = History::from_snapshot_json(json).unwrap();
+    let (state, _) = PersistedChatState::from_snapshot_json(json).unwrap();
 
     assert!(!restored
         .to_snapshot_json(&date)
         .unwrap()
         .contains("site_id"));
+    assert_eq!(state.notes, Notes::default());
+    assert_eq!(state.next_note_id, 1);
+}
+
+#[test]
+fn should_reject_a_snapshot_whose_next_note_id_would_reuse_an_existing_id() {
+    let state = PersistedChatState {
+        history: History::default(),
+        notes: Notes::from_records(vec![Note::new(
+            "n7".to_owned(),
+            "text".to_owned(),
+            NoteSource::Player,
+        )
+        .unwrap()])
+        .unwrap(),
+        next_note_id: 7,
+    };
+
+    let error = state.to_snapshot_json("250-01-01:0").unwrap_err();
+
+    assert!(error.contains("below the notebook high-water mark"));
 }
 
 #[test]
@@ -1209,6 +1260,32 @@ async fn a_compaction_with_no_summary_text_is_a_failure() {
 }
 
 #[tokio::test]
+async fn should_accept_a_summary_between_the_old_and_new_token_limits() {
+    let runtime = make_test_runtime();
+    let summary = "word ".repeat(3_500);
+    let tokens = estimate_token_count(&summary);
+    assert!(tokens > 2_560 && tokens <= 5_120);
+    let (url, _requests, server) = start_mock_provider(vec![summary_response(&summary)]).await;
+    let configuration = compaction_configuration(url);
+    let history = long_history();
+    let (older, recent) = split_for_compaction(&history).unwrap();
+
+    let result = runtime
+        .compact_history_with_key(
+            &configuration,
+            "test-secret",
+            history.summary(),
+            older,
+            recent,
+            &CancellationToken::new(),
+        )
+        .await;
+    server.abort();
+
+    assert_eq!(result.unwrap().history.summary(), summary.trim());
+}
+
+#[tokio::test]
 async fn an_oversized_summary_is_rejected() {
     let runtime = make_test_runtime();
     let huge = "word ".repeat(COMPACTION_SUMMARY_TOKEN_HARD_LIMIT * 4);
@@ -1229,10 +1306,13 @@ async fn an_oversized_summary_is_rejected() {
         .await;
     server.abort();
 
-    assert!(matches!(
-        result,
-        Err(TurnError::Failed(message)) if message.contains("size limit")
-    ));
+    let Err(TurnError::Failed(message)) = result else {
+        panic!("oversized summary should fail");
+    };
+    assert!(message.contains(&format!(
+        "estimated {} tokens; limit {COMPACTION_SUMMARY_TOKEN_HARD_LIMIT}; provider-reported output tokens: 5",
+        estimate_token_count(&huge)
+    )));
 }
 
 #[tokio::test]

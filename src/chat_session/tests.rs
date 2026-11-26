@@ -1,5 +1,6 @@
 use super::*;
 use crate::ai::{COMPACTION_KEEP_RECENT_MESSAGES, DEFAULT_SYSTEM_TEXT, MAX_HISTORY_MESSAGES};
+use crate::notes::{Note, NoteSource, Notes};
 use genai::adapter::AdapterKind;
 
 fn configuration() -> AiConfiguration {
@@ -22,6 +23,7 @@ fn context(now: Instant) -> Context {
         configuration: Ok(Some(configuration())),
         event_turns: true,
         periodic_turns: true,
+        next_note_id: 1,
     }
 }
 
@@ -33,6 +35,7 @@ fn context_with_large_input_budget(now: Instant) -> Context {
         configuration: Ok(Some(configuration)),
         event_turns: true,
         periodic_turns: true,
+        next_note_id: 1,
     }
 }
 
@@ -121,7 +124,7 @@ fn persisted(effects: &[ChatEffect]) -> Vec<&History> {
     effects
         .iter()
         .filter_map(|effect| match effect {
-            ChatEffect::PersistChatState(history) => Some(history),
+            ChatEffect::PersistChatState(state) => Some(&state.history),
             _ => None,
         })
         .collect()
@@ -154,6 +157,120 @@ fn a_user_request_starts_a_turn_right_away() {
     );
     assert_eq!(published(&effects), vec![ChatState::Processing]);
     assert_eq!(session.chat_state(), ChatState::Processing);
+}
+
+#[test]
+fn player_note_changes_persist_with_the_current_note_id_high_water_mark() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let mut context = context(now);
+    context.next_note_id = 2;
+
+    let effects = session.handle(
+        &context,
+        ChatEvent::RememberNote {
+            id: "n1".to_owned(),
+            text: "Finish the west wall.".to_owned(),
+        },
+    );
+
+    assert_eq!(
+        notified(&effects, DisplayMessageKind::Status),
+        vec!["Saved note n1."]
+    );
+    let saved = effects.iter().find_map(|effect| match effect {
+        ChatEffect::PersistChatState(state) => Some(state),
+        _ => None,
+    });
+    let saved = saved.expect("the note is persisted");
+    assert_eq!(saved.next_note_id, 2);
+    assert_eq!(
+        saved.notes.find("n1").map(Note::source),
+        Some(NoteSource::Player)
+    );
+}
+
+#[test]
+fn rollback_restores_companion_notes_but_keeps_current_player_notes_and_id_state() {
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    session.notes = Notes::from_records(vec![
+        Note::new(
+            "n1".to_owned(),
+            "Companion note before the turn.".to_owned(),
+            NoteSource::Companion,
+        )
+        .unwrap(),
+        Note::new(
+            "n2".to_owned(),
+            "Player note before the turn.".to_owned(),
+            NoteSource::Player,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let mut context = context(now);
+    context.next_note_id = 5;
+
+    let started = session.handle(&context, user("Question", 1));
+    let (turn_id, prompt, history, _) = started_turn(&started).unwrap();
+    session.handle(
+        &context,
+        finished(turn_id, answer(&history, &prompt, "Answer")),
+    );
+    session.notes = Notes::from_records(vec![
+        Note::new(
+            "n1".to_owned(),
+            "Player edit to companion note.".to_owned(),
+            NoteSource::Companion,
+        )
+        .unwrap(),
+        Note::new(
+            "n2".to_owned(),
+            "Updated player note.".to_owned(),
+            NoteSource::Player,
+        )
+        .unwrap(),
+        Note::new(
+            "n3".to_owned(),
+            "New player note.".to_owned(),
+            NoteSource::Player,
+        )
+        .unwrap(),
+        Note::new(
+            "n4".to_owned(),
+            "New companion note.".to_owned(),
+            NoteSource::Companion,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+
+    let effects = session.handle(
+        &context,
+        ChatEvent::Rollback {
+            target: NotificationId(1),
+            editor_text: String::new(),
+        },
+    );
+
+    let notes = &session.notes;
+    assert_eq!(
+        notes
+            .iter()
+            .map(|note| (note.id(), note.text()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("n1", "Companion note before the turn."),
+            ("n2", "Updated player note."),
+            ("n3", "New player note.")
+        ]
+    );
+    let saved = effects.iter().find_map(|effect| match effect {
+        ChatEffect::PersistChatState(state) => Some(state),
+        _ => None,
+    });
+    assert_eq!(saved.map(|state| state.next_note_id), Some(5));
 }
 
 #[test]
@@ -860,8 +977,9 @@ fn a_rollback_note_is_sent_once_on_the_next_turn() {
 fn a_restoration_note_is_sent_once_on_the_next_turn() {
     let now = Instant::now();
     let mut session = ChatSession::new(now);
-    session.restore_history(
+    session.restore_chat_state(
         History::with_test_summary("Durable strategy.", &History::default()),
+        Notes::default(),
         "250-01-01:0".to_owned(),
         "250-02-03:400".to_owned(),
     );
@@ -1017,7 +1135,12 @@ fn a_turn_compacts_when_its_snapshot_exceeds_the_byte_limit() {
     assert!(!history_exceeds_snapshot_budget(&history));
 
     let mut session = ChatSession::new(now);
-    session.restore_history(history, "250-01-01:0".to_owned(), "250-01-01:1".to_owned());
+    session.restore_chat_state(
+        history,
+        Notes::default(),
+        "250-01-01:0".to_owned(),
+        "250-01-01:1".to_owned(),
+    );
     let effects = session.handle(&context, user(&large_text, 2));
     let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
     let effects = session.handle(
@@ -1025,7 +1148,7 @@ fn a_turn_compacts_when_its_snapshot_exceeds_the_byte_limit() {
         finished(turn_id, answer(&history, &prompt, "done")),
     );
 
-    assert!(history_exceeds_snapshot_limit(session.history()));
+    assert!(crate::ai::history_exceeds_snapshot_limit(session.history()));
     assert!(started_compaction(&effects).is_some());
     assert!(persisted(&effects).is_empty());
 }
@@ -1125,11 +1248,12 @@ fn hard_limit_should_override_cooldown_even_without_older_messages() {
     configuration.context_window_tokens = 16_384;
     configuration.max_output_tokens = 8_192;
     context.configuration = Ok(Some(configuration));
-    session.restore_history(
+    session.restore_chat_state(
         History::with_test_summary(
             &(0..4_000).map(|i| format!("item{i} ")).collect::<String>(),
             &History::default(),
         ),
+        Notes::default(),
         "250-01-01:0".to_owned(),
         "250-01-02:0".to_owned(),
     );

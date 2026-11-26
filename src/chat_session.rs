@@ -19,12 +19,13 @@ use tracing::instrument;
 
 use crate::{
     ai::{
-        build_prompt, history_exceeds_hard_limit, history_exceeds_snapshot_budget,
-        history_exceeds_snapshot_limit, is_no_comment, should_compact, AiInput, CompactionOutput,
-        History, Prompt, TurnError, TurnOutput,
+        build_prompt, history_exceeds_hard_limit, history_exceeds_snapshot_budget, is_no_comment,
+        should_compact, trace_compaction_decision, AiInput, CompactionOutput, History,
+        PersistedChatState, Prompt, TurnError, TurnOutput,
     },
     ai_config::AiConfiguration,
     events::GameEvent,
+    notes::{Note, NoteSource, Notes},
     notifications::{DisplayMessage, DisplayMessageKind, InputState, NotificationId},
     user_events::{UserEvent, UserEventKind},
 };
@@ -56,6 +57,8 @@ pub struct Context {
     pub event_turns: bool,
     /// Whether the AI gets a turn at regular intervals while the game runs.
     pub periodic_turns: bool,
+    /// The next fortress-scoped note ID, captured when this event is handled.
+    pub next_note_id: u64,
 }
 
 impl Context {
@@ -107,6 +110,10 @@ pub enum ChatEvent {
     CancelUnnotifiedTurn,
     /// The player asked to resume after processing was blocked.
     Resume,
+    /// The player is adding a note through `/remember`.
+    RememberNote { id: String, text: String },
+    /// The player is deleting a note through `/forget`.
+    ForgetNote { id: String },
     /// Roll the conversation back to just before the turn containing `target`.
     /// The AI's history is restored to what it was before that turn, every
     /// input from that turn onward (user requests and game reports, processed or
@@ -149,8 +156,8 @@ pub enum ChatEffect {
         history: History,
         cancel: CancellationToken,
     },
-    /// Persist the committed history as part of the current fortress save.
-    PersistChatState(History),
+    /// Persist the committed history and notebook as one fortress snapshot.
+    PersistChatState(PersistedChatState),
     /// Find out whether the game is running and report it with
     /// [`Event::GameRunning`].
     QueryGameRunning,
@@ -177,6 +184,7 @@ struct InFlight {
     prompt: Prompt,
     cancel: CancellationToken,
     discard_on_cancel: bool,
+    notes_before: Notes,
 }
 
 /// A history-compaction job in flight. At most one of this and [`InFlight`]
@@ -192,6 +200,7 @@ struct InFlightCompaction {
 struct TurnRecord {
     inputs: Vec<AiInput>,
     history_before: History,
+    notes_before: Notes,
 }
 
 impl TurnRecord {
@@ -217,6 +226,7 @@ pub struct ChatSession {
     /// Inputs for the AI, oldest first.
     queue: VecDeque<AiInput>,
     history: History,
+    notes: Notes,
     /// Completed turns, oldest first, for rollback. At most
     /// [`MAX_TURN_RECORDS`].
     records: VecDeque<TurnRecord>,
@@ -255,6 +265,7 @@ impl ChatSession {
         Self {
             queue: VecDeque::new(),
             history: History::default(),
+            notes: Notes::default(),
             records: VecDeque::new(),
             in_flight: None,
             in_flight_compaction: None,
@@ -285,16 +296,30 @@ impl ChatSession {
         &self.history
     }
 
-    /// Installs validated history for the current site and makes the next
+    pub fn notes(&self) -> &Notes {
+        &self.notes
+    }
+
+    /// Installs validated chat state for the current site and makes the next
     /// prompt explain the possible gap between the saved and live game dates.
-    pub fn restore_history(
+    pub fn restore_chat_state(
         &mut self,
         history: History,
+        notes: Notes,
         saved_game_date: String,
         current_game_date: String,
     ) {
         self.history = history;
+        self.notes = notes;
         self.restoration_note_dates = Some((saved_game_date, current_game_date));
+    }
+
+    fn persisted_state(&self, next_note_id: u64) -> PersistedChatState {
+        PersistedChatState {
+            history: self.history.clone(),
+            notes: self.notes.clone(),
+            next_note_id,
+        }
     }
 
     /// Discards all state belonging to the previous fortress. Operation IDs
@@ -419,16 +444,13 @@ impl ChatSession {
             }
             ChatEvent::TurnFinished { turn_id, result } => {
                 tracing::trace!("Handling turn finished event: {turn_id:?}");
-                tracing::trace!("Turn finished with result: {result:?}");
                 self.finish_turn(context, turn_id, result, effects)
             }
             ChatEvent::CompactionFinished {
                 compaction_id,
                 result,
             } => {
-                tracing::trace!(
-                    "Handling compaction finished event: {compaction_id:?}, {result:?}"
-                );
+                tracing::trace!(compaction_id, "Handling compaction finished event");
                 self.finish_compaction(context, compaction_id, result, effects)
             }
             ChatEvent::CancelTurn => {
@@ -452,6 +474,76 @@ impl ChatSession {
             }
             ChatEvent::Resume => {
                 self.blocked = false;
+            }
+            ChatEvent::RememberNote { id, text } => {
+                tracing::debug!(note_id = %id, note_bytes = text.len(), "Processing player note creation");
+                let result = Note::new(id.clone(), text, NoteSource::Player)
+                    .and_then(|note| self.notes.add(note));
+                match result {
+                    Ok(()) => {
+                        let invalid_high_water_mark = self
+                            .notes
+                            .next_id_floor()
+                            .map_or(true, |minimum| context.next_note_id < minimum);
+                        let snapshot_too_large = self
+                            .persisted_state(context.next_note_id)
+                            .exceeds_snapshot_limit();
+                        if invalid_high_water_mark || snapshot_too_large {
+                            self.notes.remove(&id);
+                            effects.push(ChatEffect::Notify(DisplayMessage::new(
+                                DisplayMessageKind::Warning,
+                                if invalid_high_water_mark {
+                                    "The note was not saved because its ID exceeds the persisted high-water mark."
+                                } else {
+                                    tracing::debug!(
+                                        note_id = %id,
+                                        note_count = self.notes.iter().count(),
+                                        next_note_id = context.next_note_id,
+                                        "Player note committed in memory; requesting persistence"
+                                    );
+                                    "The note was not saved because the combined chat snapshot would exceed its size limit."
+                                },
+                            )));
+                        } else {
+                            effects.push(ChatEffect::Notify(DisplayMessage::new(
+                                DisplayMessageKind::Status,
+                                format!("Saved note {id}."),
+                            )));
+                            effects.push(ChatEffect::PersistChatState(
+                                self.persisted_state(context.next_note_id),
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(note_id = %id, "Player note creation rejected");
+                        effects.push(ChatEffect::Notify(DisplayMessage::new(
+                            DisplayMessageKind::Warning,
+                            format!("Note was not saved. {error}"),
+                        )));
+                    }
+                }
+            }
+            ChatEvent::ForgetNote { id } => {
+                if self.notes.remove(&id).is_some() {
+                    tracing::debug!(
+                        note_id = %id,
+                        note_count = self.notes.iter().count(),
+                        "Player note removed in memory; requesting persistence"
+                    );
+                    effects.push(ChatEffect::Notify(DisplayMessage::new(
+                        DisplayMessageKind::Status,
+                        format!("Forgot note {id}."),
+                    )));
+                    effects.push(ChatEffect::PersistChatState(
+                        self.persisted_state(context.next_note_id),
+                    ));
+                } else {
+                    tracing::debug!(note_id = %id, "Player requested removal of a missing note");
+                    effects.push(ChatEffect::Notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        format!("Note {id} was not found."),
+                    )));
+                }
             }
             ChatEvent::Rollback {
                 target,
@@ -490,9 +582,29 @@ impl ChatSession {
                 return;
             }
         };
-        let compact = should_compact(&self.history, &configuration);
+        let state_exceeds_snapshot_limit = self
+            .persisted_state(context.next_note_id)
+            .exceeds_snapshot_limit();
+        let compact = should_compact(&self.history, &configuration) || state_exceeds_snapshot_limit;
         let hard_limit_reached = history_exceeds_hard_limit(&self.history, &configuration);
         if compact && (self.compaction_cooldown_turns == 0 || hard_limit_reached) {
+            tracing::debug!(
+                queued_player_messages = self.pending_user_message_count(),
+                queued_reports = self.pending_report_count(),
+                queued_hidden_inputs = self
+                    .queue
+                    .iter()
+                    .filter(|input| input.notification_id().is_none())
+                    .count(),
+                "Compaction is gating the next AI turn"
+            );
+            trace_compaction_decision(
+                &self.history,
+                &configuration,
+                state_exceeds_snapshot_limit,
+                self.compaction_cooldown_turns,
+                self.queue.len(),
+            );
             self.start_compaction(configuration, effects);
             return;
         }
@@ -526,6 +638,7 @@ impl ChatSession {
             prompt: prompt.clone(),
             cancel: cancel.clone(),
             discard_on_cancel: false,
+            notes_before: self.notes.clone(),
         });
         effects.push(ChatEffect::StartTurn {
             turn_id,
@@ -546,6 +659,7 @@ impl ChatSession {
             compaction_id,
             cancel: cancel.clone(),
         });
+        tracing::debug!(compaction_id, "Dispatching history compaction");
         effects.push(ChatEffect::StartCompaction {
             compaction_id,
             configuration,
@@ -564,6 +678,7 @@ impl ChatSession {
         let Some(InFlight {
             prompt,
             discard_on_cancel,
+            notes_before,
             ..
         }) = self.in_flight.take_if(|f| f.turn_id == turn_id)
         else {
@@ -592,6 +707,7 @@ impl ChatSession {
                 self.records.push_back(TurnRecord {
                     inputs,
                     history_before,
+                    notes_before,
                 });
                 while self.records.len() > MAX_TURN_RECORDS {
                     self.records.pop_front();
@@ -613,10 +729,21 @@ impl ChatSession {
                     usage.iter().map(|u| u.summary()).join("\n"),
                 )));
                 effects.extend(finish_inputs(InputState::Done));
-                if is_user_interaction && !history_exceeds_snapshot_limit(&self.history) {
-                    effects.push(ChatEffect::PersistChatState(self.history.clone()));
+                let state = self.persisted_state(context.next_note_id);
+                if is_user_interaction && !state.exceeds_snapshot_limit() {
+                    effects.push(ChatEffect::PersistChatState(state));
+                } else if is_user_interaction {
+                    effects.push(ChatEffect::Notify(DisplayMessage::new(
+                        DisplayMessageKind::Warning,
+                        "The chat state was not saved because the combined snapshot exceeds its size limit.",
+                    )));
                 }
-                if !self.queue.is_empty() || history_exceeds_snapshot_budget(&self.history) {
+                if !self.queue.is_empty()
+                    || history_exceeds_snapshot_budget(&self.history)
+                    || self
+                        .persisted_state(context.next_note_id)
+                        .exceeds_snapshot_limit()
+                {
                     self.try_start_turn(context, effects);
                 }
             }
@@ -647,10 +774,17 @@ impl ChatSession {
             .in_flight_compaction
             .take_if(|c| c.compaction_id == compaction_id)
         else {
+            tracing::debug!(compaction_id, "Ignoring stale history compaction result");
             return;
         };
         match result {
             Ok(output) => {
+                tracing::debug!(
+                    compaction_id,
+                    history_messages = output.history.len(),
+                    summary_bytes = output.history.summary().len(),
+                    "History compaction completed"
+                );
                 self.history = output.history;
                 self.compaction_cooldown_turns = COMPACTION_COOLDOWN_TURNS;
                 if !output.usage.is_empty() {
@@ -663,13 +797,25 @@ impl ChatSession {
                     DisplayMessageKind::Status,
                     "Conversation history was compacted to stay within the AI context budget.",
                 )));
-                effects.push(ChatEffect::PersistChatState(self.history.clone()));
+                let state = self.persisted_state(context.next_note_id);
+                if state.exceeds_snapshot_limit() {
+                    self.block(
+                        "Chat history and notes still exceed the saved snapshot size limit after compaction."
+                            .to_owned(),
+                        effects,
+                    );
+                    return;
+                }
+                effects.push(ChatEffect::PersistChatState(state));
                 self.try_start_turn(context, effects);
             }
             Err(TurnError::Failed(error)) => {
+                tracing::debug!(compaction_id, "History compaction failed");
                 self.block(format!("AI history compaction failed. {error}"), effects);
             }
-            Err(TurnError::Cancelled) => {}
+            Err(TurnError::Cancelled) => {
+                tracing::debug!(compaction_id, "History compaction cancelled");
+            }
         }
     }
 
@@ -702,6 +848,9 @@ impl ChatSession {
             }
             let dropped_records = self.records.split_off(index);
             self.history = dropped_records[0].history_before.clone();
+            self.notes = self
+                .notes
+                .merged_for_rollback(&dropped_records[0].notes_before);
             let mut inputs: Vec<AiInput> = dropped_records
                 .iter()
                 .flat_map(|record| record.inputs.iter().cloned())
@@ -755,7 +904,9 @@ impl ChatSession {
         )));
         self.rolled_back_note_due = true;
         self.blocked = false;
-        effects.push(ChatEffect::PersistChatState(self.history.clone()));
+        effects.push(ChatEffect::PersistChatState(
+            self.persisted_state(context.next_note_id),
+        ));
         if !self
             .queue
             .iter()

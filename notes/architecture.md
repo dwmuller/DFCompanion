@@ -108,6 +108,12 @@ independent of the console `EnvFilter`, so categories such as AI usage remain
 visible when normal tracing is disabled. Arbitrary application tracing targets
 never enter the conversation UI.
 
+For console diagnostics, set `RUST_LOG=dfcompanion=debug` before starting the
+service. Compaction traces report trigger thresholds, queue and history sizes,
+provider token usage, and summary limits without recording chat or note text.
+Save traces distinguish in-memory note changes from save requests, coalescing,
+and completion.
+
 Geometry is exposed as bounded, read-only observations rather than raw map
 dumps. A geometry overview summarizes the existing player-visible place
 inventory by UI z level. Floor plans request a limited rectangle from DFHack's
@@ -293,18 +299,27 @@ vault. The active conversation history is in memory, with a durable copy in the
 fortress save. The visible notification transcript is process-local and is reset
 when a different fortress activation begins.
 
-Durable AI history is stored in DFHack persistent site data, so it travels with
-the Dwarf Fortress save for that fortress. A versioned Lua table stores the chat
-history as a JSON snapshot compressed with Zstandard and encoded as base64 for
-the string-only RPC. The snapshot contains the save-time game date,
-rolling summary, and retained recent user/assistant messages. Snapshots saved
-by earlier versions also carry a `site_id`, which is ignored on load and not
-written again; the site data slot itself already binds history to a fortress.
-It excludes AI
-configuration, credentials, pending/in-flight inputs, tool results, rollback
-checkpoints, and the visible status/usage/event log. Existing uncompressed
-snapshots are read and migrated on the next save. Decompression is bounded by
-the 1 MiB uncompressed snapshot limit.
+Durable companion chat state is stored in DFHack persistent site data, so it
+travels with the Dwarf Fortress save for that fortress. A versioned Lua table
+stores a JSON snapshot compressed with Zstandard and encoded as base64 for the
+string-only RPC. Snapshot version 2 contains the save-time game date, rolling
+summary, retained recent user/assistant messages, the player notebook, and its
+next note ID. Version-1 history snapshots migrate to version 2 with an empty
+notebook. Snapshots saved by earlier versions also carry a `site_id`, which is
+ignored on load and not written again; the site data slot itself already binds
+history to a fortress. The snapshot excludes AI configuration, credentials,
+pending/in-flight inputs, tool results, rollback checkpoints, and the visible
+status/usage/event log. Existing uncompressed snapshots are read and migrated
+on the next save. Decompression is bounded by the 1 MiB uncompressed snapshot
+limit.
+
+Player commands `/notes`, `/note <id>`, `/remember <text>`, and `/forget <id>`
+manage notes in the same snapshot as history. Notes have stable IDs of the
+form `n1`; the next ID is persisted and is not rewound by rollback. The current
+notebook is limited to 200 notes, 16 KiB per note, and 256 KiB serialized
+notebook data. Rollback keeps current player-sourced notes and restores
+companion-sourced notes from before the rolled-back turn, so edits or deletions
+of companion notes do not survive rollback.
 
 After a successful user turn, successful compaction, or rollback, `ChatSession`
 emits a persistence effect. The worker serializes saves, keeping at most one in

@@ -46,6 +46,8 @@ pub struct CompanionApp {
     pub ai: ai::AiRuntime,
     /// The state of the AI conversation. All changes go through [`Self::dispatch`].
     session: Mutex<ChatSession>,
+    /// Fortress-scoped next note ID. Rollback never restores this counter.
+    next_note_id: AtomicU64,
     /// Distinguishes restore completions from later fortress activations.
     lifecycle_generation: AtomicU64,
     lifecycle_resync_in_flight: AtomicBool,
@@ -101,6 +103,7 @@ impl CompanionApp {
                 history,
                 ai,
                 session: Mutex::new(ChatSession::new(Instant::now())),
+                next_note_id: AtomicU64::new(1),
                 lifecycle_generation: AtomicU64::new(0),
                 lifecycle_resync_in_flight: AtomicBool::new(false),
                 event_turns: Default::default(),
@@ -276,6 +279,7 @@ impl CompanionApp {
             configuration: self.ai.configurations.active(),
             event_turns: self.event_turns_enabled(),
             periodic_turns: self.periodic_turns_enabled(),
+            next_note_id: self.next_note_id.load(Ordering::Relaxed),
         }
     }
 
@@ -329,7 +333,7 @@ impl CompanionApp {
             // [`Self::rollback`], before the rest reach here. This arm keeps
             // the match exhaustive.
             ChatEffect::ReplyEditorText(_) => {}
-            ChatEffect::PersistChatState(history) => {
+            ChatEffect::PersistChatState(state) => {
                 let lifecycle = self.lifecycle.borrow();
                 let Some(session_id) = lifecycle
                     .session_id
@@ -344,7 +348,7 @@ impl CompanionApp {
                 let request = ChatSaveRequest {
                     generation: self.lifecycle_generation.load(Ordering::Relaxed),
                     session_id,
-                    history,
+                    state,
                 };
                 if let Err(error) = self.queue_tx.try_send_chat_state_save_requested(request) {
                     tracing::warn!("{error}");
@@ -516,6 +520,10 @@ impl CompanionApp {
                                     ));
                                 } else if self.chat_save_request_is_current(&request) {
                                     if save_in_flight.is_some() {
+                                        debug!(
+                                            replacing_pending = pending_save.is_some(),
+                                            "Coalescing pending chat state save"
+                                        );
                                         pending_save = Some(request);
                                     } else {
                                         let save_id = next_save_id;
@@ -536,6 +544,13 @@ impl CompanionApp {
                                     continue;
                                 }
                                 save_in_flight = None;
+                                debug!(
+                                    save_id,
+                                    generation,
+                                    success = result.is_ok(),
+                                    pending_save = pending_save.is_some(),
+                                    "Chat state save completed"
+                                );
                                 if generation
                                     == self.lifecycle_generation.load(Ordering::Relaxed)
                                     && self.lifecycle.borrow().session_id.as_deref() == Some(&session_id)
@@ -632,6 +647,7 @@ impl CompanionApp {
                         let mut session = self.session.lock().unwrap();
                         session.reset_for_fortress(Instant::now());
                     }
+                    self.next_note_id.store(1, Ordering::Relaxed);
                     self.history.clear();
                     self.chat_state.send_replace(ChatState::Idle);
                     self.rollback_floor.send_replace(None);
@@ -754,9 +770,17 @@ impl CompanionApp {
     }
 
     fn start_chat_save(self: &Arc<Self>, save_id: u64, request: ChatSaveRequest) {
+        debug!(
+            save_id,
+            generation = request.generation,
+            history_messages = request.state.history.len(),
+            note_count = request.state.notes.iter().count(),
+            next_note_id = request.state.next_note_id,
+            "Starting chat state save"
+        );
         let this = self.clone();
         tokio::spawn(async move {
-            let history = request.history;
+            let state = request.state;
             let session_id = request.session_id;
             let generation = request.generation;
             let result = this
@@ -765,8 +789,13 @@ impl CompanionApp {
                     let session_id = session_id.clone();
                     move |game| {
                         let game_date = game.game_date()?;
-                        let state = history.to_snapshot_json(&game_date)?;
-                        game.save_chat_state(&session_id, &state)
+                        let snapshot = state.to_snapshot_json(&game_date)?;
+                        debug!(
+                            save_id,
+                            snapshot_bytes = snapshot.len(),
+                            "Serialized chat state for saving"
+                        );
+                        game.save_chat_state(&session_id, &snapshot)
                     }
                 })
                 .await;
@@ -801,10 +830,22 @@ impl CompanionApp {
                 ));
                 Ok(())
             }
-            Ok(Some(saved)) => match ai::History::from_snapshot_json(&saved.state) {
-                Ok((history, saved_game_date)) => {
-                    self.session.lock().unwrap().restore_history(
-                        history,
+            Ok(Some(saved)) => match ai::PersistedChatState::from_snapshot_json(&saved.state) {
+                Ok((state, saved_game_date)) => {
+                    debug!(
+                        generation,
+                        history_messages = state.history.len(),
+                        summary_bytes = state.history.summary().len(),
+                        note_count = state.notes.iter().count(),
+                        next_note_id = state.next_note_id,
+                        snapshot_bytes = saved.state.len(),
+                        "Restored chat state"
+                    );
+                    self.next_note_id
+                        .store(state.next_note_id, Ordering::Relaxed);
+                    self.session.lock().unwrap().restore_chat_state(
+                        state.history,
+                        state.notes,
                         saved_game_date.clone(),
                         saved.current_game_date.clone(),
                     );
@@ -845,6 +886,7 @@ impl CompanionApp {
         if self.has_active_configuration()
             && self.lifecycle.borrow().state == LifecycleState::MapLoaded
         {
+            debug!("Queuing automatic fortress orientation after chat restore");
             // The orientation prompt is not shown to the player, so it has no
             // notification.
             self.dispatch(chat_session::ChatEvent::UserRequest {
@@ -928,7 +970,7 @@ fn blocked_warning_message(reason: &str, pause_result: Result<bool, String>) -> 
 }
 
 async fn run_chat_command(
-    state: &CompanionApp,
+    state: &Arc<CompanionApp>,
     command: Result<chat_commands::ChatCommand, String>,
 ) {
     match command {
@@ -957,11 +999,87 @@ async fn run_chat_command(
                 ai_tools::describe_tool(&name).unwrap_or_else(|error| error),
             ));
         }
+        Ok(chat_commands::ChatCommand::ListNotes) => {
+            let text = if state.lifecycle.borrow().state != LifecycleState::MapLoaded {
+                "Notes are available only while a fortress is loaded.".to_owned()
+            } else {
+                let notes = state.session.lock().unwrap().notes().clone();
+                if notes.iter().next().is_none() {
+                    "No notes yet. Use /remember <text> to add one.".to_owned()
+                } else {
+                    notes
+                        .iter()
+                        .map(|note| {
+                            let preview = note.text().lines().next().unwrap_or_default();
+                            let preview: String = preview.chars().take(120).collect();
+                            format!("{}: {preview}", note.id())
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            };
+            state
+                .notifier
+                .notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, text));
+        }
+        Ok(chat_commands::ChatCommand::ShowNote { id }) => {
+            let text = if state.lifecycle.borrow().state != LifecycleState::MapLoaded {
+                "Notes are available only while a fortress is loaded.".to_owned()
+            } else {
+                let note = state.session.lock().unwrap().notes().find(&id).cloned();
+                note.map_or_else(
+                    || format!("Note {id} was not found."),
+                    |note| format!("{}:\n{}", note.id(), note.text()),
+                )
+            };
+            state
+                .notifier
+                .notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, text));
+        }
+        Ok(chat_commands::ChatCommand::Remember { text }) => {
+            if state.lifecycle.borrow().state != LifecycleState::MapLoaded {
+                state.notifier.notify(DisplayMessage::new(
+                    DisplayMessageKind::Warning,
+                    "Notes can only be changed while a fortress is loaded.",
+                ));
+            } else {
+                match state.allocate_note_id() {
+                    Ok(id) => state.dispatch(chat_session::ChatEvent::RememberNote { id, text }),
+                    Err(error) => {
+                        state
+                            .notifier
+                            .notify(DisplayMessage::new(DisplayMessageKind::Warning, error));
+                    }
+                }
+            }
+        }
+        Ok(chat_commands::ChatCommand::Forget { id }) => {
+            if state.lifecycle.borrow().state != LifecycleState::MapLoaded {
+                state.notifier.notify(DisplayMessage::new(
+                    DisplayMessageKind::Warning,
+                    "Notes can only be changed while a fortress is loaded.",
+                ));
+            } else {
+                state.dispatch(chat_session::ChatEvent::ForgetNote { id });
+            }
+        }
         Err(error) => {
             state
                 .notifier
                 .notify(DisplayMessage::new(DisplayMessageKind::Diagnostic, error));
         }
+    }
+}
+
+impl CompanionApp {
+    fn allocate_note_id(&self) -> Result<String, String> {
+        let id = self
+            .next_note_id
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .map_err(|_| "The note ID space is exhausted.".to_owned())?;
+        Ok(format!("n{id}"))
     }
 }
 

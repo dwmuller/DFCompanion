@@ -627,6 +627,38 @@ async fn worker_runs_chat_commands_without_involving_the_ai() {
 }
 
 #[tokio::test]
+async fn player_note_commands_enqueue_the_combined_state_without_reusing_deleted_ids() {
+    let (app, mut queue_rx) = CompanionApp::new();
+    app.update_lifecycle(
+        true,
+        true,
+        Some("Test fortress".to_owned()),
+        Some("test-session".to_owned()),
+    );
+
+    app.handle_external_event(ExternalEvent::UserInput(
+        "/remember Finish the west wall.".to_owned(),
+    ))
+    .await;
+    let ExternalEvent::ChatStateSaveRequested(first_save) = queue_rx.try_recv().unwrap() else {
+        panic!("remember should request a save");
+    };
+    assert_eq!(first_save.state.next_note_id, 2);
+    assert_eq!(
+        first_save.state.notes.find("n1").map(|note| note.text()),
+        Some("Finish the west wall.")
+    );
+
+    app.handle_external_event(ExternalEvent::UserInput("/forget n1".to_owned()))
+        .await;
+    let ExternalEvent::ChatStateSaveRequested(second_save) = queue_rx.try_recv().unwrap() else {
+        panic!("forget should request a save");
+    };
+    assert_eq!(second_save.state.next_note_id, 2);
+    assert!(second_save.state.notes.find("n1").is_none());
+}
+
+#[tokio::test]
 async fn pending_ai_inputs_carry_the_ids_of_their_notifications() {
     let (app, queue_rx) = CompanionApp::new();
     let mut notifications = app.history.subscribe(None).1;
