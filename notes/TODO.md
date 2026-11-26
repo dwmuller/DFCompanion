@@ -27,10 +27,9 @@ prepare underlying infrastructure.
   string format (for example `YYYYY-MM-DD:TTTT`) so that dates sort correctly as
   plain strings. The current `YYYY-MM-DD[:T]` string has variable-width parts.
 - ? Refactor AI tools as an MCP service.
-- Keep the split `rpc.dfcompanion` domain modules cohesive and dependencies
-  acyclic as game tools grow; prefer one domain module over expanding the
-  facade. The event/lifecycle HTTP bridge remains in
-  `lua/plugin/dfcompanion.lua`.
+- ? Provide a static reference fortress for live tests, so assertions about
+  specific fortress content (for example named stockpiles) can be strict
+  instead of being skipped when the loaded fortress lacks that content.
 
 ## AI interaction
 
