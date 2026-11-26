@@ -12,7 +12,7 @@ Command: "dfcompanion"
     Connects Dwarf Fortress to the local DFCompanion service.
 
 Forwards announced game reports and lifecycle changes over localhost, while the
-service uses a separate read-only RPC module to inspect fortress state. If event
+service uses a separate RPC module to inspect fortress state. If event
 delivery fails, DFCompanion pauses the game and retains the failed event for
 retry.
 
@@ -28,6 +28,7 @@ local json = require('json')
 local luasocket = require('plugins.luasocket')
 local eventful = require('plugins.eventful')
 local rpc = require('rpc.dfcompanion')
+local lifecycle = require('dfcompanion.internal.lifecycle')
 
 local COMPANION_HOST = '127.0.0.1'
 local COMPANION_PORT = 3000
@@ -36,8 +37,9 @@ local STATE_KEY = 'dfcompanion'
 -- Prefix of this script's own announcements, so they are never forwarded.
 local MESSAGE_PREFIX = 'DFCompanion:'
 
-enabled = enabled or false
 pending_event = pending_event or nil
+local site_state_loaded = false
+local on_companion_contact
 
 local function http_post(path, body)
     local client = luasocket.tcp:connect(COMPANION_HOST, COMPANION_PORT)
@@ -116,6 +118,7 @@ local function submit_event(event)
     if not result or type(result.status) ~= 'string' then
         error('DFCompanion returned an invalid response (HTTP ' .. tostring(status_code) .. ').', 0)
     end
+    on_companion_contact()
     if result.status ~= 'accepted' then
         error('DFCompanion did not accept an event (HTTP ' .. tostring(status_code) .. '): ' ..
             tostring(result.message), 0)
@@ -125,18 +128,53 @@ end
 -- Reports the game's loading state to DFCompanion. Raises an error on failure;
 -- the caller decides whether that is worth surfacing.
 local function submit_lifecycle(payload)
-    local ok, status_code = pcall(http_post, '/api/plugin/lifecycle', payload)
+    local ok, status_code, result = pcall(http_post, '/api/plugin/lifecycle', payload)
     if not ok then
         error('Could not report game state to DFCompanion: ' .. tostring(status_code), 0)
+    end
+    if not result or type(result.status) ~= 'string' then
+        error('DFCompanion returned an invalid lifecycle response (HTTP ' .. tostring(status_code) .. ').', 0)
+    end
+    on_companion_contact()
+    if result.status ~= 'accepted' then
+        error('DFCompanion did not accept game state (HTTP ' .. tostring(status_code) .. '): ' ..
+            tostring(result.message), 0)
+    end
+end
+
+local function status_event(is_enabled)
+    return {
+        date = rpc.game_date(),
+        category = 'test',
+        text = is_enabled
+            and 'DFHack Lua connection test; DFCompanion is enabled and forwarding announcements.'
+            or 'DFCompanion is disabled; game announcements are not being forwarded.',
+    }
+end
+
+-- Like submit_event for a status message, but only logs a failure: it must not
+-- pause the game or retain a pending event.
+local function announce_status(is_enabled)
+    local ok, err = pcall(submit_event, status_event(is_enabled))
+    if not ok then
+        dfhack.printerr(MESSAGE_PREFIX .. ' could not announce the plugin state: ' .. tostring(err))
     end
 end
 
 local function disable()
-    enabled = false
+    local announce = false
+    if dfhack.world.isFortressMode() and dfhack.isSiteLoaded() then
+        announce = enabled ~= false
+        lifecycle.save_enabled_state(false)
+        enabled = false
+    else
+        enabled = nil
+    end
     pending_event = nil
     dfhack.onStateChange[STATE_KEY] = nil
     eventful.onReport[STATE_KEY] = nil
     print('DFCompanion Lua script disabled.')
+    if announce then announce_status(false) end
 end
 
 -- Pauses the game and notifies the player with a one-line alert badge.
@@ -159,7 +197,7 @@ end
 -- Retries the report that caused the service-outage pause once the player
 -- unpauses. If the service is still unavailable, report_failure pauses again.
 local function retry_pending_event()
-    if not enabled or not pending_event then
+    if enabled == false or not pending_event then
         return
     end
     local event = pending_event
@@ -185,25 +223,14 @@ end
 local LIFECYCLE_KEY = 'dfcompanion_lifecycle'
 
 local function push_lifecycle_state()
-    local ok, err = pcall(function() submit_lifecycle(rpc.lifecycle_state()) end)
+    local ok, err = pcall(function() submit_lifecycle(lifecycle.lifecycle_state()) end)
     if not ok then
         dfhack.printerr(MESSAGE_PREFIX .. ' could not report game state: ' .. tostring(err))
     end
 end
 
-local function on_lifecycle_change(state)
-    if state == SC_WORLD_LOADED or state == SC_WORLD_UNLOADED
-        or state == SC_MAP_LOADED or state == SC_MAP_UNLOADED then
-        push_lifecycle_state()
-    end
-end
-
-dfhack.onStateChange[LIFECYCLE_KEY] = on_lifecycle_change
-
 local function on_state_change(state)
-    if state == SC_MAP_UNLOADED then
-        disable()
-    elseif state == SC_PAUSED then
+    if state == SC_PAUSED then
         local reason = rpc.take_ai_block_pause_reason()
         if reason ~= '' then
             report_ai_block_pause(reason)
@@ -226,9 +253,77 @@ local function on_report(report_id)
     local event = rpc.report_entry(report)
     local ok, err = pcall(submit_event, event)
     if not ok then
-        report_failure(err, event)
+        if enabled == nil then
+            dfhack.printerr(MESSAGE_PREFIX .. ' could not send an event while unconfigured: ' .. tostring(err))
+        else
+            report_failure(err, event)
+        end
     end
 end
+
+local function start_forwarding()
+    eventful.enableEvent(eventful.eventType.REPORT, 1)
+    eventful.onReport[STATE_KEY] = on_report
+    dfhack.onStateChange[STATE_KEY] = on_state_change
+end
+
+on_companion_contact = function()
+    if enabled ~= nil or not site_state_loaded
+        or not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
+        return
+    end
+    lifecycle.save_enabled_state(true)
+    enabled = true
+    announce_status(true)
+end
+
+function onCompanionContact()
+    on_companion_contact()
+end
+
+local function restore_enabled_state()
+    if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
+        return
+    end
+    local ok, result = pcall(function()
+        local restored = lifecycle.load_enabled_state()
+        if restored ~= nil then lifecycle.save_enabled_state(restored) end
+        return restored
+    end)
+    if not ok then
+        dfhack.printerr(MESSAGE_PREFIX .. ' could not restore enabled state: ' .. tostring(result))
+        return
+    end
+    site_state_loaded = true
+    enabled = result
+    if enabled == false then
+        announce_status(false)
+    else
+        start_forwarding()
+        if enabled then announce_status(true) end
+    end
+end
+
+local function on_lifecycle_change(state)
+    if state == SC_MAP_UNLOADED then
+        if pending_event then
+            dfhack.printerr(MESSAGE_PREFIX .. ' discarded an undelivered event on fortress unload.')
+        end
+        enabled = nil
+        site_state_loaded = false
+        pending_event = nil
+        dfhack.onStateChange[STATE_KEY] = nil
+        eventful.onReport[STATE_KEY] = nil
+    elseif state == SC_MAP_LOADED then
+        restore_enabled_state()
+    end
+    if state == SC_WORLD_LOADED or state == SC_WORLD_UNLOADED
+        or state == SC_MAP_LOADED or state == SC_MAP_UNLOADED then
+        push_lifecycle_state()
+    end
+end
+
+dfhack.onStateChange[LIFECYCLE_KEY] = on_lifecycle_change
 
 local function enable()
     if not dfhack.world.isFortressMode() or not dfhack.isSiteLoaded() then
@@ -236,16 +331,12 @@ local function enable()
     end
 
     if not enabled then
+        lifecycle.save_enabled_state(true)
         enabled = true
-        eventful.enableEvent(eventful.eventType.REPORT, 1)
-        eventful.onReport[STATE_KEY] = on_report
-        dfhack.onStateChange[STATE_KEY] = on_state_change
+        site_state_loaded = true
+        start_forwarding()
 
-        local event = {
-            date = rpc.game_date(),
-            category = 'test',
-            text = 'DFHack Lua connection test; DFCompanion is enabled and forwarding announcements.',
-        }
+        local event = status_event(true)
         local ok, err = pcall(submit_event, event)
         if not ok then
             report_failure(err, event)
@@ -258,12 +349,27 @@ local function enable()
 end
 
 function isEnabled()
-    return enabled
+    return enabled == true
 end
 
-if enabled then
-    eventful.onReport[STATE_KEY] = on_report
-    dfhack.onStateChange[STATE_KEY] = on_state_change
+if dfhack.world.isFortressMode() and dfhack.isSiteLoaded() then
+    if enabled == nil then
+        restore_enabled_state()
+    else
+        lifecycle.save_enabled_state(enabled)
+        site_state_loaded = true
+        if enabled then
+            start_forwarding()
+        else
+            dfhack.onStateChange[STATE_KEY] = nil
+            eventful.onReport[STATE_KEY] = nil
+        end
+    end
+else
+    enabled = nil
+    pending_event = nil
+    dfhack.onStateChange[STATE_KEY] = nil
+    eventful.onReport[STATE_KEY] = nil
 end
 
 if dfhack_flags.module then
@@ -278,7 +384,8 @@ if dfhack_flags and dfhack_flags.enable then
         disable()
     end
 elseif args[1] == 'status' then
-    print(('DFCompanion Lua script is %s.'):format(enabled and 'enabled' or 'disabled'))
+    local state = enabled == nil and 'unconfigured' or (enabled and 'enabled' or 'disabled')
+    print(('DFCompanion Lua script is %s.'):format(state))
 elseif args[1] == 'disable' then
     disable()
 elseif args[1] == 'enable' or #args == 0 then

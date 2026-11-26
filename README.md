@@ -23,10 +23,21 @@ DFCompanion and DFHack accept connections from localhost only; there is no share
 When enabled, `dfcompanion.lua` listens for DFHack `REPORT` events and forwards report text to DFCompanion. Only announcements are forwarded, in the same format as the `get_recent_reports` tool (game date, type, category, text). Forwarding is synchronous. If sending fails, the script retains the undelivered report, stays enabled, pauses the game, and writes the reason to the DFHack log. Fix or restart DFCompanion and unpause; the plugin retries that report and resumes forwarding, or pauses again if the service is still unavailable. Run `disable dfcompanion` to stop forwarding. If AI processing becomes blocked while the game is running, DFCompanion pauses it and the script logs the reason without opening a dialog.
 
 - `disable dfcompanion` stops forwarding reports.
-- `enable dfcompanion` re-enables it during the current DFHack session.
+- `enable dfcompanion` re-enables it for the current fortress.
 - `dfcompanion status` displays its current in-memory state.
 
-The enabled state is not saved; it resets when the map unloads or DFHack exits. If the bounded event queue fills, the script retains the report, remains enabled, pauses the game, and reports the condition.
+The enabled state is saved per fortress and restored when the script is loaded.
+A fortress with no companion site data stays unconfigured until it contacts the
+service, then automatically enables forwarding. Failed announcements while
+unconfigured are logged and skipped without pausing. Older site data without
+an enabled setting defaults to enabled. Each change to enabled or disabled
+(including an enabled or disabled state restored on fortress load, or automatic enabling)
+posts a status message to the conversation; failures to post it are only logged. The service loads the script when it
+polls DFHack; to load it at DFHack startup instead, add `dfcompanion status`
+to a `dfhack-config/init/dfhack*.init` file. On fortress unload, an undelivered
+report is discarded with a warning rather than forwarded to another fortress.
+If the bounded event queue fills, the script retains the report, remains
+enabled, pauses the game, and reports the condition.
 
 ## AI providers and privacy
 

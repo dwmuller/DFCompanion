@@ -9,17 +9,9 @@ improving maintainability or comprehension of the code. As other items get
 accepted and thought through, they may get broken down into items here to
 prepare underlying infrastructure.
 
-- **P0:** Preserve the DFCompanion plugin's enabled/disabled state across
-  fortress unload and reload instead of disabling it on map unload. Verify
-  DFHack's state persistence across game restarts and handle pending events
-  safely without forwarding them into a different fortress.
-  - Note that this merely requires saving the enabled state with the plugin's
-    site data. Thus the enabled state is per fortress.
-  - ? Consider automatically enabling when contact with a DFC process is
-    evident.
-- Reviewing game state polling. In general it should be unnecessary: On DFC
-  startup it can be directly requested, and on fortress load DFC will be told by
-  the plugin.
+- Review game state polling. In general it should be unnecessary: On DFC startup
+  it can be directly requested, and on fortress load DFC will be told by the
+  plugin.
   - ? There might be some value in polling only when contact with the plugin has
     been lost.
 - Continue investigating "AI history compaction failed" events, they're

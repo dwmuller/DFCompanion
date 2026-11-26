@@ -292,6 +292,20 @@ Restored history is conversation data, not system text; its
 saved and current game dates are inserted once in the next prompt so the model
 knows the context may be stale.
 
+The plugin's enabled state is stored in the same site data table as an
+`enabled` boolean, so it is per fortress and survives reloads and restarts. The
+plugin's state is nil ("unconfigured or no fortress loaded"), true, or false;
+`isEnabled()` is true only for true. Map load restores it: missing site data
+leaves it nil, and site data without an `enabled` field means true. While nil
+the plugin still forwards reports (failures are logged, not paused) and enables
+itself and persists that on contact with DFCompanion in either direction (an
+event or lifecycle POST accepted, or an RPC poll). Map unload resets it to nil
+and discards any undelivered event rather than forwarding it into another
+fortress. Every transition to enabled or disabled, including restoring a saved
+state on load, posts a status event to the conversation; failure to post it is
+only logged. The `enabled` field is stripped before chat state is returned to
+Rust, whose snapshot type rejects unknown fields.
+
 ## Learning goals
 
 The project should expose, rather than hide, important AI-agent concepts: tool

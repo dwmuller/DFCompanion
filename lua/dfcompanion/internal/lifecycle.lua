@@ -69,11 +69,17 @@ local function read_saved_state()
     if type(state) ~= 'table' then
         error('Saved companion state is not a table.')
     end
+    if state.enabled ~= nil and type(state.enabled) ~= 'boolean' then
+        error('Saved companion state has an invalid enabled flag.')
+    end
     if state.version == 1 then
         return state, raw
     end
     if state.version ~= SAVED_STATE_VERSION then
         error('Saved companion state has an unsupported version: ' .. tostring(state.version))
+    end
+    if state.chat_history == nil and state.enabled ~= nil then
+        return state
     end
     if type(state.chat_history) ~= 'string' or state.chat_history == '' then
         error('Saved companion state has invalid chat history.')
@@ -88,8 +94,31 @@ local function load_chat_state(expected_site_id)
     require_chat_site(expected_site_id)
     local state, legacy = read_saved_state()
     if not state then return '' end
-    if legacy then return 'json:' .. legacy end
+    if legacy then
+        if state.enabled == nil then return 'json:' .. legacy end
+        state.enabled = nil
+        return 'json:' .. json.encode(state, {pretty = false})
+    end
+    if state.chat_history == nil then return '' end
     return 'zstd:' .. state.chat_history
+end
+
+local function load_enabled_state()
+    require_chat_site()
+    local saved = read_saved_state()
+    if not saved then return nil end
+    if saved.enabled == nil then return true end
+    return saved.enabled
+end
+
+local function save_enabled_state(enabled)
+    require_chat_site()
+    if type(enabled) ~= 'boolean' then
+        error('Companion enabled state must be a boolean.')
+    end
+    local saved = read_saved_state() or {version = SAVED_STATE_VERSION}
+    saved.enabled = enabled
+    dfhack.persistent.saveSiteData(CHAT_STATE_KEY, saved)
 end
 
 local function save_chat_state(expected_site_id, state)
@@ -104,7 +133,7 @@ local function save_chat_state(expected_site_id, state)
     end
     local saved, legacy = read_saved_state()
     if not saved or legacy then
-        saved = {version = SAVED_STATE_VERSION}
+        saved = {version = SAVED_STATE_VERSION, enabled = saved and saved.enabled}
     end
     saved.chat_history = state
     dfhack.persistent.saveSiteData(CHAT_STATE_KEY, saved)
@@ -143,6 +172,8 @@ return {
     fortress_name = fortress_name,
     load_chat_state = load_chat_state,
     save_chat_state = save_chat_state,
+    load_enabled_state = load_enabled_state,
+    save_enabled_state = save_enabled_state,
     lifecycle_state = lifecycle_state,
     script_enabled = script_enabled,
 }

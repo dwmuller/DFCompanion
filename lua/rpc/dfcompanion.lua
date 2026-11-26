@@ -58,4 +58,11 @@ for name, module in pairs(exports) do
     _ENV[name] = implementation
 end
 
+-- A lifecycle poll also establishes contact with the companion service.
+function lifecycle_state()
+    local state = modules.lifecycle.lifecycle_state()
+    reqscript('dfcompanion').onCompanionContact()
+    return state
+end
+
 return _ENV
