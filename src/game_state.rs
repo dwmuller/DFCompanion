@@ -329,10 +329,6 @@ fn restore_workshop_lists(value: &mut Value) {
         for workshop in workshops {
             restore_stockpile_links(workshop);
             restore_empty_list(&mut workshop["jobs"]);
-            restore_empty_list(&mut workshop["give_to_stockpiles"]);
-            restore_empty_list(&mut workshop["take_from_stockpiles"]);
-            restore_empty_list(&mut workshop["give_to_workshops"]);
-            restore_empty_list(&mut workshop["take_from_workshops"]);
             if let Some(jobs) = workshop["jobs"].as_array_mut() {
                 for job in jobs {
                     restore_empty_list(&mut job["wait_reasons"]);

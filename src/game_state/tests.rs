@@ -247,6 +247,54 @@ fn empty_workshop_job_wait_reasons_are_restored() {
 }
 
 #[test]
+fn should_preserve_nested_workshop_links_without_adding_top_level_fields() {
+    let mut result = json!({
+        "workshops": [{
+            "jobs": {},
+            "stockpile_links": {
+                "give_to_stockpiles": {},
+                "take_from_stockpiles": {},
+                "give_to_workshops": {},
+                "take_from_workshops": {}
+            }
+        }, {
+            "jobs": [],
+            "stockpile_links": {
+                "give_to_stockpiles": [{"id": 1}],
+                "take_from_stockpiles": [{"id": 2}],
+                "give_to_workshops": [{"id": 3}],
+                "take_from_workshops": [{"id": 4}]
+            }
+        }]
+    });
+
+    restore_workshop_lists(&mut result);
+
+    assert_eq!(
+        result,
+        json!({
+            "workshops": [{
+                "jobs": [],
+                "stockpile_links": {
+                    "give_to_stockpiles": [],
+                    "take_from_stockpiles": [],
+                    "give_to_workshops": [],
+                    "take_from_workshops": []
+                }
+            }, {
+                "jobs": [],
+                "stockpile_links": {
+                    "give_to_stockpiles": [{"id": 1}],
+                    "take_from_stockpiles": [{"id": 2}],
+                    "give_to_workshops": [{"id": 3}],
+                    "take_from_workshops": [{"id": 4}]
+                }
+            }]
+        })
+    );
+}
+
+#[test]
 fn should_join_matching_job_requirements_to_their_manager_order() {
     let workshops = vec![json!({
         "id": 10,
