@@ -14,7 +14,7 @@ local function demand_description(element)
     local parts = {}
     if element.mat_type >= 0 then
         local info = dfhack.matinfo.decode(element.mat_type, element.mat_index)
-        local name = info and info:toString() or 'material'
+        local name = info and text(info:toString()) or 'material'
         parts[#parts + 1] = name == 'rock' and 'stone' or name
     end
     for _, flags in ipairs({element.flags1, element.flags2, element.flags3}) do
@@ -38,7 +38,7 @@ local function strange_moods()
         if STRANGE_MOODS[unit.mood] and U.isCitizen(unit) and U.isAlive(unit) then
             local row = {
                 unit_id = unit.id,
-                name = U.getReadableName(unit),
+                name = text(U.getReadableName(unit)),
                 mood = STRANGE_MOODS[unit.mood],
                 skill = df.job_skill[unit.job.mood_skill],
                 ticks_left = unit.job.mood_timeout,
@@ -49,7 +49,7 @@ local function strange_moods()
             local workshop = job and dfhack.job.getHolder(job)
             if workshop then
                 row.workshop = {
-                    name = dfhack.buildings.getName(workshop),
+                    name = text(dfhack.buildings.getName(workshop)),
                     x = workshop.centerx, y = workshop.centery, z = ui_z(workshop.z),
                 }
                 local demands = {}

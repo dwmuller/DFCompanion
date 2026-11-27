@@ -85,6 +85,45 @@ fn should_load_saved_chat_history_from_the_current_fortress() {
     }
 }
 
+#[test]
+#[ignore = "requires a running game"]
+fn should_retrieve_strange_mood_details_when_names_contain_df_encoded_text() {
+    use dfcompanion::game_state::{GameState, LifecycleState, LifecycleStatus};
+
+    reload_lua_module();
+    let notifier = Notifier::new(NotificationHistory::new());
+    let bootstrap = GameState::new(
+        notifier.clone(),
+        tokio::sync::watch::channel(LifecycleStatus::default()).1,
+    );
+    let session_id = bootstrap
+        .query_lifecycle()
+        .expect("Could not query the fortress")
+        .session_id
+        .expect("No fortress session is loaded");
+    let lifecycle = tokio::sync::watch::channel(LifecycleStatus {
+        state: LifecycleState::MapLoaded,
+        fortress_name: None,
+        session_id: Some(session_id),
+    })
+    .1;
+    let result = GameState::new(notifier, lifecycle)
+        .strange_moods()
+        .expect("Could not retrieve strange mood details");
+
+    if let Some(moods) = result["moods"].as_array() {
+        for mood in moods {
+            let name = mood["name"].as_str().expect("Mood has no name");
+            assert!(
+                !name.contains('\u{fffd}'),
+                "Mood name was corrupted: {name}"
+            );
+        }
+    } else {
+        assert_eq!(result["count"], 0, "{result}");
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires a running game"]
 async fn should_resynchronize_http_when_the_fortress_session_differs() {
