@@ -659,6 +659,28 @@ async fn player_note_commands_enqueue_the_combined_state_without_reusing_deleted
 }
 
 #[tokio::test]
+async fn should_isolate_note_ids_when_a_stale_turn_outlives_a_fortress() {
+    let (app, _) = CompanionApp::new();
+    app.update_lifecycle(true, true, None, Some("a".to_owned()));
+    let old_allocator = app.next_note_id.lock().unwrap().clone();
+    let mut old_workspace =
+        crate::notes::NoteWorkspace::new(crate::notes::Notes::default(), old_allocator);
+
+    app.handle_external_event(ExternalEvent::Lifecycle(LifecycleEvent::Snapshot(
+        LifecycleSnapshot {
+            world_loaded: true,
+            map_loaded: true,
+            fortress_name: "New fortress".to_owned(),
+            session_id: Some("b".to_owned()),
+        },
+    )))
+    .await;
+    old_workspace.create("old".to_owned()).unwrap();
+
+    assert_eq!(app.allocate_note_id().unwrap(), "n1");
+}
+
+#[tokio::test]
 async fn pending_ai_inputs_carry_the_ids_of_their_notifications() {
     let (app, queue_rx) = CompanionApp::new();
     let mut notifications = app.history.subscribe(None).1;

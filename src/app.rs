@@ -47,7 +47,7 @@ pub struct CompanionApp {
     /// The state of the AI conversation. All changes go through [`Self::dispatch`].
     session: Mutex<ChatSession>,
     /// Fortress-scoped next note ID. Rollback never restores this counter.
-    next_note_id: AtomicU64,
+    next_note_id: Mutex<Arc<AtomicU64>>,
     /// Distinguishes restore completions from later fortress activations.
     lifecycle_generation: AtomicU64,
     lifecycle_resync_in_flight: AtomicBool,
@@ -103,7 +103,7 @@ impl CompanionApp {
                 history,
                 ai,
                 session: Mutex::new(ChatSession::new(Instant::now())),
-                next_note_id: AtomicU64::new(1),
+                next_note_id: Mutex::new(Arc::new(AtomicU64::new(1))),
                 lifecycle_generation: AtomicU64::new(0),
                 lifecycle_resync_in_flight: AtomicBool::new(false),
                 event_turns: Default::default(),
@@ -279,7 +279,7 @@ impl CompanionApp {
             configuration: self.ai.configurations.active(),
             event_turns: self.event_turns_enabled(),
             periodic_turns: self.periodic_turns_enabled(),
-            next_note_id: self.next_note_id.load(Ordering::Relaxed),
+            next_note_id: self.next_note_id.lock().unwrap().load(Ordering::Relaxed),
         }
     }
 
@@ -360,13 +360,34 @@ impl CompanionApp {
                 history,
                 prompt,
                 cancel,
+                notes,
             } => {
                 let this = self.clone();
+                let allocator = self.next_note_id.lock().unwrap().clone();
                 tokio::spawn(async move {
-                    let result = this
+                    let mut result = this
                         .ai
-                        .run_turn(&configuration, &history, &prompt, &cancel)
+                        .run_turn_with_notes(
+                            &configuration,
+                            &history,
+                            &prompt,
+                            &cancel,
+                            notes,
+                            allocator,
+                        )
                         .await;
+                    if result.as_ref().is_ok_and(|output| {
+                        output
+                            .notes
+                            .as_ref()
+                            .is_some_and(|notes| notes.has_changes())
+                    }) && !this.game_state.map_loaded()
+                    {
+                        result = Err(ai::TurnError::Failed(
+                            "The fortress was unloaded before the note changes could be committed."
+                                .to_owned(),
+                        ));
+                    }
                     this.dispatch(chat_session::ChatEvent::TurnFinished { turn_id, result });
                 });
             }
@@ -375,12 +396,13 @@ impl CompanionApp {
                 configuration,
                 history,
                 cancel,
+                notes,
             } => {
                 let this = self.clone();
                 tokio::spawn(async move {
                     let result = this
                         .ai
-                        .compact_history(&configuration, &history, &cancel)
+                        .compact_history(&configuration, &history, &cancel, &notes)
                         .await;
                     this.dispatch(chat_session::ChatEvent::CompactionFinished {
                         compaction_id,
@@ -646,8 +668,8 @@ impl CompanionApp {
                     {
                         let mut session = self.session.lock().unwrap();
                         session.reset_for_fortress(Instant::now());
+                        *self.next_note_id.lock().unwrap() = Arc::new(AtomicU64::new(1));
                     }
-                    self.next_note_id.store(1, Ordering::Relaxed);
                     self.history.clear();
                     self.chat_state.send_replace(ChatState::Idle);
                     self.rollback_floor.send_replace(None);
@@ -842,6 +864,8 @@ impl CompanionApp {
                         "Restored chat state"
                     );
                     self.next_note_id
+                        .lock()
+                        .unwrap()
                         .store(state.next_note_id, Ordering::Relaxed);
                     self.session.lock().unwrap().restore_chat_state(
                         state.history,
@@ -1075,6 +1099,8 @@ impl CompanionApp {
     fn allocate_note_id(&self) -> Result<String, String> {
         let id = self
             .next_note_id
+            .lock()
+            .unwrap()
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
                 next.checked_add(1)
             })

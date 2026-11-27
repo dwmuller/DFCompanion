@@ -7,6 +7,7 @@ pub struct AiPromptTokenEstimates {
     pub system_text_tokens: usize,
     pub content_tokens: usize,
     pub history_tokens: usize,
+    pub notes_tokens: usize,
     pub tools_tokens: usize,
     pub total_tokens: usize,
 }

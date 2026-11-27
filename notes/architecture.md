@@ -321,7 +321,16 @@ notebook data. Rollback keeps current player-sourced notes and restores
 companion-sourced notes from before the rolled-back turn, so edits or deletions
 of companion notes do not survive rollback.
 
-After a successful user turn, successful compaction, or rollback, `ChatSession`
+The AI receives a bounded, token-accounted notebook context, separate from
+conversation history. Notes and search results are untrusted data; mandatory
+system guidance remains in effect with custom profiles. Search and read tools
+page their results. The AI can create, edit, and delete companion-sourced notes
+but cannot modify player-sourced notes. Mutations are staged for the turn and
+committed with its history only on success. Concurrent changes to the same
+companion note use last-commit-wins; failed turns can consume note IDs. The
+allocator is isolated per fortress activation.
+
+After a successful user turn, an automatic turn with note changes, successful compaction, or rollback, `ChatSession`
 emits a persistence effect. The worker serializes saves, keeping at most one in
 flight and replacing a single pending request with the newest committed
 snapshot. The save operation rereads the game date and the Lua layer verifies

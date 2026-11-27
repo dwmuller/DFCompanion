@@ -42,9 +42,6 @@ Items that are primarily about the mechanics of AI interactions.
     current time to the AI and instruct it to take the opportunity to check for
     significant for changes.
   - Run this once per game day.
-- Provide a tool like "note_for_later" so that models can remember something
-  about game reports even if it doesn't warrant the user's immediate attention
-  ("no comment" replies).
 - Support for other media types in chat, both outgoing and incoming.
 - Optional ability of AI to maintain a fort history document.
 - Optional ability to log entire chat.

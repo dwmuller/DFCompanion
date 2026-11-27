@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 pub const MAX_NOTES: usize = 200;
 pub const MAX_NOTE_TEXT_BYTES: usize = 16 * 1024;
@@ -53,7 +57,107 @@ impl Notes {
         notes.validate()?;
         Ok(notes)
     }
+}
 
+/// A turn-local notebook. Mutations are applied to the live notebook only
+/// after the turn succeeds.
+#[derive(Clone, Debug)]
+pub struct NoteWorkspace {
+    notes: Notes,
+    changes: Vec<NoteChange>,
+    next_id: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Debug)]
+enum NoteChange {
+    Put(Note),
+    Delete(String),
+}
+
+impl NoteWorkspace {
+    pub fn new(notes: Notes, next_id: Arc<AtomicU64>) -> Self {
+        Self {
+            notes,
+            changes: Vec::new(),
+            next_id,
+        }
+    }
+
+    pub fn notes(&self) -> &Notes {
+        &self.notes
+    }
+
+    pub fn create(&mut self, text: String) -> Result<Note, String> {
+        validate_text(&text)?;
+        let id = self
+            .next_id
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| "The note ID space is exhausted.".to_owned())?;
+        let note = Note::new(format!("n{id}"), text, NoteSource::Companion)?;
+        self.notes.add(note.clone())?;
+        self.changes.push(NoteChange::Put(note.clone()));
+        Ok(note)
+    }
+
+    pub fn edit(&mut self, id: &str, text: String) -> Result<Note, String> {
+        let original = self
+            .notes
+            .find(id)
+            .ok_or_else(|| format!("Note {id} was not found."))?;
+        if original.source != NoteSource::Companion {
+            return Err("The companion cannot edit player-sourced notes.".to_owned());
+        }
+        let note = Note::new(id.to_owned(), text, NoteSource::Companion)?;
+        let mut candidate = self.notes.clone();
+        candidate.remove(id);
+        candidate.add(note.clone())?;
+        self.notes = candidate;
+        self.changes.push(NoteChange::Put(note.clone()));
+        Ok(note)
+    }
+
+    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        let note = self
+            .notes
+            .find(id)
+            .ok_or_else(|| format!("Note {id} was not found."))?;
+        if note.source != NoteSource::Companion {
+            return Err("The companion cannot delete player-sourced notes.".to_owned());
+        }
+        self.notes.remove(id);
+        self.changes.push(NoteChange::Delete(id.to_owned()));
+        Ok(())
+    }
+
+    pub fn has_changes(&self) -> bool {
+        !self.changes.is_empty()
+    }
+
+    /// Commits staged operations in order. A later commit wins if the player
+    /// changed the same companion note during the turn.
+    pub fn commit(&self, current: &Notes) -> Result<Notes, String> {
+        let mut result = current.clone();
+        for change in &self.changes {
+            let id = match change {
+                NoteChange::Put(note) => note.id(),
+                NoteChange::Delete(id) => id,
+            };
+            if result
+                .find(id)
+                .is_some_and(|note| note.source == NoteSource::Player)
+            {
+                return Err(format!("Cannot overwrite player-sourced note {id}."));
+            }
+            result.remove(id);
+            if let NoteChange::Put(note) = change {
+                result.add(note.clone())?;
+            }
+        }
+        Ok(result)
+    }
+}
+
+impl Notes {
     pub fn iter(&self) -> impl Iterator<Item = &Note> {
         self.0.iter()
     }
@@ -260,5 +364,43 @@ mod tests {
         let notes = Notes::from_records(vec![note("n7", "text", NoteSource::Player)]).unwrap();
         assert_eq!(notes.next_id_floor().unwrap(), 8);
         assert_eq!(Notes::default().next_id_floor().unwrap(), 1);
+    }
+
+    #[test]
+    fn should_apply_the_last_committed_companion_note_edit_after_player_deletion() {
+        let current =
+            Notes::from_records(vec![note("n1", "before", NoteSource::Companion)]).unwrap();
+        let mut workspace = NoteWorkspace::new(current.clone(), Arc::new(AtomicU64::new(2)));
+        workspace.edit("n1", "after".to_owned()).unwrap();
+        let mut deleted = current;
+        deleted.remove("n1");
+
+        let committed = workspace.commit(&deleted).unwrap();
+
+        assert_eq!(committed.find("n1").unwrap().text(), "after");
+    }
+
+    #[test]
+    fn should_refuse_companion_edits_and_deletions_of_player_notes() {
+        let notes = Notes::from_records(vec![note("n1", "player", NoteSource::Player)]).unwrap();
+        let mut workspace = NoteWorkspace::new(notes, Arc::new(AtomicU64::new(2)));
+
+        assert!(workspace.edit("n1", "replacement".to_owned()).is_err());
+        assert!(workspace.delete("n1").is_err());
+        assert!(!workspace.has_changes());
+    }
+
+    #[test]
+    fn should_consume_ids_without_committing_failed_turn_notes() {
+        let allocator = Arc::new(AtomicU64::new(1));
+        let current = Notes::default();
+        let mut abandoned = NoteWorkspace::new(current.clone(), allocator.clone());
+        abandoned.create("discarded".to_owned()).unwrap();
+        let mut successful = NoteWorkspace::new(current.clone(), allocator);
+        let note = successful.create("retained".to_owned()).unwrap();
+
+        assert_eq!(note.id(), "n2");
+        assert!(current.find("n1").is_none());
+        assert!(successful.commit(&current).unwrap().find("n2").is_some());
     }
 }

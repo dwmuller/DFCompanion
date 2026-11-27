@@ -2,6 +2,46 @@ use super::*;
 use crate::game_state::{LifecycleState, LifecycleStatus};
 use crate::notifications::{NotificationHistory, Notifier};
 
+#[test]
+fn should_read_staged_note_changes_within_the_same_turn() {
+    let allocator = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let mut notes = NoteWorkspace::new(crate::notes::Notes::default(), allocator);
+    execute_note(&mut notes, "create_note", json!({"text": "first"})).unwrap();
+    execute_note(
+        &mut notes,
+        "edit_note",
+        json!({"id": "n1", "text": "second"}),
+    )
+    .unwrap();
+
+    let result = execute_note(&mut notes, "read_note", json!({"id": "n1"})).unwrap();
+
+    assert_eq!(
+        serde_json::from_str::<Value>(&result).unwrap()["text"],
+        "second"
+    );
+}
+
+#[test]
+fn should_reject_note_tool_changes_to_player_notes() {
+    use crate::notes::{Note, NoteSource, Notes};
+    let notes = Notes::from_records(vec![Note::new(
+        "n1".into(),
+        "player".into(),
+        NoteSource::Player,
+    )
+    .unwrap()])
+    .unwrap();
+    let mut workspace = NoteWorkspace::new(
+        notes,
+        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(2)),
+    );
+
+    let result = execute_note(&mut workspace, "delete_note", json!({"id": "n1"})).unwrap();
+
+    assert!(serde_json::from_str::<Value>(&result).unwrap()["error"].is_string());
+}
+
 /// A `GameState` with the given loading state. The watch sender is dropped,
 /// but a receiver still reads back the last value it held.
 fn game_state_with(state: LifecycleState) -> GameState {

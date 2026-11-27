@@ -94,6 +94,7 @@ fn test_prompt(kind: PromptKind, content: &str) -> Prompt {
         included_rollback_note: false,
         included_restoration_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
+        notes_context: String::new(),
     }
 }
 
@@ -109,6 +110,59 @@ fn prompt_configuration() -> AiConfiguration {
         max_output_tokens: crate::ai_config::DEFAULT_MAX_OUTPUT_TOKENS,
         reasoning_mode: crate::ai_config::ReasoningMode::Default,
     }
+}
+
+#[test]
+fn should_include_and_account_for_player_notes_in_the_prompt() {
+    let notes = Notes::from_records(vec![Note::new(
+        "n1".to_owned(),
+        "Solon Memorial Metalworks".to_owned(),
+        NoteSource::Player,
+    )
+    .unwrap()])
+    .unwrap();
+    let prompt = build_prompt_with_notes(
+        &History::default(),
+        &VecDeque::from([AiInput::UserRequest {
+            text: "Where is the metalworks?".to_owned(),
+            id: None,
+        }]),
+        &prompt_configuration(),
+        false,
+        None,
+        &notes,
+    )
+    .unwrap();
+
+    assert!(prompt.notes_context.contains("Solon Memorial Metalworks"));
+    assert_eq!(
+        prompt.token_estimates.notes_tokens,
+        estimate_token_count(&prompt.notes_context)
+    );
+}
+
+#[test]
+fn should_include_note_handling_rules_when_the_profile_replaces_system_text() {
+    let mut configuration = prompt_configuration();
+    configuration.system_text = "Custom profile".to_owned();
+
+    assert!(effective_system_text(&configuration).contains(MANDATORY_NOTES_TEXT));
+}
+
+#[test]
+fn should_indicate_omitted_notes_when_a_note_exceeds_the_context_budget() {
+    let notes = Notes::from_records(vec![Note::new(
+        "n1".to_owned(),
+        "unusual text ".repeat(1000),
+        NoteSource::Player,
+    )
+    .unwrap()])
+    .unwrap();
+
+    let block = notes_context(&notes, 100);
+
+    assert!(block.contains("search_notes"));
+    assert!(!block.contains("unusual text"));
 }
 
 #[test]
@@ -575,6 +629,109 @@ fn make_test_runtime() -> AiRuntime {
     AiRuntime::new(ConfigurationRepository::in_memory(), game_state)
 }
 
+fn make_loaded_test_runtime() -> AiRuntime {
+    use crate::game_state::{LifecycleState, LifecycleStatus};
+    let lifecycle = tokio::sync::watch::channel(LifecycleStatus {
+        state: LifecycleState::MapLoaded,
+        fortress_name: None,
+        session_id: None,
+    })
+    .1;
+    let notifier = Notifier::new(NotificationHistory::new());
+    AiRuntime::new(
+        crate::ai_config::ConfigurationRepository::in_memory(),
+        GameState::new(notifier, lifecycle),
+    )
+}
+
+#[tokio::test]
+async fn should_stage_note_tool_mutations_when_the_provider_completes_the_turn() {
+    let runtime = make_loaded_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![
+        json!({
+            "id": "tool", "object": "chat.completion", "created": 1, "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": null,
+                "tool_calls": [{"id": "one", "type": "function",
+                    "function": {"name": "create_note", "arguments": "{\"text\":\"durable detail\"}"}}]},
+                "finish_reason": "tool_calls"}]
+        }),
+        json!({
+            "id": "answer", "object": "chat.completion", "created": 2, "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "NO_COMMENT"}, "finish_reason": "stop"}]
+        }),
+    ]).await;
+    let mut configuration = prompt_configuration();
+    configuration.url = url;
+    let workspace = NoteWorkspace::new(
+        Notes::default(),
+        Arc::new(std::sync::atomic::AtomicU64::new(1)),
+    );
+    let output = runtime
+        .run_turn_with_workspace(
+            &configuration,
+            "test-secret",
+            &History::default(),
+            &test_prompt(PromptKind::Automated, "Check"),
+            &CancellationToken::new(),
+            Some(workspace),
+        )
+        .await
+        .unwrap();
+    let _ = requests.recv().await.unwrap();
+    let (_, _, _, request) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert!(request.to_string().contains("n1"));
+    assert_eq!(
+        output.notes.unwrap().notes().find("n1").unwrap().text(),
+        "durable detail"
+    );
+}
+
+#[tokio::test]
+async fn should_discard_a_mutation_when_its_tool_result_exceeds_the_budget() {
+    let runtime = make_loaded_test_runtime();
+    let (url, mut requests, server) = start_mock_provider(vec![
+        json!({
+            "id": "tool", "object": "chat.completion", "created": 1, "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": null,
+                "tool_calls": [{"id": "one", "type": "function",
+                    "function": {"name": "create_note", "arguments": "{\"text\":\"discarded\"}"}}]},
+                "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 8190, "completion_tokens": 100, "total_tokens": 8290}
+        }),
+        json!({
+            "id": "answer", "object": "chat.completion", "created": 2, "model": "test-model",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}]
+        }),
+    ]).await;
+    let mut configuration = prompt_configuration();
+    configuration.url = url;
+    configuration.context_window_tokens = 8193;
+    configuration.max_output_tokens = 1;
+    let workspace = NoteWorkspace::new(
+        Notes::default(),
+        Arc::new(std::sync::atomic::AtomicU64::new(1)),
+    );
+    let output = runtime
+        .run_turn_with_workspace(
+            &configuration,
+            "test-secret",
+            &History::default(),
+            &test_prompt(PromptKind::UserRequest, "Remember"),
+            &CancellationToken::new(),
+            Some(workspace),
+        )
+        .await
+        .unwrap();
+    let _ = requests.recv().await.unwrap();
+    let (_, _, _, request) = requests.recv().await.unwrap();
+    server.abort();
+
+    assert!(request.to_string().contains("Tool result omitted"));
+    assert!(!output.notes.unwrap().has_changes());
+}
+
 #[tokio::test]
 async fn genai_dispatches_to_each_configured_protocol_and_url() {
     use genai::adapter::AdapterKind;
@@ -588,6 +745,7 @@ async fn genai_dispatches_to_each_configured_protocol_and_url() {
         included_rollback_note: false,
         included_restoration_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
+        notes_context: String::new(),
     };
     let responses = [
         (
@@ -732,6 +890,7 @@ async fn anthropic_tool_results_share_one_message() {
         included_rollback_note: false,
         included_restoration_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
+        notes_context: String::new(),
     };
 
     let result = runtime
@@ -820,6 +979,7 @@ async fn genai_tool_calls_are_dispatched_and_returned_to_the_model() {
         included_rollback_note: false,
         included_restoration_note: false,
         token_estimates: AiPromptTokenEstimates::default(),
+        notes_context: String::new(),
     };
 
     let result = runtime

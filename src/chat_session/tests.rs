@@ -1,4 +1,5 @@
 use super::*;
+use crate::ai::{build_prompt, history_exceeds_hard_limit, should_compact};
 use crate::ai::{COMPACTION_KEEP_RECENT_MESSAGES, DEFAULT_SYSTEM_TEXT, MAX_HISTORY_MESSAGES};
 use crate::notes::{Note, NoteSource, Notes};
 use genai::adapter::AdapterKind;
@@ -135,6 +136,7 @@ fn answer(history: &History, prompt: &Prompt, text: &str) -> Result<TurnOutput, 
         history: crate::ai::history_after_turn(history, prompt, text),
         answer: text.to_owned(),
         usage: Vec::new(),
+        notes: None,
     })
 }
 
@@ -469,6 +471,7 @@ fn a_completed_turn_emits_reported_usage_as_a_user_event() {
             total_reported: Some(15),
             ..Default::default()
         }],
+        notes: None,
     };
 
     let effects = session.handle(
@@ -692,6 +695,105 @@ fn a_no_comment_answer_to_an_automatic_turn_is_neither_shown_nor_remembered() {
         vec![(1, InputState::Processing, InputState::Done)]
     );
     assert_eq!(session.history().len(), 0);
+}
+
+#[test]
+fn should_persist_note_changes_when_an_automatic_turn_returns_no_comment() {
+    use std::sync::{atomic::AtomicU64, Arc};
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    session.handle(&context(now), game_report("one", 1));
+    let effects = session.handle(&context(now), ChatEvent::GameRunning(Some(true)));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    let mut workspace =
+        crate::notes::NoteWorkspace::new(Notes::default(), Arc::new(AtomicU64::new(1)));
+    workspace.create("Remember this".to_owned()).unwrap();
+    let mut output = answer(&history, &prompt, "NO_COMMENT").unwrap();
+    output.notes = Some(workspace);
+    let mut finish_context = context(now);
+    finish_context.next_note_id = 2;
+
+    let effects = session.handle(&finish_context, finished(turn_id, Ok(output)));
+
+    assert!(effects.iter().any(|effect| matches!(effect, ChatEffect::PersistChatState(state) if state.notes.find("n1").is_some())));
+}
+
+#[test]
+fn should_discard_note_changes_when_a_cancelled_turn_returns_success() {
+    use std::sync::{atomic::AtomicU64, Arc};
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    let mut workspace =
+        crate::notes::NoteWorkspace::new(Notes::default(), Arc::new(AtomicU64::new(1)));
+    workspace.create("discard".to_owned()).unwrap();
+    let mut output = answer(&history, &prompt, "done").unwrap();
+    output.notes = Some(workspace);
+    session.handle(&context(now), ChatEvent::CancelTurn);
+    let mut finish_context = context(now);
+    finish_context.next_note_id = 2;
+
+    session.handle(&finish_context, finished(turn_id, Ok(output)));
+
+    assert!(session.notes().find("n1").is_none());
+}
+
+#[test]
+fn should_preserve_pending_input_when_concurrent_notes_prevent_commit() {
+    use std::sync::{atomic::AtomicU64, Arc};
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    let mut workspace =
+        crate::notes::NoteWorkspace::new(Notes::default(), Arc::new(AtomicU64::new(1)));
+    workspace.create("staged".to_owned()).unwrap();
+    session.notes = Notes::from_records(
+        (2..=201)
+            .map(|id| Note::new(format!("n{id}"), "player".to_owned(), NoteSource::Player).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let mut output = answer(&history, &prompt, "done").unwrap();
+    output.notes = Some(workspace);
+    let mut finish_context = context(now);
+    finish_context.next_note_id = 202;
+
+    session.handle(&finish_context, finished(turn_id, Ok(output)));
+
+    assert_eq!(session.pending_user_message_count(), 1);
+    assert_eq!(session.history().len(), 0);
+    assert!(session.notes().find("n1").is_none());
+}
+
+#[test]
+fn should_restore_companion_notes_but_keep_player_notes_when_a_turn_is_rolled_back() {
+    use std::sync::{atomic::AtomicU64, Arc};
+    let now = Instant::now();
+    let mut session = ChatSession::new(now);
+    let effects = session.handle(&context(now), user("hello", 1));
+    let (turn_id, prompt, history, _) = started_turn(&effects).unwrap();
+    let allocator = Arc::new(AtomicU64::new(1));
+    let mut workspace = crate::notes::NoteWorkspace::new(Notes::default(), allocator);
+    workspace.create("companion".to_owned()).unwrap();
+    let mut player_context = context(now);
+    player_context.next_note_id = 3;
+    session.handle(
+        &player_context,
+        ChatEvent::RememberNote {
+            id: "n2".to_owned(),
+            text: "player".to_owned(),
+        },
+    );
+    let mut output = answer(&history, &prompt, "done").unwrap();
+    output.notes = Some(workspace);
+    session.handle(&player_context, finished(turn_id, Ok(output)));
+
+    session.handle(&player_context, rollback(1, ""));
+
+    assert!(session.notes().find("n1").is_none());
+    assert!(session.notes().find("n2").is_some());
 }
 
 #[test]
